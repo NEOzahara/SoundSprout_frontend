@@ -1,0 +1,277 @@
+<html>
+<head>
+<title>ImportMetaPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ImportMetaPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Ivan Kopeykin @vankop 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">pathToFileURL </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;url&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleDependencyWarning </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleDependencyWarning&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleTypeConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Template </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Template&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">BasicEvaluatedExpression </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../javascript/BasicEvaluatedExpression&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">evaluateToIdentifier</span><span class="s3">,</span>
+	<span class="s1">toConstantDependency</span><span class="s3">,</span>
+	<span class="s1">evaluateToString</span><span class="s3">,</span>
+	<span class="s1">evaluateToNumber</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../javascript/JavascriptParserHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">memoize </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/memoize&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">propertyAccess </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/propertyAccess&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ConstDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ConstDependency&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).MemberExpression} MemberExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).JavascriptParserOptions} JavascriptParserOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).DependencyLocation} DependencyLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../NormalModule&quot;)} NormalModule */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;)} Parser */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).Range} Range */</span>
+
+<span class="s4">const </span><span class="s1">getCriticalDependencyWarning </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt;</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./CriticalDependencyWarning&quot;</span><span class="s3">)</span>
+<span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;ImportMetaPlugin&quot;</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">ImportMetaPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler compiler</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NormalModule} module module</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} file url</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">getUrl </span><span class="s3">= </span><span class="s1">module </span><span class="s3">=&gt; </span><span class="s1">pathToFileURL</span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">).</span><span class="s1">toString</span><span class="s3">();</span>
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Parser} parser parser parser</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParserOptions} parserOptions parserOptions</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">parserHandler </span><span class="s3">= (</span><span class="s1">parser</span><span class="s3">, { </span><span class="s1">importMeta </span><span class="s3">}) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">importMeta </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s3">{ </span><span class="s1">importMetaName </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">importMetaName </span><span class="s3">=== </span><span class="s2">&quot;import.meta&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+							<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta&quot;</span><span class="s3">)</span>
+							<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">metaProperty </span><span class="s3">=&gt; {</span>
+								<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">importMetaName</span><span class="s3">),</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">});</span>
+						<span class="s4">return</span><span class="s3">;</span>
+					<span class="s3">}</span>
+
+					<span class="s0">// import.meta direct</span>
+					<span class="s4">const </span><span class="s1">webpackVersion </span><span class="s3">= </span><span class="s1">Number</span><span class="s3">.</span><span class="s1">parseInt</span><span class="s3">(</span>
+						<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../package.json&quot;</span><span class="s3">).</span><span class="s1">version</span><span class="s3">,</span>
+						<span class="s7">10</span>
+					<span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">importMetaUrl </span><span class="s3">= () =&gt;</span>
+						<span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">getUrl</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">));</span>
+					<span class="s4">const </span><span class="s1">importMetaWebpackVersion </span><span class="s3">= () =&gt; </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">webpackVersion</span><span class="s3">);</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} members members</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} error message</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">importMetaUnknownProperty </span><span class="s3">= </span><span class="s1">members </span><span class="s3">=&gt;</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Template</span><span class="s3">.</span><span class="s1">toNormalComment</span><span class="s3">(</span>
+							<span class="s2">`unsupported import.meta.</span><span class="s1">$</span><span class="s3">{</span><span class="s1">members</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">)}</span><span class="s2">`</span>
+						<span class="s3">)} </span><span class="s2">undefined</span><span class="s1">$</span><span class="s3">{</span><span class="s1">propertyAccess</span><span class="s3">(</span><span class="s1">members</span><span class="s3">, </span><span class="s7">1</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">typeof</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+							<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+							<span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s2">&quot;object&quot;</span><span class="s3">))</span>
+						<span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">metaProperty </span><span class="s3">=&gt; {</span>
+							<span class="s4">const </span><span class="s1">referencedPropertiesInDestructuring </span><span class="s3">=</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">destructuringAssignmentPropertiesFor</span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">referencedPropertiesInDestructuring</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">CriticalDependencyWarning </span><span class="s3">=</span>
+									<span class="s1">getCriticalDependencyWarning</span><span class="s3">();</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addWarning</span><span class="s3">(</span>
+									<span class="s4">new </span><span class="s1">ModuleDependencyWarning</span><span class="s3">(</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">,</span>
+										<span class="s4">new </span><span class="s1">CriticalDependencyWarning</span><span class="s3">(</span>
+											<span class="s2">&quot;Accessing import.meta directly is unsupported (only property access or destructuring is supported)&quot;</span>
+										<span class="s3">),</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">)</span>
+									<span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+									<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+										<span class="s3">)</span>
+											<span class="s3">? </span><span class="s2">&quot;;&quot;</span>
+											<span class="s3">: </span><span class="s2">&quot;&quot;</span>
+									<span class="s3">}</span><span class="s2">({})`</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">}</span>
+
+							<span class="s4">let </span><span class="s1">str </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">{ </span><span class="s1">id</span><span class="s3">: </span><span class="s1">prop </span><span class="s3">} </span><span class="s1">of referencedPropertiesInDestructuring</span><span class="s3">) {</span>
+								<span class="s4">switch </span><span class="s3">(</span><span class="s1">prop</span><span class="s3">) {</span>
+									<span class="s4">case </span><span class="s2">&quot;url&quot;</span><span class="s3">:</span>
+										<span class="s1">str </span><span class="s3">+= </span><span class="s2">`url: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">importMetaUrl</span><span class="s3">()}</span><span class="s2">,`</span><span class="s3">;</span>
+										<span class="s4">break</span><span class="s3">;</span>
+									<span class="s4">case </span><span class="s2">&quot;webpack&quot;</span><span class="s3">:</span>
+										<span class="s1">str </span><span class="s3">+= </span><span class="s2">`webpack: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">importMetaWebpackVersion</span><span class="s3">()}</span><span class="s2">,`</span><span class="s3">;</span>
+										<span class="s4">break</span><span class="s3">;</span>
+									<span class="s4">default</span><span class="s3">:</span>
+										<span class="s1">str </span><span class="s3">+= </span><span class="s2">`[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+											<span class="s1">prop</span>
+										<span class="s3">)}</span><span class="s2">]: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">importMetaUnknownProperty</span><span class="s3">([</span><span class="s1">prop</span><span class="s3">])}</span><span class="s2">,`</span><span class="s3">;</span>
+										<span class="s4">break</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+								<span class="s2">`({</span><span class="s1">$</span><span class="s3">{</span><span class="s1">str</span><span class="s3">}</span><span class="s2">})`</span><span class="s3">,</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">metaProperty</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateTypeof</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">evaluateToString</span><span class="s3">(</span><span class="s2">&quot;object&quot;</span><span class="s3">));</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta&quot;</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span>
+						<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+						<span class="s1">evaluateToIdentifier</span><span class="s3">(</span><span class="s2">&quot;import.meta&quot;</span><span class="s3">, </span><span class="s2">&quot;import.meta&quot;</span><span class="s3">, () =&gt; [], </span><span class="s4">true</span><span class="s3">)</span>
+					<span class="s3">);</span>
+
+					<span class="s0">// import.meta.url</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">typeof</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.url&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+							<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+							<span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s2">&quot;string&quot;</span><span class="s3">))</span>
+						<span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.url&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+								<span class="s1">importMetaUrl</span><span class="s3">(),</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateTypeof</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.url&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">evaluateToString</span><span class="s3">(</span><span class="s2">&quot;string&quot;</span><span class="s3">));</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.url&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt;</span>
+							<span class="s4">new </span><span class="s1">BasicEvaluatedExpression</span><span class="s3">()</span>
+								<span class="s3">.</span><span class="s1">setString</span><span class="s3">(</span><span class="s1">getUrl</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">))</span>
+								<span class="s3">.</span><span class="s1">setRange</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">))</span>
+						<span class="s3">);</span>
+
+					<span class="s0">// import.meta.webpack</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">typeof</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpack&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+							<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+							<span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s2">&quot;number&quot;</span><span class="s3">))</span>
+						<span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpack&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+							<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+							<span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">importMetaWebpackVersion</span><span class="s3">())</span>
+						<span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateTypeof</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpack&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">evaluateToString</span><span class="s3">(</span><span class="s2">&quot;number&quot;</span><span class="s3">));</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpack&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">evaluateToNumber</span><span class="s3">(</span><span class="s1">webpackVersion</span><span class="s3">));</span>
+
+					<span class="s0">// Unknown properties</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">unhandledExpressionMemberChain</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+							<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+								<span class="s1">importMetaUnknownProperty</span><span class="s3">(</span><span class="s1">members</span><span class="s3">),</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluate</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;MemberExpression&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expression </span><span class="s3">=&gt; {</span>
+							<span class="s4">const </span><span class="s1">expr </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{MemberExpression} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">expr</span><span class="s3">.</span><span class="s1">object</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;MetaProperty&quot; </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">expr</span><span class="s3">.</span><span class="s1">object</span><span class="s3">.</span><span class="s1">meta</span><span class="s3">.</span><span class="s1">name </span><span class="s3">=== </span><span class="s2">&quot;import&quot; </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">expr</span><span class="s3">.</span><span class="s1">object</span><span class="s3">.</span><span class="s1">property</span><span class="s3">.</span><span class="s1">name </span><span class="s3">=== </span><span class="s2">&quot;meta&quot; </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">expr</span><span class="s3">.</span><span class="s1">property</span><span class="s3">.</span><span class="s1">type </span><span class="s3">===</span>
+									<span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">computed </span><span class="s3">? </span><span class="s2">&quot;Literal&quot; </span><span class="s3">: </span><span class="s2">&quot;Identifier&quot;</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">return new </span><span class="s1">BasicEvaluatedExpression</span><span class="s3">()</span>
+									<span class="s3">.</span><span class="s1">setUndefined</span><span class="s3">()</span>
+									<span class="s3">.</span><span class="s1">setRange</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">));</span>
+							<span class="s3">}</span>
+						<span class="s3">});</span>
+				<span class="s3">};</span>
+
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">parserHandler</span><span class="s3">);</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">parserHandler</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ImportMetaPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

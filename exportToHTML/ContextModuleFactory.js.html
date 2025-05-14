@@ -1,0 +1,506 @@
+<html>
+<head>
+<title>ContextModuleFactory.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ContextModuleFactory.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">AsyncSeriesWaterfallHook</span><span class="s3">, </span><span class="s1">SyncWaterfallHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ContextModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ContextModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleFactory </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleFactory&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ContextElementDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ContextElementDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">LazySet </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/LazySet&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">cachedSetProperty </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/cleverMerge&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">createFakeHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/deprecation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">join </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/fs&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ContextModule&quot;).ContextModuleOptions} ContextModuleOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ContextModule&quot;).ResolveDependenciesCallback} ResolveDependenciesCallback */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleFactory&quot;).ModuleFactoryCreateData} ModuleFactoryCreateData */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleFactory&quot;).ModuleFactoryCallback} ModuleFactoryCallback */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ResolverFactory&quot;)} ResolverFactory */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./dependencies/ContextDependency&quot;)} ContextDependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;enhanced-resolve&quot;).ResolveRequest} ResolveRequest */</span>
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/deprecation&quot;).FakeHook&lt;T&gt;} FakeHook&lt;T&gt;</span>
+ <span class="s5">*/</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).IStats} IStats */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).InputFileSystem} InputFileSystem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{ context: string, request: string }} ContextAlternativeRequest */</span>
+
+<span class="s4">const </span><span class="s1">EMPTY_RESOLVE_OPTIONS </span><span class="s3">= {};</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s4">class </span><span class="s1">ContextModuleFactory </span><span class="s4">extends </span><span class="s1">ModuleFactory </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolverFactory} resolverFactory resolverFactory</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">resolverFactory</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">();</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AsyncSeriesWaterfallHook&lt;[ContextAlternativeRequest[], ContextModuleOptions]&gt;} */</span>
+		<span class="s4">const </span><span class="s1">alternativeRequests </span><span class="s3">= </span><span class="s4">new </span><span class="s1">AsyncSeriesWaterfallHook</span><span class="s3">([</span>
+			<span class="s2">&quot;modules&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;options&quot;</span>
+		<span class="s3">]);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">freeze</span><span class="s3">({</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AsyncSeriesWaterfallHook&lt;[TODO]&gt;} */</span>
+			<span class="s1">beforeResolve</span><span class="s3">: </span><span class="s4">new </span><span class="s1">AsyncSeriesWaterfallHook</span><span class="s3">([</span><span class="s2">&quot;data&quot;</span><span class="s3">]),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AsyncSeriesWaterfallHook&lt;[TODO]&gt;} */</span>
+			<span class="s1">afterResolve</span><span class="s3">: </span><span class="s4">new </span><span class="s1">AsyncSeriesWaterfallHook</span><span class="s3">([</span><span class="s2">&quot;data&quot;</span><span class="s3">]),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SyncWaterfallHook&lt;[string[]]&gt;} */</span>
+			<span class="s1">contextModuleFiles</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncWaterfallHook</span><span class="s3">([</span><span class="s2">&quot;files&quot;</span><span class="s3">]),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{FakeHook&lt;Pick&lt;AsyncSeriesWaterfallHook&lt;[ContextAlternativeRequest[]]&gt;, &quot;tap&quot; | &quot;tapAsync&quot; | &quot;tapPromise&quot; | &quot;name&quot;&gt;&gt;} */</span>
+			<span class="s1">alternatives</span><span class="s3">: </span><span class="s1">createFakeHook</span><span class="s3">(</span>
+				<span class="s3">{</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;alternatives&quot;</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AsyncSeriesWaterfallHook&lt;[ContextAlternativeRequest[]]&gt;[&quot;intercept&quot;]} */</span>
+					<span class="s1">intercept</span><span class="s3">: </span><span class="s1">interceptor </span><span class="s3">=&gt; {</span>
+						<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+							<span class="s2">&quot;Intercepting fake hook ContextModuleFactory.hooks.alternatives is not possible, use ContextModuleFactory.hooks.alternativeRequests instead&quot;</span>
+						<span class="s3">);</span>
+					<span class="s3">},</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AsyncSeriesWaterfallHook&lt;[ContextAlternativeRequest[]]&gt;[&quot;tap&quot;]} */</span>
+					<span class="s1">tap</span><span class="s3">: (</span><span class="s1">options</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">) =&gt; {</span>
+						<span class="s1">alternativeRequests</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">options</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+					<span class="s3">},</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AsyncSeriesWaterfallHook&lt;[ContextAlternativeRequest[]]&gt;[&quot;tapAsync&quot;]} */</span>
+					<span class="s1">tapAsync</span><span class="s3">: (</span><span class="s1">options</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">) =&gt; {</span>
+						<span class="s1">alternativeRequests</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span><span class="s1">options</span><span class="s3">, (</span><span class="s1">items</span><span class="s3">, </span><span class="s1">_options</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt;</span>
+							<span class="s1">fn</span><span class="s3">(</span><span class="s1">items</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">)</span>
+						<span class="s3">);</span>
+					<span class="s3">},</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AsyncSeriesWaterfallHook&lt;[ContextAlternativeRequest[]]&gt;[&quot;tapPromise&quot;]} */</span>
+					<span class="s1">tapPromise</span><span class="s3">: (</span><span class="s1">options</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">) =&gt; {</span>
+						<span class="s1">alternativeRequests</span><span class="s3">.</span><span class="s1">tapPromise</span><span class="s3">(</span><span class="s1">options</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">},</span>
+				<span class="s2">&quot;ContextModuleFactory.hooks.alternatives has deprecated in favor of ContextModuleFactory.hooks.alternativeRequests with an additional options argument.&quot;</span><span class="s3">,</span>
+				<span class="s2">&quot;DEP_WEBPACK_CONTEXT_MODULE_FACTORY_ALTERNATIVES&quot;</span>
+			<span class="s3">),</span>
+			<span class="s1">alternativeRequests</span>
+		<span class="s3">});</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">resolverFactory </span><span class="s3">= </span><span class="s1">resolverFactory</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleFactoryCreateData} data data object</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleFactoryCallback} callback callback</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">create</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">context </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">context</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">dependencies </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">resolveOptions </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">resolveOptions</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">dependency </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextDependency} */ </span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">[</span><span class="s7">0</span><span class="s3">]);</span>
+		<span class="s4">const </span><span class="s1">fileDependencies </span><span class="s3">= </span><span class="s4">new </span><span class="s1">LazySet</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">missingDependencies </span><span class="s3">= </span><span class="s4">new </span><span class="s1">LazySet</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">contextDependencies </span><span class="s3">= </span><span class="s4">new </span><span class="s1">LazySet</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">beforeResolve</span><span class="s3">.</span><span class="s1">callAsync</span><span class="s3">(</span>
+			<span class="s3">{</span>
+				<span class="s1">context</span><span class="s3">,</span>
+				<span class="s1">dependencies</span><span class="s3">,</span>
+				<span class="s1">layer</span><span class="s3">: </span><span class="s1">data</span><span class="s3">.</span><span class="s1">contextInfo</span><span class="s3">.</span><span class="s1">issuerLayer</span><span class="s3">,</span>
+				<span class="s1">resolveOptions</span><span class="s3">,</span>
+				<span class="s1">fileDependencies</span><span class="s3">,</span>
+				<span class="s1">missingDependencies</span><span class="s3">,</span>
+				<span class="s1">contextDependencies</span><span class="s3">,</span>
+				<span class="s1">...dependency</span><span class="s3">.</span><span class="s1">options</span>
+			<span class="s3">},</span>
+			<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">beforeResolveResult</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+					<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, {</span>
+						<span class="s1">fileDependencies</span><span class="s3">,</span>
+						<span class="s1">missingDependencies</span><span class="s3">,</span>
+						<span class="s1">contextDependencies</span>
+					<span class="s3">});</span>
+				<span class="s3">}</span>
+
+				<span class="s0">// Ignored</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">beforeResolveResult</span><span class="s3">) {</span>
+					<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, {</span>
+						<span class="s1">fileDependencies</span><span class="s3">,</span>
+						<span class="s1">missingDependencies</span><span class="s3">,</span>
+						<span class="s1">contextDependencies</span>
+					<span class="s3">});</span>
+				<span class="s3">}</span>
+
+				<span class="s4">const </span><span class="s1">context </span><span class="s3">= </span><span class="s1">beforeResolveResult</span><span class="s3">.</span><span class="s1">context</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">request </span><span class="s3">= </span><span class="s1">beforeResolveResult</span><span class="s3">.</span><span class="s1">request</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">resolveOptions </span><span class="s3">= </span><span class="s1">beforeResolveResult</span><span class="s3">.</span><span class="s1">resolveOptions</span><span class="s3">;</span>
+
+				<span class="s4">let </span><span class="s1">loaders</span><span class="s3">;</span>
+				<span class="s4">let </span><span class="s1">resource</span><span class="s3">;</span>
+				<span class="s4">let </span><span class="s1">loadersPrefix </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">idx </span><span class="s3">= </span><span class="s1">request</span><span class="s3">.</span><span class="s1">lastIndexOf</span><span class="s3">(</span><span class="s2">&quot;!&quot;</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">idx </span><span class="s3">&gt;= </span><span class="s7">0</span><span class="s3">) {</span>
+					<span class="s4">let </span><span class="s1">loadersRequest </span><span class="s3">= </span><span class="s1">request</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s1">idx </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">);</span>
+					<span class="s4">let </span><span class="s1">i</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span>
+						<span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+						<span class="s1">i </span><span class="s3">&lt; </span><span class="s1">loadersRequest</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&amp;&amp; </span><span class="s1">loadersRequest</span><span class="s3">[</span><span class="s1">i</span><span class="s3">] === </span><span class="s2">&quot;!&quot;</span><span class="s3">;</span>
+						<span class="s1">i</span><span class="s3">++</span>
+					<span class="s3">) {</span>
+						<span class="s1">loadersPrefix </span><span class="s3">+= </span><span class="s2">&quot;!&quot;</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s1">loadersRequest </span><span class="s3">= </span><span class="s1">loadersRequest</span>
+						<span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">i</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/!+$/</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/!!+/g</span><span class="s3">, </span><span class="s2">&quot;!&quot;</span><span class="s3">);</span>
+					<span class="s1">loaders </span><span class="s3">= </span><span class="s1">loadersRequest </span><span class="s3">=== </span><span class="s2">&quot;&quot; </span><span class="s3">? [] : </span><span class="s1">loadersRequest</span><span class="s3">.</span><span class="s1">split</span><span class="s3">(</span><span class="s2">&quot;!&quot;</span><span class="s3">);</span>
+					<span class="s1">resource </span><span class="s3">= </span><span class="s1">request</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">idx </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">loaders </span><span class="s3">= [];</span>
+					<span class="s1">resource </span><span class="s3">= </span><span class="s1">request</span><span class="s3">;</span>
+				<span class="s3">}</span>
+
+				<span class="s4">const </span><span class="s1">contextResolver </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">resolverFactory</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+					<span class="s2">&quot;context&quot;</span><span class="s3">,</span>
+					<span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span>
+						<span class="s3">? </span><span class="s1">cachedSetProperty</span><span class="s3">(</span>
+								<span class="s1">resolveOptions </span><span class="s3">|| </span><span class="s1">EMPTY_RESOLVE_OPTIONS</span><span class="s3">,</span>
+								<span class="s2">&quot;dependencyType&quot;</span><span class="s3">,</span>
+								<span class="s1">dependencies</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">category</span>
+							<span class="s3">)</span>
+						<span class="s3">: </span><span class="s1">resolveOptions</span>
+				<span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">loaderResolver </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">resolverFactory</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">&quot;loader&quot;</span><span class="s3">);</span>
+
+				<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">parallel</span><span class="s3">(</span>
+					<span class="s3">[</span>
+						<span class="s1">callback </span><span class="s3">=&gt; {</span>
+							<span class="s4">const </span><span class="s1">results </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">ResolveRequest[] */ </span><span class="s3">([]);</span>
+							<span class="s5">/**</span>
+							 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveRequest} obj obj</span>
+							 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+							 <span class="s5">*/</span>
+							<span class="s4">const </span><span class="s1">yield_ </span><span class="s3">= </span><span class="s1">obj </span><span class="s3">=&gt; {</span>
+								<span class="s1">results</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">obj</span><span class="s3">);</span>
+							<span class="s3">};</span>
+
+							<span class="s1">contextResolver</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">(</span>
+								<span class="s3">{},</span>
+								<span class="s1">context</span><span class="s3">,</span>
+								<span class="s1">resource</span><span class="s3">,</span>
+								<span class="s3">{</span>
+									<span class="s1">fileDependencies</span><span class="s3">,</span>
+									<span class="s1">missingDependencies</span><span class="s3">,</span>
+									<span class="s1">contextDependencies</span><span class="s3">,</span>
+									<span class="s4">yield</span><span class="s3">: </span><span class="s1">yield_</span>
+								<span class="s3">},</span>
+								<span class="s1">err </span><span class="s3">=&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+									<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">results</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">);</span>
+						<span class="s3">},</span>
+						<span class="s1">callback </span><span class="s3">=&gt; {</span>
+							<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span>
+								<span class="s1">loaders</span><span class="s3">,</span>
+								<span class="s3">(</span><span class="s1">loader</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+									<span class="s1">loaderResolver</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">(</span>
+										<span class="s3">{},</span>
+										<span class="s1">context</span><span class="s3">,</span>
+										<span class="s1">loader</span><span class="s3">,</span>
+										<span class="s3">{</span>
+											<span class="s1">fileDependencies</span><span class="s3">,</span>
+											<span class="s1">missingDependencies</span><span class="s3">,</span>
+											<span class="s1">contextDependencies</span>
+										<span class="s3">},</span>
+										<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+											<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">result</span><span class="s3">));</span>
+										<span class="s3">}</span>
+									<span class="s3">);</span>
+								<span class="s3">},</span>
+								<span class="s1">callback</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">],</span>
+					<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+							<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, {</span>
+								<span class="s1">fileDependencies</span><span class="s3">,</span>
+								<span class="s1">missingDependencies</span><span class="s3">,</span>
+								<span class="s1">contextDependencies</span>
+							<span class="s3">});</span>
+						<span class="s3">}</span>
+						<span class="s4">let </span><span class="s3">[</span><span class="s1">contextResult</span><span class="s3">, </span><span class="s1">loaderResult</span><span class="s3">] =</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{[ResolveRequest[], string[]]} */ </span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">contextResult</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">1</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">first </span><span class="s3">= </span><span class="s1">contextResult</span><span class="s3">[</span><span class="s7">0</span><span class="s3">];</span>
+							<span class="s1">contextResult </span><span class="s3">= </span><span class="s1">contextResult</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">r </span><span class="s3">=&gt; </span><span class="s1">r</span><span class="s3">.</span><span class="s1">path</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">contextResult</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s1">contextResult</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">first</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">afterResolve</span><span class="s3">.</span><span class="s1">callAsync</span><span class="s3">(</span>
+							<span class="s3">{</span>
+								<span class="s1">addon</span><span class="s3">:</span>
+									<span class="s1">loadersPrefix </span><span class="s3">+</span>
+									<span class="s1">loaderResult</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;!&quot;</span><span class="s3">) +</span>
+									<span class="s3">(</span><span class="s1">loaderResult</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">? </span><span class="s2">&quot;!&quot; </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">),</span>
+								<span class="s1">resource</span><span class="s3">:</span>
+									<span class="s1">contextResult</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">1</span>
+										<span class="s3">? </span><span class="s1">contextResult</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">r </span><span class="s3">=&gt; </span><span class="s1">r</span><span class="s3">.</span><span class="s1">path</span><span class="s3">)</span>
+										<span class="s3">: </span><span class="s1">contextResult</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">path</span><span class="s3">,</span>
+								<span class="s1">resolveDependencies</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">resolveDependencies</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span><span class="s4">this</span><span class="s3">),</span>
+								<span class="s1">resourceQuery</span><span class="s3">: </span><span class="s1">contextResult</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">query</span><span class="s3">,</span>
+								<span class="s1">resourceFragment</span><span class="s3">: </span><span class="s1">contextResult</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">fragment</span><span class="s3">,</span>
+								<span class="s1">...beforeResolveResult</span>
+							<span class="s3">},</span>
+							<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, {</span>
+										<span class="s1">fileDependencies</span><span class="s3">,</span>
+										<span class="s1">missingDependencies</span><span class="s3">,</span>
+										<span class="s1">contextDependencies</span>
+									<span class="s3">});</span>
+								<span class="s3">}</span>
+
+								<span class="s0">// Ignored</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">result</span><span class="s3">) {</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, {</span>
+										<span class="s1">fileDependencies</span><span class="s3">,</span>
+										<span class="s1">missingDependencies</span><span class="s3">,</span>
+										<span class="s1">contextDependencies</span>
+									<span class="s3">});</span>
+								<span class="s3">}</span>
+
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, {</span>
+									<span class="s1">module</span><span class="s3">: </span><span class="s4">new </span><span class="s1">ContextModule</span><span class="s3">(</span><span class="s1">result</span><span class="s3">.</span><span class="s1">resolveDependencies</span><span class="s3">, </span><span class="s1">result</span><span class="s3">),</span>
+									<span class="s1">fileDependencies</span><span class="s3">,</span>
+									<span class="s1">missingDependencies</span><span class="s3">,</span>
+									<span class="s1">contextDependencies</span>
+								<span class="s3">});</span>
+							<span class="s3">}</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{InputFileSystem} fs file system</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContextModuleOptions} options options</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveDependenciesCallback} callback callback function</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">resolveDependencies</span><span class="s3">(</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">options</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">cmf </span><span class="s3">= </span><span class="s4">this</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s3">{</span>
+			<span class="s1">resource</span><span class="s3">,</span>
+			<span class="s1">resourceQuery</span><span class="s3">,</span>
+			<span class="s1">resourceFragment</span><span class="s3">,</span>
+			<span class="s1">recursive</span><span class="s3">,</span>
+			<span class="s1">regExp</span><span class="s3">,</span>
+			<span class="s1">include</span><span class="s3">,</span>
+			<span class="s1">exclude</span><span class="s3">,</span>
+			<span class="s1">referencedExports</span><span class="s3">,</span>
+			<span class="s1">category</span><span class="s3">,</span>
+			<span class="s1">typePrefix</span><span class="s3">,</span>
+			<span class="s1">attributes</span>
+		<span class="s3">} = </span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">regExp </span><span class="s3">|| !</span><span class="s1">resource</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, []);</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} ctx context</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} directory directory</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;string&gt;} visited visited</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveDependenciesCallback} callback callback</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">addDirectoryChecked </span><span class="s3">= (</span><span class="s1">ctx</span><span class="s3">, </span><span class="s1">directory</span><span class="s3">, </span><span class="s1">visited</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;InputFileSystem[&quot;realpath&quot;]&gt;} */</span>
+			<span class="s3">(</span><span class="s1">fs</span><span class="s3">.</span><span class="s1">realpath</span><span class="s3">)(</span><span class="s1">directory</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_realPath</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">realPath </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">_realPath</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">visited</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">realPath</span><span class="s3">)) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, []);</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt; | undefined} */</span>
+				<span class="s4">let </span><span class="s1">recursionStack</span><span class="s3">;</span>
+				<span class="s1">addDirectory</span><span class="s3">(</span>
+					<span class="s1">ctx</span><span class="s3">,</span>
+					<span class="s1">directory</span><span class="s3">,</span>
+					<span class="s3">(</span><span class="s1">_</span><span class="s3">, </span><span class="s1">dir</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">recursionStack </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s1">recursionStack </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">visited</span><span class="s3">);</span>
+							<span class="s1">recursionStack</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">realPath</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s1">addDirectoryChecked</span><span class="s3">(</span><span class="s1">ctx</span><span class="s3">, </span><span class="s1">dir</span><span class="s3">, </span><span class="s1">recursionStack</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+					<span class="s3">},</span>
+					<span class="s1">callback</span>
+				<span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} ctx context</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} directory directory</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(context: string, subResource: string, callback: () =&gt; void) =&gt; void} addSubDirectory addSubDirectoryFn</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveDependenciesCallback} callback callback</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">addDirectory </span><span class="s3">= (</span><span class="s1">ctx</span><span class="s3">, </span><span class="s1">directory</span><span class="s3">, </span><span class="s1">addSubDirectory</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+			<span class="s1">fs</span><span class="s3">.</span><span class="s1">readdir</span><span class="s3">(</span><span class="s1">directory</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">files</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">processedFiles </span><span class="s3">= </span><span class="s1">cmf</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">contextModuleFiles</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */ </span><span class="s3">(</span><span class="s1">files</span><span class="s3">).</span><span class="s1">map</span><span class="s3">(</span><span class="s1">file </span><span class="s3">=&gt; </span><span class="s1">file</span><span class="s3">.</span><span class="s1">normalize</span><span class="s3">(</span><span class="s2">&quot;NFC&quot;</span><span class="s3">))</span>
+				<span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">processedFiles </span><span class="s3">|| </span><span class="s1">processedFiles</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">)</span>
+					<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, []);</span>
+				<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span>
+					<span class="s1">processedFiles</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">p </span><span class="s3">=&gt; </span><span class="s1">p</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">) !== </span><span class="s7">0</span><span class="s3">),</span>
+					<span class="s3">(</span><span class="s1">segment</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s1">subResource </span><span class="s3">= </span><span class="s1">join</span><span class="s3">(</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">directory</span><span class="s3">, </span><span class="s1">segment</span><span class="s3">);</span>
+
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">exclude </span><span class="s3">|| !</span><span class="s1">subResource</span><span class="s3">.</span><span class="s1">match</span><span class="s3">(</span><span class="s1">exclude</span><span class="s3">)) {</span>
+							<span class="s1">fs</span><span class="s3">.</span><span class="s1">stat</span><span class="s3">(</span><span class="s1">subResource</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_stat</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">.</span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;ENOENT&quot;</span><span class="s3">) {</span>
+										<span class="s0">// ENOENT is ok here because the file may have been deleted between</span>
+										<span class="s0">// the readdir and stat calls.</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+									<span class="s3">}</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s3">}</span>
+
+								<span class="s4">const </span><span class="s1">stat </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{IStats} */ </span><span class="s3">(</span><span class="s1">_stat</span><span class="s3">);</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">stat</span><span class="s3">.</span><span class="s1">isDirectory</span><span class="s3">()) {</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">recursive</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+									<span class="s1">addSubDirectory</span><span class="s3">(</span><span class="s1">ctx</span><span class="s3">, </span><span class="s1">subResource</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+									<span class="s1">stat</span><span class="s3">.</span><span class="s1">isFile</span><span class="s3">() &amp;&amp;</span>
+									<span class="s3">(!</span><span class="s1">include </span><span class="s3">|| </span><span class="s1">subResource</span><span class="s3">.</span><span class="s1">match</span><span class="s3">(</span><span class="s1">include</span><span class="s3">))</span>
+								<span class="s3">) {</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{{ context: string, request: string }} */</span>
+									<span class="s4">const </span><span class="s1">obj </span><span class="s3">= {</span>
+										<span class="s1">context</span><span class="s3">: </span><span class="s1">ctx</span><span class="s3">,</span>
+										<span class="s1">request</span><span class="s3">: </span><span class="s2">`.</span><span class="s1">$</span><span class="s3">{</span><span class="s1">subResource</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">ctx</span><span class="s3">.</span><span class="s1">length</span><span class="s3">).</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/\\/g</span><span class="s3">, </span><span class="s2">&quot;/&quot;</span><span class="s3">)}</span><span class="s2">`</span>
+									<span class="s3">};</span>
+
+									<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">alternativeRequests</span><span class="s3">.</span><span class="s1">callAsync</span><span class="s3">(</span>
+										<span class="s3">[</span><span class="s1">obj</span><span class="s3">],</span>
+										<span class="s1">options</span><span class="s3">,</span>
+										<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">alternatives</span><span class="s3">) =&gt; {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+											<span class="s1">callback</span><span class="s3">(</span>
+												<span class="s4">null</span><span class="s3">,</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextAlternativeRequest[]} */</span>
+												<span class="s3">(</span><span class="s1">alternatives</span><span class="s3">)</span>
+													<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">obj </span><span class="s3">=&gt;</span>
+														<span class="s1">regExp</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">obj</span><span class="s3">.</span><span class="s1">request</span><span class="s3">))</span>
+													<span class="s3">)</span>
+													<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">obj </span><span class="s3">=&gt; {</span>
+														<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ContextElementDependency</span><span class="s3">(</span>
+															<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">obj</span><span class="s3">.</span><span class="s1">request</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">resourceQuery</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">resourceFragment</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+															<span class="s1">obj</span><span class="s3">.</span><span class="s1">request</span><span class="s3">,</span>
+															<span class="s1">typePrefix</span><span class="s3">,</span>
+															<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+															<span class="s3">(</span><span class="s1">category</span><span class="s3">),</span>
+															<span class="s1">referencedExports</span><span class="s3">,</span>
+															<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */</span>
+															<span class="s3">(</span><span class="s1">obj</span><span class="s3">.</span><span class="s1">context</span><span class="s3">),</span>
+															<span class="s1">attributes</span>
+														<span class="s3">);</span>
+														<span class="s1">dep</span><span class="s3">.</span><span class="s1">optional </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+														<span class="s4">return </span><span class="s1">dep</span><span class="s3">;</span>
+													<span class="s3">})</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+									<span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">callback</span><span class="s3">();</span>
+								<span class="s3">}</span>
+							<span class="s3">});</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s1">callback</span><span class="s3">();</span>
+						<span class="s3">}</span>
+					<span class="s3">},</span>
+					<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">result</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, []);</span>
+
+						<span class="s4">const </span><span class="s1">flattenedResult </span><span class="s3">= [];</span>
+
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of result</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">item</span><span class="s3">) </span><span class="s1">flattenedResult</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">...item</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">flattenedResult</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} ctx context</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} dir dir</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveDependenciesCallback} callback callback</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">addSubDirectory </span><span class="s3">= (</span><span class="s1">ctx</span><span class="s3">, </span><span class="s1">dir</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt;</span>
+			<span class="s1">addDirectory</span><span class="s3">(</span><span class="s1">ctx</span><span class="s3">, </span><span class="s1">dir</span><span class="s3">, </span><span class="s1">addSubDirectory</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} resource resource</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveDependenciesCallback} callback callback</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">visitResource </span><span class="s3">= (</span><span class="s1">resource</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">fs</span><span class="s3">.</span><span class="s1">realpath </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+				<span class="s1">addDirectoryChecked</span><span class="s3">(</span><span class="s1">resource</span><span class="s3">, </span><span class="s1">resource</span><span class="s3">, </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(), </span><span class="s1">callback</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">addDirectory</span><span class="s3">(</span><span class="s1">resource</span><span class="s3">, </span><span class="s1">resource</span><span class="s3">, </span><span class="s1">addSubDirectory</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">};</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">resource </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+			<span class="s1">visitResource</span><span class="s3">(</span><span class="s1">resource</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">resource</span><span class="s3">, </span><span class="s1">visitResource</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_result</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextElementDependency[][]} */ </span><span class="s3">(</span><span class="s1">_result</span><span class="s3">);</span>
+
+				<span class="s0">// result dependencies should have unique userRequest</span>
+				<span class="s0">// ordered by resolve result</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+				<span class="s4">const </span><span class="s1">temp </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextElementDependency[]} */</span>
+				<span class="s4">const </span><span class="s1">res </span><span class="s3">= [];</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">result</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+					<span class="s4">const </span><span class="s1">inner </span><span class="s3">= </span><span class="s1">result</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">el of inner</span><span class="s3">) {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">temp</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">el</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+						<span class="s1">res</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">el</span><span class="s3">);</span>
+						<span class="s1">temp</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">el</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">res</span><span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+</pre>
+</body>
+</html>

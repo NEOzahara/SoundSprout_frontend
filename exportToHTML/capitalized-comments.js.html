@@ -1,0 +1,325 @@
+<html>
+<head>
+<title>capitalized-comments.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+capitalized-comments.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">enforce or disallow capitalization of the first letter of a comment</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Kevin Partington</span>
+ <span class="s0">*/</span>
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">LETTER_PATTERN </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/patterns/letters&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">DEFAULT_IGNORE_PATTERN </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">COMMENTS_IGNORE_PATTERN</span><span class="s4">,</span>
+    <span class="s2">WHITESPACE </span><span class="s4">= </span><span class="s7">/\s/gu</span><span class="s4">,</span>
+    <span class="s2">MAYBE_URL </span><span class="s4">= </span><span class="s7">/^\s*[^:/?#\s]+:\/\/[^?#]/u</span><span class="s4">; </span><span class="s5">// TODO: Combine w/ max-len pattern?</span>
+
+<span class="s5">/* 
+ * Base schema body for defining the basic capitalization rule, ignorePattern, 
+ * and ignoreInlineComments values. 
+ * This can be used in a few different ways in the actual schema. 
+ */</span>
+<span class="s6">const </span><span class="s2">SCHEMA_BODY </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+    <span class="s2">properties</span><span class="s4">: {</span>
+        <span class="s2">ignorePattern</span><span class="s4">: {</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;string&quot;</span>
+        <span class="s4">},</span>
+        <span class="s2">ignoreInlineComments</span><span class="s4">: {</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span>
+        <span class="s4">},</span>
+        <span class="s2">ignoreConsecutiveComments</span><span class="s4">: {</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+    <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s6">false</span>
+<span class="s4">};</span>
+<span class="s6">const </span><span class="s2">DEFAULTS </span><span class="s4">= {</span>
+    <span class="s2">ignorePattern</span><span class="s4">: </span><span class="s3">&quot;&quot;</span><span class="s4">,</span>
+    <span class="s2">ignoreInlineComments</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+    <span class="s2">ignoreConsecutiveComments</span><span class="s4">: </span><span class="s6">false</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Get normalized options for either block or line comments from the given</span>
+ <span class="s0">* user-provided options.</span>
+ <span class="s0">* - If the user-provided options is just a string, returns a normalized</span>
+ <span class="s0">*   set of options using default values for all other options.</span>
+ <span class="s0">* - If the user-provided options is an object, then a normalized option</span>
+ <span class="s0">*   set is returned. Options specified in overrides will take priority</span>
+ <span class="s0">*   over options specified in the main options object, which will in</span>
+ <span class="s0">*   turn take priority over the rule's defaults.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object|string} rawOptions The user-provided options.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} which Either &quot;line&quot; or &quot;block&quot;.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} The normalized options.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getNormalizedOptions</span><span class="s4">(</span><span class="s2">rawOptions</span><span class="s4">, </span><span class="s2">which</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">assign</span><span class="s4">({}, </span><span class="s2">DEFAULTS</span><span class="s4">, </span><span class="s2">rawOptions</span><span class="s4">[</span><span class="s2">which</span><span class="s4">] || </span><span class="s2">rawOptions</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Get normalized options for block and line comments.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object|string} rawOptions The user-provided options.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} An object with &quot;Line&quot; and &quot;Block&quot; keys and corresponding</span>
+ <span class="s0">* normalized options objects.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getAllNormalizedOptions</span><span class="s4">(</span><span class="s2">rawOptions </span><span class="s4">= {}) {</span>
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">Line</span><span class="s4">: </span><span class="s2">getNormalizedOptions</span><span class="s4">(</span><span class="s2">rawOptions</span><span class="s4">, </span><span class="s3">&quot;line&quot;</span><span class="s4">),</span>
+        <span class="s2">Block</span><span class="s4">: </span><span class="s2">getNormalizedOptions</span><span class="s4">(</span><span class="s2">rawOptions</span><span class="s4">, </span><span class="s3">&quot;block&quot;</span><span class="s4">)</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates a regular expression for each ignorePattern defined in the rule</span>
+ <span class="s0">* options.</span>
+ <span class="s0">*</span>
+ <span class="s0">* This is done in order to avoid invoking the RegExp constructor repeatedly.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} normalizedOptions The normalized rule options.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createRegExpForIgnorePatterns</span><span class="s4">(</span><span class="s2">normalizedOptions</span><span class="s4">) {</span>
+    <span class="s2">Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">normalizedOptions</span><span class="s4">).</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">key </span><span class="s4">=&gt; {</span>
+        <span class="s6">const </span><span class="s2">ignorePatternStr </span><span class="s4">= </span><span class="s2">normalizedOptions</span><span class="s4">[</span><span class="s2">key</span><span class="s4">].</span><span class="s2">ignorePattern</span><span class="s4">;</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">ignorePatternStr</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">regExp </span><span class="s4">= </span><span class="s2">RegExp</span><span class="s4">(</span><span class="s3">`^</span><span class="s6">\\</span><span class="s3">s*(?:</span><span class="s2">$</span><span class="s4">{</span><span class="s2">ignorePatternStr</span><span class="s4">}</span><span class="s3">)`</span><span class="s4">, </span><span class="s3">&quot;u&quot;</span><span class="s4">);</span>
+
+            <span class="s2">normalizedOptions</span><span class="s4">[</span><span class="s2">key</span><span class="s4">].</span><span class="s2">ignorePatternRegExp </span><span class="s4">= </span><span class="s2">regExp</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">});</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Enforce or disallow capitalization of the first letter of a comment&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/capitalized-comments&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">fixable</span><span class="s4">: </span><span class="s3">&quot;code&quot;</span><span class="s4">,</span>
+
+        <span class="s2">schema</span><span class="s4">: [</span>
+            <span class="s4">{ </span><span class="s6">enum</span><span class="s4">: [</span><span class="s3">&quot;always&quot;</span><span class="s4">, </span><span class="s3">&quot;never&quot;</span><span class="s4">] },</span>
+            <span class="s4">{</span>
+                <span class="s2">oneOf</span><span class="s4">: [</span>
+                    <span class="s2">SCHEMA_BODY</span><span class="s4">,</span>
+                    <span class="s4">{</span>
+                        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+                        <span class="s2">properties</span><span class="s4">: {</span>
+                            <span class="s2">line</span><span class="s4">: </span><span class="s2">SCHEMA_BODY</span><span class="s4">,</span>
+                            <span class="s2">block</span><span class="s4">: </span><span class="s2">SCHEMA_BODY</span>
+                        <span class="s4">},</span>
+                        <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s6">false</span>
+                    <span class="s4">}</span>
+                <span class="s4">]</span>
+            <span class="s4">}</span>
+        <span class="s4">],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">unexpectedLowercaseComment</span><span class="s4">: </span><span class="s3">&quot;Comments should not begin with a lowercase character.&quot;</span><span class="s4">,</span>
+            <span class="s2">unexpectedUppercaseComment</span><span class="s4">: </span><span class="s3">&quot;Comments should not begin with an uppercase character.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+
+        <span class="s6">const </span><span class="s2">capitalize </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] || </span><span class="s3">&quot;always&quot;</span><span class="s4">,</span>
+            <span class="s2">normalizedOptions </span><span class="s4">= </span><span class="s2">getAllNormalizedOptions</span><span class="s4">(</span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">1</span><span class="s4">]),</span>
+            <span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s2">createRegExpForIgnorePatterns</span><span class="s4">(</span><span class="s2">normalizedOptions</span><span class="s4">);</span>
+
+        <span class="s5">//----------------------------------------------------------------------</span>
+        <span class="s5">// Helpers</span>
+        <span class="s5">//----------------------------------------------------------------------</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether a comment is an inline comment.</span>
+         <span class="s0">*</span>
+         <span class="s0">* For the purpose of this rule, a comment is inline if:</span>
+         <span class="s0">* 1. The comment is preceded by a token on the same line; and</span>
+         <span class="s0">* 2. The command is followed by a token on the same line.</span>
+         <span class="s0">*</span>
+         <span class="s0">* Note that the comment itself need not be single-line!</span>
+         <span class="s0">*</span>
+         <span class="s0">* Also, it follows from this definition that only block comments can</span>
+         <span class="s0">* be considered as possibly inline. This is because line comments</span>
+         <span class="s0">* would consume any following tokens on the same line as the comment.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} comment The comment node to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the comment is an inline comment, false</span>
+         <span class="s0">* otherwise.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isInlineComment</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">previousToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">, { </span><span class="s2">includeComments</span><span class="s4">: </span><span class="s6">true </span><span class="s4">}),</span>
+                <span class="s2">nextToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenAfter</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">, { </span><span class="s2">includeComments</span><span class="s4">: </span><span class="s6">true </span><span class="s4">});</span>
+
+            <span class="s6">return </span><span class="s2">Boolean</span><span class="s4">(</span>
+                <span class="s2">previousToken </span><span class="s4">&amp;&amp;</span>
+                <span class="s2">nextToken </span><span class="s4">&amp;&amp;</span>
+                <span class="s2">comment</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">line </span><span class="s4">=== </span><span class="s2">previousToken</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">end</span><span class="s4">.</span><span class="s2">line </span><span class="s4">&amp;&amp;</span>
+                <span class="s2">comment</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">end</span><span class="s4">.</span><span class="s2">line </span><span class="s4">=== </span><span class="s2">nextToken</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">line</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Determine if a comment follows another comment.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} comment The comment to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the comment follows a valid comment.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isConsecutiveComment</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">previousTokenOrComment </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">, { </span><span class="s2">includeComments</span><span class="s4">: </span><span class="s6">true </span><span class="s4">});</span>
+
+            <span class="s6">return </span><span class="s2">Boolean</span><span class="s4">(</span>
+                <span class="s2">previousTokenOrComment </span><span class="s4">&amp;&amp;</span>
+                <span class="s4">[</span><span class="s3">&quot;Block&quot;</span><span class="s4">, </span><span class="s3">&quot;Line&quot;</span><span class="s4">].</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">previousTokenOrComment</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check a comment to determine if it is valid for this rule.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} comment The comment node to process.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} options The options for checking this comment.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the comment is valid, false otherwise.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isCommentValid</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">, </span><span class="s2">options</span><span class="s4">) {</span>
+
+            <span class="s5">// 1. Check for default ignore pattern.</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">DEFAULT_IGNORE_PATTERN</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">.</span><span class="s2">value</span><span class="s4">)) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// 2. Check for custom ignore pattern.</span>
+            <span class="s6">const </span><span class="s2">commentWithoutAsterisks </span><span class="s4">= </span><span class="s2">comment</span><span class="s4">.</span><span class="s2">value</span>
+                <span class="s4">.</span><span class="s2">replace</span><span class="s4">(</span><span class="s7">/\*/gu</span><span class="s4">, </span><span class="s3">&quot;&quot;</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignorePatternRegExp </span><span class="s4">&amp;&amp; </span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignorePatternRegExp</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">commentWithoutAsterisks</span><span class="s4">)) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// 3. Check for inline comments.</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignoreInlineComments </span><span class="s4">&amp;&amp; </span><span class="s2">isInlineComment</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">)) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// 4. Is this a consecutive comment (and are we tolerating those)?</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignoreConsecutiveComments </span><span class="s4">&amp;&amp; </span><span class="s2">isConsecutiveComment</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">)) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// 5. Does the comment start with a possible URL?</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">MAYBE_URL</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">commentWithoutAsterisks</span><span class="s4">)) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// 6. Is the initial word character a letter?</span>
+            <span class="s6">const </span><span class="s2">commentWordCharsOnly </span><span class="s4">= </span><span class="s2">commentWithoutAsterisks</span>
+                <span class="s4">.</span><span class="s2">replace</span><span class="s4">(</span><span class="s2">WHITESPACE</span><span class="s4">, </span><span class="s3">&quot;&quot;</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">commentWordCharsOnly</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s8">0</span><span class="s4">) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">firstWordChar </span><span class="s4">= </span><span class="s2">commentWordCharsOnly</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">LETTER_PATTERN</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">firstWordChar</span><span class="s4">)) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// 7. Check the case of the initial word character.</span>
+            <span class="s6">const </span><span class="s2">isUppercase </span><span class="s4">= </span><span class="s2">firstWordChar </span><span class="s4">!== </span><span class="s2">firstWordChar</span><span class="s4">.</span><span class="s2">toLocaleLowerCase</span><span class="s4">(),</span>
+                <span class="s2">isLowercase </span><span class="s4">= </span><span class="s2">firstWordChar </span><span class="s4">!== </span><span class="s2">firstWordChar</span><span class="s4">.</span><span class="s2">toLocaleUpperCase</span><span class="s4">();</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">capitalize </span><span class="s4">=== </span><span class="s3">&quot;always&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isLowercase</span><span class="s4">) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">capitalize </span><span class="s4">=== </span><span class="s3">&quot;never&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isUppercase</span><span class="s4">) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">return true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Process a comment to determine if it needs to be reported.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} comment The comment node to process.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">processComment</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">options </span><span class="s4">= </span><span class="s2">normalizedOptions</span><span class="s4">[</span><span class="s2">comment</span><span class="s4">.</span><span class="s2">type</span><span class="s4">],</span>
+                <span class="s2">commentValid </span><span class="s4">= </span><span class="s2">isCommentValid</span><span class="s4">(</span><span class="s2">comment</span><span class="s4">, </span><span class="s2">options</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">commentValid</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">messageId </span><span class="s4">= </span><span class="s2">capitalize </span><span class="s4">=== </span><span class="s3">&quot;always&quot;</span>
+                    <span class="s4">? </span><span class="s3">&quot;unexpectedLowercaseComment&quot;</span>
+                    <span class="s4">: </span><span class="s3">&quot;unexpectedUppercaseComment&quot;</span><span class="s4">;</span>
+
+                <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                    <span class="s2">node</span><span class="s4">: </span><span class="s6">null</span><span class="s4">, </span><span class="s5">// Intentionally using loc instead</span>
+                    <span class="s2">loc</span><span class="s4">: </span><span class="s2">comment</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">,</span>
+                    <span class="s2">messageId</span><span class="s4">,</span>
+                    <span class="s2">fix</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">) {</span>
+                        <span class="s6">const </span><span class="s2">match </span><span class="s4">= </span><span class="s2">comment</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">match</span><span class="s4">(</span><span class="s2">LETTER_PATTERN</span><span class="s4">);</span>
+
+                        <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceTextRange</span><span class="s4">(</span>
+
+                            <span class="s5">// Offset match.index by 2 to account for the first 2 characters that start the comment (// or /*)</span>
+                            <span class="s4">[</span><span class="s2">comment</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] + </span><span class="s2">match</span><span class="s4">.</span><span class="s2">index </span><span class="s4">+ </span><span class="s8">2</span><span class="s4">, </span><span class="s2">comment</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] + </span><span class="s2">match</span><span class="s4">.</span><span class="s2">index </span><span class="s4">+ </span><span class="s8">3</span><span class="s4">],</span>
+                            <span class="s2">capitalize </span><span class="s4">=== </span><span class="s3">&quot;always&quot; </span><span class="s4">? </span><span class="s2">match</span><span class="s4">[</span><span class="s8">0</span><span class="s4">].</span><span class="s2">toLocaleUpperCase</span><span class="s4">() : </span><span class="s2">match</span><span class="s4">[</span><span class="s8">0</span><span class="s4">].</span><span class="s2">toLocaleLowerCase</span><span class="s4">()</span>
+                        <span class="s4">);</span>
+                    <span class="s4">}</span>
+                <span class="s4">});</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s5">//----------------------------------------------------------------------</span>
+        <span class="s5">// Public</span>
+        <span class="s5">//----------------------------------------------------------------------</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">Program</span><span class="s4">() {</span>
+                <span class="s6">const </span><span class="s2">comments </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getAllComments</span><span class="s4">();</span>
+
+                <span class="s2">comments</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">token </span><span class="s4">=&gt; </span><span class="s2">token</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Shebang&quot;</span><span class="s4">).</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">processComment</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

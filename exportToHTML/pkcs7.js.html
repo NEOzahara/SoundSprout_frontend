@@ -1,0 +1,1284 @@
+<html>
+<head>
+<title>pkcs7.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #bcbec4;}
+.s5 { color: #6aab73;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+pkcs7.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* Javascript implementation of PKCS#7 v1.5.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Stefan Siegl</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Dave Longley</span>
+ <span class="s0">*</span>
+ <span class="s0">* Copyright (c) 2012 Stefan Siegl &lt;stesie@brokenpipe.de&gt;</span>
+ <span class="s0">* Copyright (c) 2012-2015 Digital Bazaar, Inc.</span>
+ <span class="s0">*</span>
+ <span class="s0">* Currently this implementation only supports ContentType of EnvelopedData,</span>
+ <span class="s0">* EncryptedData, or SignedData at the root level. The top level elements may</span>
+ <span class="s0">* contain only a ContentInfo of ContentType Data, i.e. plain data. Further</span>
+ <span class="s0">* nesting is not (yet) supported.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The Forge validators for PKCS #7's ASN.1 structures are available from</span>
+ <span class="s0">* a separate file pkcs7asn1.js, since those are referenced from other</span>
+ <span class="s0">* PKCS standards like PKCS #12.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">forge </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s5">'./forge'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./aes'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./asn1'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./des'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./oids'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./pem'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./pkcs7asn1'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./random'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./util'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./x509'</span><span class="s4">);</span>
+
+<span class="s6">// shortcut for ASN.1 API</span>
+<span class="s3">var </span><span class="s2">asn1 </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">;</span>
+
+<span class="s6">// shortcut for PKCS#7 API</span>
+<span class="s3">var </span><span class="s2">p7 </span><span class="s4">= </span><span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pkcs7 </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pkcs7 </span><span class="s4">|| {};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a PKCS#7 message from PEM format.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">pem the PEM-formatted PKCS#7 message.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the PKCS#7 message.</span>
+ <span class="s0">*/</span>
+<span class="s2">p7</span><span class="s4">.</span><span class="s2">messageFromPem </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">pem</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pem</span><span class="s4">.</span><span class="s2">decode</span><span class="s4">(</span><span class="s2">pem</span><span class="s4">)[</span><span class="s7">0</span><span class="s4">];</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s5">'PKCS7'</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Could not convert PKCS#7 message from PEM; PEM ' </span><span class="s4">+</span>
+      <span class="s5">'header type is not &quot;PKCS#7&quot;.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">headerType </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">procType </span><span class="s4">&amp;&amp; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">procType</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s5">'ENCRYPTED'</span><span class="s4">) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Could not convert PKCS#7 message from PEM; PEM is encrypted.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// convert DER to ASN.1 object</span>
+  <span class="s3">var </span><span class="s2">obj </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">body</span><span class="s4">);</span>
+
+  <span class="s3">return </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">messageFromAsn1</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a PKCS#7 message to PEM format.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">msg The PKCS#7 message object</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">maxline The maximum characters per line, defaults to 64.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">The PEM-formatted PKCS#7 message.</span>
+ <span class="s0">*/</span>
+<span class="s2">p7</span><span class="s4">.</span><span class="s2">messageToPem </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">, </span><span class="s2">maxline</span><span class="s4">) {</span>
+  <span class="s6">// convert to ASN.1, then DER, then PEM-encode</span>
+  <span class="s3">var </span><span class="s2">pemObj </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s5">'PKCS7'</span><span class="s4">,</span>
+    <span class="s2">body</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">toAsn1</span><span class="s4">()).</span><span class="s2">getBytes</span><span class="s4">()</span>
+  <span class="s4">};</span>
+  <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pem</span><span class="s4">.</span><span class="s2">encode</span><span class="s4">(</span><span class="s2">pemObj</span><span class="s4">, {</span><span class="s2">maxline</span><span class="s4">: </span><span class="s2">maxline</span><span class="s4">});</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a PKCS#7 message from an ASN.1 object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the ASN.1 representation of a ContentInfo.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the PKCS#7 message.</span>
+ <span class="s0">*/</span>
+<span class="s2">p7</span><span class="s4">.</span><span class="s2">messageFromAsn1 </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+  <span class="s6">// validate root level ContentInfo and capture data</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">contentInfoValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#7 message. ' </span><span class="s4">+</span>
+      <span class="s5">'ASN.1 object is not an PKCS#7 ContentInfo.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">contentType </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">msg</span><span class="s4">;</span>
+
+  <span class="s3">switch</span><span class="s4">(</span><span class="s2">contentType</span><span class="s4">) {</span>
+    <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">envelopedData</span><span class="s4">:</span>
+      <span class="s2">msg </span><span class="s4">= </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">createEnvelopedData</span><span class="s4">();</span>
+      <span class="s3">break</span><span class="s4">;</span>
+
+    <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">encryptedData</span><span class="s4">:</span>
+      <span class="s2">msg </span><span class="s4">= </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">createEncryptedData</span><span class="s4">();</span>
+      <span class="s3">break</span><span class="s4">;</span>
+
+    <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">signedData</span><span class="s4">:</span>
+      <span class="s2">msg </span><span class="s4">= </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">createSignedData</span><span class="s4">();</span>
+      <span class="s3">break</span><span class="s4">;</span>
+
+    <span class="s3">default</span><span class="s4">:</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#7 message. ContentType with OID ' </span><span class="s4">+</span>
+        <span class="s2">contentType </span><span class="s4">+ </span><span class="s5">' is not (yet) supported.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s2">msg</span><span class="s4">.</span><span class="s2">fromAsn1</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">]);</span>
+  <span class="s3">return </span><span class="s2">msg</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s2">p7</span><span class="s4">.</span><span class="s2">createSignedData </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">msg </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">signedData</span><span class="s4">,</span>
+    <span class="s2">version</span><span class="s4">: </span><span class="s7">1</span><span class="s4">,</span>
+    <span class="s2">certificates</span><span class="s4">: [],</span>
+    <span class="s2">crls</span><span class="s4">: [],</span>
+    <span class="s6">// TODO: add json-formatted signer stuff here?</span>
+    <span class="s2">signers</span><span class="s4">: [],</span>
+    <span class="s6">// populated during sign()</span>
+    <span class="s2">digestAlgorithmIdentifiers</span><span class="s4">: [],</span>
+    <span class="s2">contentInfo</span><span class="s4">: </span><span class="s3">null</span><span class="s4">,</span>
+    <span class="s2">signerInfos</span><span class="s4">: [],</span>
+
+    <span class="s2">fromAsn1</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+      <span class="s6">// validate SignedData content block and capture data.</span>
+      <span class="s2">_fromAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">, </span><span class="s2">obj</span><span class="s4">, </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">signedDataValidator</span><span class="s4">);</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">certificates </span><span class="s4">= [];</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">crls </span><span class="s4">= [];</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">digestAlgorithmIdentifiers </span><span class="s4">= [];</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">signerInfos </span><span class="s4">= [];</span>
+
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">rawCapture</span><span class="s4">.</span><span class="s2">certificates</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">certs </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">rawCapture</span><span class="s4">.</span><span class="s2">certificates</span><span class="s4">.</span><span class="s2">value</span><span class="s4">;</span>
+        <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">certs</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+          <span class="s2">msg</span><span class="s4">.</span><span class="s2">certificates</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateFromAsn1</span><span class="s4">(</span><span class="s2">certs</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]));</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// TODO: parse crls</span>
+    <span class="s4">},</span>
+
+    <span class="s2">toAsn1</span><span class="s4">: </span><span class="s3">function</span><span class="s4">() {</span>
+      <span class="s6">// degenerate case with no content</span>
+      <span class="s3">if</span><span class="s4">(!</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo</span><span class="s4">) {</span>
+        <span class="s2">msg</span><span class="s4">.</span><span class="s2">sign</span><span class="s4">();</span>
+      <span class="s4">}</span>
+
+      <span class="s3">var </span><span class="s2">certs </span><span class="s4">= [];</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">certificates</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s2">certs</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateToAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">certificates</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]));</span>
+      <span class="s4">}</span>
+
+      <span class="s3">var </span><span class="s2">crls </span><span class="s4">= [];</span>
+      <span class="s6">// TODO: implement CRLs</span>
+
+      <span class="s6">// [0] SignedData</span>
+      <span class="s3">var </span><span class="s2">signedData </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s6">// Version</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">integerToDer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">version</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+          <span class="s6">// DigestAlgorithmIdentifiers</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">,</span>
+            <span class="s2">msg</span><span class="s4">.</span><span class="s2">digestAlgorithmIdentifiers</span><span class="s4">),</span>
+          <span class="s6">// ContentInfo</span>
+          <span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo</span>
+        <span class="s4">])</span>
+      <span class="s4">]);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">certs</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">// [0] IMPLICIT ExtendedCertificatesAndCertificates OPTIONAL</span>
+        <span class="s2">signedData</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, </span><span class="s2">certs</span><span class="s4">));</span>
+      <span class="s4">}</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">crls</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">// [1] IMPLICIT CertificateRevocationLists OPTIONAL</span>
+        <span class="s2">signedData</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">1</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, </span><span class="s2">crls</span><span class="s4">));</span>
+      <span class="s4">}</span>
+      <span class="s6">// SignerInfos</span>
+      <span class="s2">signedData</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">,</span>
+          <span class="s2">msg</span><span class="s4">.</span><span class="s2">signerInfos</span><span class="s4">));</span>
+
+      <span class="s6">// ContentInfo</span>
+      <span class="s3">return </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s6">// ContentType</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+          <span class="s6">// [0] SignedData</span>
+          <span class="s2">signedData</span>
+        <span class="s4">]);</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Add (another) entity to list of signers.</span>
+     <span class="s0">*</span>
+     <span class="s0">* Note: If authenticatedAttributes are provided, then, per RFC 2315,</span>
+     <span class="s0">* they must include at least two attributes: content type and</span>
+     <span class="s0">* message digest. The message digest attribute value will be</span>
+     <span class="s0">* auto-calculated during signing and will be ignored if provided.</span>
+     <span class="s0">*</span>
+     <span class="s0">* Here's an example of providing these two attributes:</span>
+     <span class="s0">*</span>
+     <span class="s0">* forge.pkcs7.createSignedData();</span>
+     <span class="s0">* p7.addSigner({</span>
+     <span class="s0">*   issuer: cert.issuer.attributes,</span>
+     <span class="s0">*   serialNumber: cert.serialNumber,</span>
+     <span class="s0">*   key: privateKey,</span>
+     <span class="s0">*   digestAlgorithm: forge.pki.oids.sha1,</span>
+     <span class="s0">*   authenticatedAttributes: [{</span>
+     <span class="s0">*     type: forge.pki.oids.contentType,</span>
+     <span class="s0">*     value: forge.pki.oids.data</span>
+     <span class="s0">*   }, {</span>
+     <span class="s0">*     type: forge.pki.oids.messageDigest</span>
+     <span class="s0">*   }]</span>
+     <span class="s0">* });</span>
+     <span class="s0">*</span>
+     <span class="s0">* TODO: Support [subjectKeyIdentifier] as signer's ID.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">signer the signer information:</span>
+     <span class="s0">*          key the signer's private key.</span>
+     <span class="s0">*          [certificate] a certificate containing the public key</span>
+     <span class="s0">*            associated with the signer's private key; use this option as</span>
+     <span class="s0">*            an alternative to specifying signer.issuer and</span>
+     <span class="s0">*            signer.serialNumber.</span>
+     <span class="s0">*          [issuer] the issuer attributes (eg: cert.issuer.attributes).</span>
+     <span class="s0">*          [serialNumber] the signer's certificate's serial number in</span>
+     <span class="s0">*           hexadecimal (eg: cert.serialNumber).</span>
+     <span class="s0">*          [digestAlgorithm] the message digest OID, as a string, to use</span>
+     <span class="s0">*            (eg: forge.pki.oids.sha1).</span>
+     <span class="s0">*          [authenticatedAttributes] an optional array of attributes</span>
+     <span class="s0">*            to also sign along with the content.</span>
+     <span class="s0">*/</span>
+    <span class="s2">addSigner</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">signer</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">issuer </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">;</span>
+      <span class="s3">var </span><span class="s2">serialNumber </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">serialNumber</span><span class="s4">;</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">signer</span><span class="s4">.</span><span class="s2">certificate</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">cert </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">certificate</span><span class="s4">;</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">cert </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+          <span class="s2">cert </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateFromPem</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s2">issuer </span><span class="s4">= </span><span class="s2">cert</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">.</span><span class="s2">attributes</span><span class="s4">;</span>
+        <span class="s2">serialNumber </span><span class="s4">= </span><span class="s2">cert</span><span class="s4">.</span><span class="s2">serialNumber</span><span class="s4">;</span>
+      <span class="s4">}</span>
+      <span class="s3">var </span><span class="s2">key </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">key</span><span class="s4">;</span>
+      <span class="s3">if</span><span class="s4">(!</span><span class="s2">key</span><span class="s4">) {</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span>
+          <span class="s5">'Could not add PKCS#7 signer; no private key specified.'</span><span class="s4">);</span>
+      <span class="s4">}</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">key </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+        <span class="s2">key </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">privateKeyFromPem</span><span class="s4">(</span><span class="s2">key</span><span class="s4">);</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// ensure OID known for digest algorithm</span>
+      <span class="s3">var </span><span class="s2">digestAlgorithm </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">digestAlgorithm </span><span class="s4">|| </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">;</span>
+      <span class="s3">switch</span><span class="s4">(</span><span class="s2">digestAlgorithm</span><span class="s4">) {</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">:</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha256</span><span class="s4">:</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha384</span><span class="s4">:</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha512</span><span class="s4">:</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">md5</span><span class="s4">:</span>
+        <span class="s3">break</span><span class="s4">;</span>
+      <span class="s3">default</span><span class="s4">:</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span>
+          <span class="s5">'Could not add PKCS#7 signer; unknown message digest algorithm: ' </span><span class="s4">+</span>
+          <span class="s2">digestAlgorithm</span><span class="s4">);</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// if authenticatedAttributes is present, then the attributes</span>
+      <span class="s6">// must contain at least PKCS #9 content-type and message-digest</span>
+      <span class="s3">var </span><span class="s2">authenticatedAttributes </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">authenticatedAttributes </span><span class="s4">|| [];</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">authenticatedAttributes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">contentType </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+        <span class="s3">var </span><span class="s2">messageDigest </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+        <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">authenticatedAttributes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+          <span class="s3">var </span><span class="s2">attr </span><span class="s4">= </span><span class="s2">authenticatedAttributes</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+          <span class="s3">if</span><span class="s4">(!</span><span class="s2">contentType </span><span class="s4">&amp;&amp; </span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">) {</span>
+            <span class="s2">contentType </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+            <span class="s3">if</span><span class="s4">(</span><span class="s2">messageDigest</span><span class="s4">) {</span>
+              <span class="s3">break</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s3">continue</span><span class="s4">;</span>
+          <span class="s4">}</span>
+          <span class="s3">if</span><span class="s4">(!</span><span class="s2">messageDigest </span><span class="s4">&amp;&amp; </span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">messageDigest</span><span class="s4">) {</span>
+            <span class="s2">messageDigest </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+            <span class="s3">if</span><span class="s4">(</span><span class="s2">contentType</span><span class="s4">) {</span>
+              <span class="s3">break</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s3">continue</span><span class="s4">;</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s3">if</span><span class="s4">(!</span><span class="s2">contentType </span><span class="s4">|| !</span><span class="s2">messageDigest</span><span class="s4">) {</span>
+          <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Invalid signer.authenticatedAttributes. If ' </span><span class="s4">+</span>
+            <span class="s5">'signer.authenticatedAttributes is specified, then it must ' </span><span class="s4">+</span>
+            <span class="s5">'contain at least two attributes, PKCS #9 content-type and ' </span><span class="s4">+</span>
+            <span class="s5">'PKCS #9 message-digest.'</span><span class="s4">);</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">signers</span><span class="s4">.</span><span class="s2">push</span><span class="s4">({</span>
+        <span class="s2">key</span><span class="s4">: </span><span class="s2">key</span><span class="s4">,</span>
+        <span class="s2">version</span><span class="s4">: </span><span class="s7">1</span><span class="s4">,</span>
+        <span class="s2">issuer</span><span class="s4">: </span><span class="s2">issuer</span><span class="s4">,</span>
+        <span class="s2">serialNumber</span><span class="s4">: </span><span class="s2">serialNumber</span><span class="s4">,</span>
+        <span class="s2">digestAlgorithm</span><span class="s4">: </span><span class="s2">digestAlgorithm</span><span class="s4">,</span>
+        <span class="s2">signatureAlgorithm</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">rsaEncryption</span><span class="s4">,</span>
+        <span class="s2">signature</span><span class="s4">: </span><span class="s3">null</span><span class="s4">,</span>
+        <span class="s2">authenticatedAttributes</span><span class="s4">: </span><span class="s2">authenticatedAttributes</span><span class="s4">,</span>
+        <span class="s2">unauthenticatedAttributes</span><span class="s4">: []</span>
+      <span class="s4">});</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Signs the content.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">options Options to apply when signing:</span>
+     <span class="s0">*    [detached] boolean. If signing should be done in detached mode. Defaults to false.</span>
+     <span class="s0">*/</span>
+    <span class="s2">sign</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">options</span><span class="s4">) {</span>
+      <span class="s2">options </span><span class="s4">= </span><span class="s2">options </span><span class="s4">|| {};</span>
+      <span class="s6">// auto-generate content info</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">content </span><span class="s4">!== </span><span class="s5">'object' </span><span class="s4">|| </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+        <span class="s6">// use Data ContentInfo</span>
+        <span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+            <span class="s6">// ContentType</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+              <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">())</span>
+          <span class="s4">]);</span>
+
+        <span class="s6">// add actual content, if present</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s5">'content' </span><span class="s3">in </span><span class="s2">msg</span><span class="s4">) {</span>
+          <span class="s3">var </span><span class="s2">content</span><span class="s4">;</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">content </span><span class="s3">instanceof </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">) {</span>
+            <span class="s2">content </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">content</span><span class="s4">.</span><span class="s2">bytes</span><span class="s4">();</span>
+          <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">content </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+            <span class="s2">content </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">encodeUtf8</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">content</span><span class="s4">);</span>
+          <span class="s4">}</span>
+
+          <span class="s3">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">detached</span><span class="s4">) {</span>
+            <span class="s2">msg</span><span class="s4">.</span><span class="s2">detachedContent </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s2">content</span><span class="s4">);</span>
+          <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+            <span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+              <span class="s6">// [0] EXPLICIT content</span>
+              <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+                <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+                  <span class="s2">content</span><span class="s4">)</span>
+              <span class="s4">]));</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// no signers, return early (degenerate case for certificate container)</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">signers</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s3">return</span><span class="s4">;</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// generate digest algorithm identifiers</span>
+      <span class="s3">var </span><span class="s2">mds </span><span class="s4">= </span><span class="s2">addDigestAlgorithmIds</span><span class="s4">();</span>
+
+      <span class="s6">// generate signerInfos</span>
+      <span class="s2">addSignerInfos</span><span class="s4">(</span><span class="s2">mds</span><span class="s4">);</span>
+    <span class="s4">},</span>
+
+    <span class="s2">verify</span><span class="s4">: </span><span class="s3">function</span><span class="s4">() {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#7 signature verification not yet implemented.'</span><span class="s4">);</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Add a certificate.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">cert the certificate to add.</span>
+     <span class="s0">*/</span>
+    <span class="s2">addCertificate</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">) {</span>
+      <span class="s6">// convert from PEM</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">cert </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+        <span class="s2">cert </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateFromPem</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">);</span>
+      <span class="s4">}</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">certificates</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">);</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Add a certificate revokation list.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">crl the certificate revokation list to add.</span>
+     <span class="s0">*/</span>
+    <span class="s2">addCertificateRevokationList</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">crl</span><span class="s4">) {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#7 CRL support not yet implemented.'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+  <span class="s3">return </span><span class="s2">msg</span><span class="s4">;</span>
+
+  <span class="s3">function </span><span class="s2">addDigestAlgorithmIds</span><span class="s4">() {</span>
+    <span class="s3">var </span><span class="s2">mds </span><span class="s4">= {};</span>
+
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">signers</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">signer </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">signers</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+      <span class="s3">var </span><span class="s2">oid </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">digestAlgorithm</span><span class="s4">;</span>
+      <span class="s3">if</span><span class="s4">(!(</span><span class="s2">oid </span><span class="s3">in </span><span class="s2">mds</span><span class="s4">)) {</span>
+        <span class="s6">// content digest</span>
+        <span class="s2">mds</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">] = </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">[</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">]].</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s4">}</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">signer</span><span class="s4">.</span><span class="s2">authenticatedAttributes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">// no custom attributes to digest; use content message digest</span>
+        <span class="s2">signer</span><span class="s4">.</span><span class="s2">md </span><span class="s4">= </span><span class="s2">mds</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">];</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// custom attributes to be digested; use own message digest</span>
+        <span class="s6">// TODO: optimize to just copy message digest state if that</span>
+        <span class="s6">// feature is ever supported with message digests</span>
+        <span class="s2">signer</span><span class="s4">.</span><span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">[</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">]].</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// add unique digest algorithm identifiers</span>
+    <span class="s2">msg</span><span class="s4">.</span><span class="s2">digestAlgorithmIdentifiers </span><span class="s4">= [];</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">oid </span><span class="s3">in </span><span class="s2">mds</span><span class="s4">) {</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">digestAlgorithmIdentifiers</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+        <span class="s6">// AlgorithmIdentifier</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s6">// algorithm</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+          <span class="s6">// parameters (null)</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">NULL</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s5">''</span><span class="s4">)</span>
+        <span class="s4">]));</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s2">mds</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">function </span><span class="s2">addSignerInfos</span><span class="s4">(</span><span class="s2">mds</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">content</span><span class="s4">;</span>
+
+    <span class="s3">if </span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">detachedContent</span><span class="s4">) {</span>
+      <span class="s6">// Signature has been made in detached mode.</span>
+      <span class="s2">content </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">detachedContent</span><span class="s4">;</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// Note: ContentInfo is a SEQUENCE with 2 values, second value is</span>
+      <span class="s6">// the content field and is optional for a ContentInfo but required here</span>
+      <span class="s6">// since signers are present</span>
+      <span class="s6">// get ContentInfo content</span>
+      <span class="s2">content </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">1</span><span class="s4">];</span>
+      <span class="s6">// skip [0] EXPLICIT content wrapper</span>
+      <span class="s2">content </span><span class="s4">= </span><span class="s2">content</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">];</span>
+    <span class="s4">}</span>
+
+    <span class="s3">if</span><span class="s4">(!</span><span class="s2">content</span><span class="s4">) {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span>
+        <span class="s5">'Could not sign PKCS#7 message; there is no content to sign.'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// get ContentInfo content type</span>
+    <span class="s3">var </span><span class="s2">contentType </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">contentInfo</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">value</span><span class="s4">);</span>
+
+    <span class="s6">// serialize content</span>
+    <span class="s3">var </span><span class="s2">bytes </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">content</span><span class="s4">);</span>
+
+    <span class="s6">// skip identifier and length per RFC 2315 9.3</span>
+    <span class="s6">// skip identifier (1 byte)</span>
+    <span class="s2">bytes</span><span class="s4">.</span><span class="s2">getByte</span><span class="s4">();</span>
+    <span class="s6">// read and discard length bytes</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">getBerValueLength</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+    <span class="s2">bytes </span><span class="s4">= </span><span class="s2">bytes</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">();</span>
+
+    <span class="s6">// digest content DER value bytes</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">oid </span><span class="s3">in </span><span class="s2">mds</span><span class="s4">) {</span>
+      <span class="s2">mds</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">].</span><span class="s2">start</span><span class="s4">().</span><span class="s2">update</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// sign content</span>
+    <span class="s3">var </span><span class="s2">signingTime </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Date</span><span class="s4">();</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">signers</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">signer </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">signers</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">signer</span><span class="s4">.</span><span class="s2">authenticatedAttributes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">// if ContentInfo content type is not &quot;Data&quot;, then</span>
+        <span class="s6">// authenticatedAttributes must be present per RFC 2315</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">contentType </span><span class="s4">!== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">) {</span>
+          <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span>
+            <span class="s5">'Invalid signer; authenticatedAttributes must be present ' </span><span class="s4">+</span>
+            <span class="s5">'when the ContentInfo content type is not PKCS#7 Data.'</span><span class="s4">);</span>
+        <span class="s4">}</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// process authenticated attributes</span>
+        <span class="s6">// [0] IMPLICIT</span>
+        <span class="s2">signer</span><span class="s4">.</span><span class="s2">authenticatedAttributesAsn1 </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, []);</span>
+
+        <span class="s6">// per RFC 2315, attributes are to be digested using a SET container</span>
+        <span class="s6">// not the above [0] IMPLICIT container</span>
+        <span class="s3">var </span><span class="s2">attrsAsn1 </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, []);</span>
+
+        <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">ai </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">ai </span><span class="s4">&lt; </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">authenticatedAttributes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">ai</span><span class="s4">) {</span>
+          <span class="s3">var </span><span class="s2">attr </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">authenticatedAttributes</span><span class="s4">[</span><span class="s2">ai</span><span class="s4">];</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">messageDigest</span><span class="s4">) {</span>
+            <span class="s6">// use content message digest as value</span>
+            <span class="s2">attr</span><span class="s4">.</span><span class="s2">value </span><span class="s4">= </span><span class="s2">mds</span><span class="s4">[</span><span class="s2">signer</span><span class="s4">.</span><span class="s2">digestAlgorithm</span><span class="s4">].</span><span class="s2">digest</span><span class="s4">();</span>
+          <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">signingTime</span><span class="s4">) {</span>
+            <span class="s6">// auto-populate signing time if not already set</span>
+            <span class="s3">if</span><span class="s4">(!</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) {</span>
+              <span class="s2">attr</span><span class="s4">.</span><span class="s2">value </span><span class="s4">= </span><span class="s2">signingTime</span><span class="s4">;</span>
+            <span class="s4">}</span>
+          <span class="s4">}</span>
+
+          <span class="s6">// convert to ASN.1 and push onto Attributes SET (for signing) and</span>
+          <span class="s6">// onto authenticatedAttributesAsn1 to complete SignedData ASN.1</span>
+          <span class="s6">// TODO: optimize away duplication</span>
+          <span class="s2">attrsAsn1</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_attributeToAsn1</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">));</span>
+          <span class="s2">signer</span><span class="s4">.</span><span class="s2">authenticatedAttributesAsn1</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_attributeToAsn1</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">));</span>
+        <span class="s4">}</span>
+
+        <span class="s6">// DER-serialize and digest SET OF attributes only</span>
+        <span class="s2">bytes </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">attrsAsn1</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">();</span>
+        <span class="s2">signer</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">start</span><span class="s4">().</span><span class="s2">update</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// sign digest</span>
+      <span class="s2">signer</span><span class="s4">.</span><span class="s2">signature </span><span class="s4">= </span><span class="s2">signer</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">sign</span><span class="s4">(</span><span class="s2">signer</span><span class="s4">.</span><span class="s2">md</span><span class="s4">, </span><span class="s5">'RSASSA-PKCS1-V1_5'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// add signer info</span>
+    <span class="s2">msg</span><span class="s4">.</span><span class="s2">signerInfos </span><span class="s4">= </span><span class="s2">_signersToAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">signers</span><span class="s4">);</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates an empty PKCS#7 message of type EncryptedData.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the message.</span>
+ <span class="s0">*/</span>
+<span class="s2">p7</span><span class="s4">.</span><span class="s2">createEncryptedData </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">msg </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">encryptedData</span><span class="s4">,</span>
+    <span class="s2">version</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+    <span class="s2">encryptedContent</span><span class="s4">: {</span>
+      <span class="s2">algorithm</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes256-CBC'</span><span class="s4">]</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Reads an EncryptedData content block (in ASN.1 format)</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj The ASN.1 representation of the EncryptedData content block</span>
+     <span class="s0">*/</span>
+    <span class="s2">fromAsn1</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+      <span class="s6">// Validate EncryptedData content block and capture data.</span>
+      <span class="s2">_fromAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">, </span><span class="s2">obj</span><span class="s4">, </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">encryptedDataValidator</span><span class="s4">);</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Decrypt encrypted content</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">key The (symmetric) key as a byte buffer</span>
+     <span class="s0">*/</span>
+    <span class="s2">decrypt</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">key</span><span class="s4">) {</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">key </span><span class="s4">!== </span><span class="s2">undefined</span><span class="s4">) {</span>
+        <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s2">key</span><span class="s4">;</span>
+      <span class="s4">}</span>
+      <span class="s2">_decryptContent</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+  <span class="s3">return </span><span class="s2">msg</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates an empty PKCS#7 message of type EnvelopedData.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the message.</span>
+ <span class="s0">*/</span>
+<span class="s2">p7</span><span class="s4">.</span><span class="s2">createEnvelopedData </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">msg </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">envelopedData</span><span class="s4">,</span>
+    <span class="s2">version</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+    <span class="s2">recipients</span><span class="s4">: [],</span>
+    <span class="s2">encryptedContent</span><span class="s4">: {</span>
+      <span class="s2">algorithm</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes256-CBC'</span><span class="s4">]</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Reads an EnvelopedData content block (in ASN.1 format)</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the ASN.1 representation of the EnvelopedData content block.</span>
+     <span class="s0">*/</span>
+    <span class="s2">fromAsn1</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+      <span class="s6">// validate EnvelopedData content block and capture data</span>
+      <span class="s3">var </span><span class="s2">capture </span><span class="s4">= </span><span class="s2">_fromAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">, </span><span class="s2">obj</span><span class="s4">, </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">envelopedDataValidator</span><span class="s4">);</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">recipients </span><span class="s4">= </span><span class="s2">_recipientsFromAsn1</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">recipientInfos</span><span class="s4">.</span><span class="s2">value</span><span class="s4">);</span>
+    <span class="s4">},</span>
+
+    <span class="s2">toAsn1</span><span class="s4">: </span><span class="s3">function</span><span class="s4">() {</span>
+      <span class="s6">// ContentInfo</span>
+      <span class="s3">return </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// ContentType</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// [0] EnvelopedData</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+            <span class="s6">// Version</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+              <span class="s2">asn1</span><span class="s4">.</span><span class="s2">integerToDer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">version</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+            <span class="s6">// RecipientInfos</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">,</span>
+              <span class="s2">_recipientsToAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">recipients</span><span class="s4">)),</span>
+            <span class="s6">// EncryptedContentInfo</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">,</span>
+              <span class="s2">_encryptedContentToAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">))</span>
+          <span class="s4">])</span>
+        <span class="s4">])</span>
+      <span class="s4">]);</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Find recipient by X.509 certificate's issuer.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">cert the certificate with the issuer to look for.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@return </span><span class="s0">the recipient object.</span>
+     <span class="s0">*/</span>
+    <span class="s2">findRecipient</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">sAttr </span><span class="s4">= </span><span class="s2">cert</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">.</span><span class="s2">attributes</span><span class="s4">;</span>
+
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">recipients</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">r </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">recipients</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+        <span class="s3">var </span><span class="s2">rAttr </span><span class="s4">= </span><span class="s2">r</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">;</span>
+
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">r</span><span class="s4">.</span><span class="s2">serialNumber </span><span class="s4">!== </span><span class="s2">cert</span><span class="s4">.</span><span class="s2">serialNumber</span><span class="s4">) {</span>
+          <span class="s3">continue</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">rAttr</span><span class="s4">.</span><span class="s2">length </span><span class="s4">!== </span><span class="s2">sAttr</span><span class="s4">.</span><span class="s2">length</span><span class="s4">) {</span>
+          <span class="s3">continue</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s3">var </span><span class="s2">match </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+        <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">j </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">j </span><span class="s4">&lt; </span><span class="s2">sAttr</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">j</span><span class="s4">) {</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">rAttr</span><span class="s4">[</span><span class="s2">j</span><span class="s4">].</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">sAttr</span><span class="s4">[</span><span class="s2">j</span><span class="s4">].</span><span class="s2">type </span><span class="s4">||</span>
+            <span class="s2">rAttr</span><span class="s4">[</span><span class="s2">j</span><span class="s4">].</span><span class="s2">value </span><span class="s4">!== </span><span class="s2">sAttr</span><span class="s4">[</span><span class="s2">j</span><span class="s4">].</span><span class="s2">value</span><span class="s4">) {</span>
+            <span class="s2">match </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+            <span class="s3">break</span><span class="s4">;</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">match</span><span class="s4">) {</span>
+          <span class="s3">return </span><span class="s2">r</span><span class="s4">;</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+
+      <span class="s3">return null</span><span class="s4">;</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Decrypt enveloped content</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">recipient The recipient object related to the private key</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">privKey The (RSA) private key object</span>
+     <span class="s0">*/</span>
+    <span class="s2">decrypt</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">recipient</span><span class="s4">, </span><span class="s2">privKey</span><span class="s4">) {</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key </span><span class="s4">=== </span><span class="s2">undefined </span><span class="s4">&amp;&amp; </span><span class="s2">recipient </span><span class="s4">!== </span><span class="s2">undefined </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">privKey </span><span class="s4">!== </span><span class="s2">undefined</span><span class="s4">) {</span>
+        <span class="s3">switch</span><span class="s4">(</span><span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">) {</span>
+          <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">rsaEncryption</span><span class="s4">:</span>
+          <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">desCBC</span><span class="s4">:</span>
+            <span class="s3">var </span><span class="s2">key </span><span class="s4">= </span><span class="s2">privKey</span><span class="s4">.</span><span class="s2">decrypt</span><span class="s4">(</span><span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">content</span><span class="s4">);</span>
+            <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">key</span><span class="s4">);</span>
+            <span class="s3">break</span><span class="s4">;</span>
+
+          <span class="s3">default</span><span class="s4">:</span>
+            <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported asymmetric cipher, ' </span><span class="s4">+</span>
+              <span class="s5">'OID ' </span><span class="s4">+ </span><span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">);</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+
+      <span class="s2">_decryptContent</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">);</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Add (another) entity to list of recipients.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">cert The certificate of the entity to add.</span>
+     <span class="s0">*/</span>
+    <span class="s2">addRecipient</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">) {</span>
+      <span class="s2">msg</span><span class="s4">.</span><span class="s2">recipients</span><span class="s4">.</span><span class="s2">push</span><span class="s4">({</span>
+        <span class="s2">version</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">issuer</span><span class="s4">: </span><span class="s2">cert</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">.</span><span class="s2">attributes</span><span class="s4">,</span>
+        <span class="s2">serialNumber</span><span class="s4">: </span><span class="s2">cert</span><span class="s4">.</span><span class="s2">serialNumber</span><span class="s4">,</span>
+        <span class="s2">encryptedContent</span><span class="s4">: {</span>
+          <span class="s6">// We simply assume rsaEncryption here, since forge.pki only</span>
+          <span class="s6">// supports RSA so far.  If the PKI module supports other</span>
+          <span class="s6">// ciphers one day, we need to modify this one as well.</span>
+          <span class="s2">algorithm</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">rsaEncryption</span><span class="s4">,</span>
+          <span class="s2">key</span><span class="s4">: </span><span class="s2">cert</span><span class="s4">.</span><span class="s2">publicKey</span>
+        <span class="s4">}</span>
+      <span class="s4">});</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Encrypt enveloped content.</span>
+     <span class="s0">*</span>
+     <span class="s0">* This function supports two optional arguments, cipher and key, which</span>
+     <span class="s0">* can be used to influence symmetric encryption.  Unless cipher is</span>
+     <span class="s0">* provided, the cipher specified in encryptedContent.algorithm is used</span>
+     <span class="s0">* (defaults to AES-256-CBC).  If no key is provided, encryptedContent.key</span>
+     <span class="s0">* is (re-)used.  If that one's not set, a random key will be generated</span>
+     <span class="s0">* automatically.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">[key] The key to be used for symmetric encryption.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">[cipher] The OID of the symmetric cipher to use.</span>
+     <span class="s0">*/</span>
+    <span class="s2">encrypt</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s2">cipher</span><span class="s4">) {</span>
+      <span class="s6">// Part 1: Symmetric encryption</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">content </span><span class="s4">=== </span><span class="s2">undefined</span><span class="s4">) {</span>
+        <span class="s2">cipher </span><span class="s4">= </span><span class="s2">cipher </span><span class="s4">|| </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">;</span>
+        <span class="s2">key </span><span class="s4">= </span><span class="s2">key </span><span class="s4">|| </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key</span><span class="s4">;</span>
+
+        <span class="s3">var </span><span class="s2">keyLen</span><span class="s4">, </span><span class="s2">ivLen</span><span class="s4">, </span><span class="s2">ciphFn</span><span class="s4">;</span>
+        <span class="s3">switch</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">) {</span>
+          <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes128-CBC'</span><span class="s4">]:</span>
+            <span class="s2">keyLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+            <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+            <span class="s2">ciphFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+            <span class="s3">break</span><span class="s4">;</span>
+
+          <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes192-CBC'</span><span class="s4">]:</span>
+            <span class="s2">keyLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+            <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+            <span class="s2">ciphFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+            <span class="s3">break</span><span class="s4">;</span>
+
+          <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes256-CBC'</span><span class="s4">]:</span>
+            <span class="s2">keyLen </span><span class="s4">= </span><span class="s7">32</span><span class="s4">;</span>
+            <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+            <span class="s2">ciphFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+            <span class="s3">break</span><span class="s4">;</span>
+
+          <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'des-EDE3-CBC'</span><span class="s4">]:</span>
+            <span class="s2">keyLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+            <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+            <span class="s2">ciphFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+            <span class="s3">break</span><span class="s4">;</span>
+
+          <span class="s3">default</span><span class="s4">:</span>
+            <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported symmetric cipher, OID ' </span><span class="s4">+ </span><span class="s2">cipher</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">key </span><span class="s4">=== </span><span class="s2">undefined</span><span class="s4">) {</span>
+          <span class="s2">key </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">keyLen</span><span class="s4">));</span>
+        <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">key</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() != </span><span class="s2">keyLen</span><span class="s4">) {</span>
+          <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Symmetric key has wrong length; ' </span><span class="s4">+</span>
+            <span class="s5">'got ' </span><span class="s4">+ </span><span class="s2">key</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() + </span><span class="s5">' bytes, expected ' </span><span class="s4">+ </span><span class="s2">keyLen </span><span class="s4">+ </span><span class="s5">'.'</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">// Keep a copy of the key &amp; IV in the object, so the caller can</span>
+        <span class="s6">// use it for whatever reason.</span>
+        <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">cipher</span><span class="s4">;</span>
+        <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s2">key</span><span class="s4">;</span>
+        <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">parameter </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span>
+          <span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">ivLen</span><span class="s4">));</span>
+
+        <span class="s3">var </span><span class="s2">ciph </span><span class="s4">= </span><span class="s2">ciphFn</span><span class="s4">(</span><span class="s2">key</span><span class="s4">);</span>
+        <span class="s2">ciph</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">parameter</span><span class="s4">.</span><span class="s2">copy</span><span class="s4">());</span>
+        <span class="s2">ciph</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">content</span><span class="s4">);</span>
+
+        <span class="s6">// The finish function does PKCS#7 padding by default, therefore</span>
+        <span class="s6">// no action required by us.</span>
+        <span class="s3">if</span><span class="s4">(!</span><span class="s2">ciph</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">()) {</span>
+          <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Symmetric encryption failed.'</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">content </span><span class="s4">= </span><span class="s2">ciph</span><span class="s4">.</span><span class="s2">output</span><span class="s4">;</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// Part 2: asymmetric encryption for each recipient</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">recipients</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">recipient </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">recipients</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+        <span class="s6">// Nothing to do, encryption already done.</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">content </span><span class="s4">!== </span><span class="s2">undefined</span><span class="s4">) {</span>
+          <span class="s3">continue</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s3">switch</span><span class="s4">(</span><span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">) {</span>
+          <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">rsaEncryption</span><span class="s4">:</span>
+            <span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">content </span><span class="s4">=</span>
+              <span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">encrypt</span><span class="s4">(</span>
+                <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">data</span><span class="s4">);</span>
+            <span class="s3">break</span><span class="s4">;</span>
+
+          <span class="s3">default</span><span class="s4">:</span>
+            <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported asymmetric cipher, OID ' </span><span class="s4">+</span>
+              <span class="s2">recipient</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">);</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+  <span class="s3">return </span><span class="s2">msg</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a single recipient from an ASN.1 object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the ASN.1 RecipientInfo.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the recipient object.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_recipientFromAsn1</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+  <span class="s6">// validate EnvelopedData content block and capture data</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">recipientInfoValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#7 RecipientInfo. ' </span><span class="s4">+</span>
+      <span class="s5">'ASN.1 object is not an PKCS#7 RecipientInfo.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s4">{</span>
+    <span class="s2">version</span><span class="s4">: </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">version</span><span class="s4">.</span><span class="s2">charCodeAt</span><span class="s4">(</span><span class="s7">0</span><span class="s4">),</span>
+    <span class="s2">issuer</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">RDNAttributesAsArray</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">),</span>
+    <span class="s2">serialNumber</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">serial</span><span class="s4">).</span><span class="s2">toHex</span><span class="s4">(),</span>
+    <span class="s2">encryptedContent</span><span class="s4">: {</span>
+      <span class="s2">algorithm</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encAlgorithm</span><span class="s4">),</span>
+      <span class="s2">parameter</span><span class="s4">: </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encParameter </span><span class="s4">? </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encParameter</span><span class="s4">.</span><span class="s2">value </span><span class="s4">: </span><span class="s2">undefined</span><span class="s4">,</span>
+      <span class="s2">content</span><span class="s4">: </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encKey</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a single recipient object to an ASN.1 object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the recipient object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the ASN.1 RecipientInfo.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_recipientToAsn1</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+  <span class="s3">return </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+    <span class="s6">// Version</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">integerToDer</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">version</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+    <span class="s6">// IssuerAndSerialNumber</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// Name</span>
+      <span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">distinguishedNameToAsn1</span><span class="s4">({</span><span class="s2">attributes</span><span class="s4">: </span><span class="s2">obj</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">}),</span>
+      <span class="s6">// Serial</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">hexToBytes</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">serialNumber</span><span class="s4">))</span>
+    <span class="s4">]),</span>
+    <span class="s6">// KeyEncryptionAlgorithmIdentifier</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// Algorithm</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+      <span class="s6">// Parameter, force NULL, only RSA supported for now.</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">NULL</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s5">''</span><span class="s4">)</span>
+    <span class="s4">]),</span>
+    <span class="s6">// EncryptedKey</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">obj</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">content</span><span class="s4">)</span>
+  <span class="s4">]);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Map a set of RecipientInfo ASN.1 objects to recipient objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">infos an array of ASN.1 representations RecipientInfo (i.e. SET OF).</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">an array of recipient objects.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_recipientsFromAsn1</span><span class="s4">(</span><span class="s2">infos</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">ret </span><span class="s4">= [];</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">infos</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s2">ret</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_recipientFromAsn1</span><span class="s4">(</span><span class="s2">infos</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]));</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">ret</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Map an array of recipient objects to ASN.1 RecipientInfo objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">recipients an array of recipientInfo objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">an array of ASN.1 RecipientInfos.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_recipientsToAsn1</span><span class="s4">(</span><span class="s2">recipients</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">ret </span><span class="s4">= [];</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">recipients</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s2">ret</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_recipientToAsn1</span><span class="s4">(</span><span class="s2">recipients</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]));</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">ret</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a single signer from an ASN.1 object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the ASN.1 representation of a SignerInfo.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the signer object.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_signerFromAsn1</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+  <span class="s6">// validate EnvelopedData content block and capture data</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">p7</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">signerInfoValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#7 SignerInfo. ' </span><span class="s4">+</span>
+      <span class="s5">'ASN.1 object is not an PKCS#7 SignerInfo.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">rval </span><span class="s4">= {</span>
+    <span class="s2">version</span><span class="s4">: </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">version</span><span class="s4">.</span><span class="s2">charCodeAt</span><span class="s4">(</span><span class="s7">0</span><span class="s4">),</span>
+    <span class="s2">issuer</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">RDNAttributesAsArray</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">),</span>
+    <span class="s2">serialNumber</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">serial</span><span class="s4">).</span><span class="s2">toHex</span><span class="s4">(),</span>
+    <span class="s2">digestAlgorithm</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">digestAlgorithm</span><span class="s4">),</span>
+    <span class="s2">signatureAlgorithm</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">signatureAlgorithm</span><span class="s4">),</span>
+    <span class="s2">signature</span><span class="s4">: </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">signature</span><span class="s4">,</span>
+    <span class="s2">authenticatedAttributes</span><span class="s4">: [],</span>
+    <span class="s2">unauthenticatedAttributes</span><span class="s4">: []</span>
+  <span class="s4">};</span>
+
+  <span class="s6">// TODO: convert attributes</span>
+  <span class="s3">var </span><span class="s2">authenticatedAttributes </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">authenticatedAttributes </span><span class="s4">|| [];</span>
+  <span class="s3">var </span><span class="s2">unauthenticatedAttributes </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">unauthenticatedAttributes </span><span class="s4">|| [];</span>
+
+  <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a single signerInfo object to an ASN.1 object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the signerInfo object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the ASN.1 representation of a SignerInfo.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_signerToAsn1</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+  <span class="s6">// SignerInfo</span>
+  <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+    <span class="s6">// version</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">integerToDer</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">version</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+    <span class="s6">// issuerAndSerialNumber</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// name</span>
+      <span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">distinguishedNameToAsn1</span><span class="s4">({</span><span class="s2">attributes</span><span class="s4">: </span><span class="s2">obj</span><span class="s4">.</span><span class="s2">issuer</span><span class="s4">}),</span>
+      <span class="s6">// serial</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">hexToBytes</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">serialNumber</span><span class="s4">))</span>
+    <span class="s4">]),</span>
+    <span class="s6">// digestAlgorithm</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// algorithm</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">digestAlgorithm</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+      <span class="s6">// parameters (null)</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">NULL</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s5">''</span><span class="s4">)</span>
+    <span class="s4">])</span>
+  <span class="s4">]);</span>
+
+  <span class="s6">// authenticatedAttributes (OPTIONAL)</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">authenticatedAttributesAsn1</span><span class="s4">) {</span>
+    <span class="s6">// add ASN.1 previously generated during signing</span>
+    <span class="s2">rval</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">authenticatedAttributesAsn1</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// digestEncryptionAlgorithm</span>
+  <span class="s2">rval</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+    <span class="s6">// algorithm</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">signatureAlgorithm</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+    <span class="s6">// parameters (null)</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">NULL</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s5">''</span><span class="s4">)</span>
+  <span class="s4">]));</span>
+
+  <span class="s6">// encryptedDigest</span>
+  <span class="s2">rval</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s2">obj</span><span class="s4">.</span><span class="s2">signature</span><span class="s4">));</span>
+
+  <span class="s6">// unauthenticatedAttributes (OPTIONAL)</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">.</span><span class="s2">unauthenticatedAttributes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+    <span class="s6">// [1] IMPLICIT</span>
+    <span class="s3">var </span><span class="s2">attrsAsn1 </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">1</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, []);</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">obj</span><span class="s4">.</span><span class="s2">unauthenticatedAttributes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">attr </span><span class="s4">= </span><span class="s2">obj</span><span class="s4">.</span><span class="s2">unauthenticatedAttributes</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+      <span class="s2">attrsAsn1</span><span class="s4">.</span><span class="s2">values</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_attributeToAsn1</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">));</span>
+    <span class="s4">}</span>
+    <span class="s2">rval</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">attrsAsn1</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Map a set of SignerInfo ASN.1 objects to an array of signer objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">signerInfoAsn1s an array of ASN.1 SignerInfos (i.e. SET OF).</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">an array of signers objects.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_signersFromAsn1</span><span class="s4">(</span><span class="s2">signerInfoAsn1s</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">ret </span><span class="s4">= [];</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">signerInfoAsn1s</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s2">ret</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_signerFromAsn1</span><span class="s4">(</span><span class="s2">signerInfoAsn1s</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]));</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">ret</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Map an array of signer objects to ASN.1 objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">signers an array of signer objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">an array of ASN.1 SignerInfos.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_signersToAsn1</span><span class="s4">(</span><span class="s2">signers</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">ret </span><span class="s4">= [];</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">signers</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s2">ret</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_signerToAsn1</span><span class="s4">(</span><span class="s2">signers</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]));</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">ret</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Convert an attribute object to an ASN.1 Attribute.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">attr the attribute object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the ASN.1 Attribute.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_attributeToAsn1</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">value</span><span class="s4">;</span>
+
+  <span class="s6">// TODO: generalize to support more attributes</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">) {</span>
+    <span class="s2">value </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">value</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">());</span>
+  <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">messageDigest</span><span class="s4">) {</span>
+    <span class="s2">value </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">attr</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">bytes</span><span class="s4">());</span>
+  <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">signingTime</span><span class="s4">) {</span>
+    <span class="s6">/* Note per RFC 2985: Dates between 1 January 1950 and 31 December 2049 
+      (inclusive) MUST be encoded as UTCTime. Any dates with year values 
+      before 1950 or after 2049 MUST be encoded as GeneralizedTime. [Further,] 
+      UTCTime values MUST be expressed in Greenwich Mean Time (Zulu) and MUST 
+      include seconds (i.e., times are YYMMDDHHMMSSZ), even where the 
+      number of seconds is zero.  Midnight (GMT) must be represented as 
+      &quot;YYMMDD000000Z&quot;. */</span>
+    <span class="s6">// TODO: make these module-level constants</span>
+    <span class="s3">var </span><span class="s2">jan_1_1950 </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Date</span><span class="s4">(</span><span class="s5">'1950-01-01T00:00:00Z'</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">jan_1_2050 </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Date</span><span class="s4">(</span><span class="s5">'2050-01-01T00:00:00Z'</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">date </span><span class="s4">= </span><span class="s2">attr</span><span class="s4">.</span><span class="s2">value</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">date </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+      <span class="s6">// try to parse date</span>
+      <span class="s3">var </span><span class="s2">timestamp </span><span class="s4">= </span><span class="s2">Date</span><span class="s4">.</span><span class="s2">parse</span><span class="s4">(</span><span class="s2">date</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(!</span><span class="s2">isNaN</span><span class="s4">(</span><span class="s2">timestamp</span><span class="s4">)) {</span>
+        <span class="s2">date </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Date</span><span class="s4">(</span><span class="s2">timestamp</span><span class="s4">);</span>
+      <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">date</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">13</span><span class="s4">) {</span>
+        <span class="s6">// YYMMDDHHMMSSZ (13 chars for UTCTime)</span>
+        <span class="s2">date </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">utcTimeToDate</span><span class="s4">(</span><span class="s2">date</span><span class="s4">);</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// assume generalized time</span>
+        <span class="s2">date </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">generalizedTimeToDate</span><span class="s4">(</span><span class="s2">date</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">date </span><span class="s4">&gt;= </span><span class="s2">jan_1_1950 </span><span class="s4">&amp;&amp; </span><span class="s2">date </span><span class="s4">&lt; </span><span class="s2">jan_1_2050</span><span class="s4">) {</span>
+      <span class="s2">value </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">UTCTIME</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">dateToUtcTime</span><span class="s4">(</span><span class="s2">date</span><span class="s4">));</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s2">value </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">GENERALIZEDTIME</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">dateToGeneralizedTime</span><span class="s4">(</span><span class="s2">date</span><span class="s4">));</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// TODO: expose as common API call</span>
+  <span class="s6">// create a RelativeDistinguishedName set</span>
+  <span class="s6">// each value in the set is an AttributeTypeAndValue first</span>
+  <span class="s6">// containing the type (an OID) and second the value</span>
+  <span class="s3">return </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+    <span class="s6">// AttributeType</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">attr</span><span class="s4">.</span><span class="s2">type</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// AttributeValue</span>
+      <span class="s2">value</span>
+    <span class="s4">])</span>
+  <span class="s4">]);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Map messages encrypted content to ASN.1 objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">ec The encryptedContent object of the message.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">ASN.1 representation of the encryptedContent object (SEQUENCE).</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_encryptedContentToAsn1</span><span class="s4">(</span><span class="s2">ec</span><span class="s4">) {</span>
+  <span class="s3">return </span><span class="s4">[</span>
+    <span class="s6">// ContentType, always Data for the moment</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+    <span class="s6">// ContentEncryptionAlgorithmIdentifier</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// Algorithm</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">ec</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+      <span class="s6">// Parameters (IV)</span>
+      <span class="s4">!</span><span class="s2">ec</span><span class="s4">.</span><span class="s2">parameter </span><span class="s4">?</span>
+        <span class="s2">undefined </span><span class="s4">:</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">ec</span><span class="s4">.</span><span class="s2">parameter</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">())</span>
+    <span class="s4">]),</span>
+    <span class="s6">// [0] EncryptedContent</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">ec</span><span class="s4">.</span><span class="s2">content</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">())</span>
+    <span class="s4">])</span>
+  <span class="s4">];</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Reads the &quot;common part&quot; of an PKCS#7 content block (in ASN.1 format)</span>
+ <span class="s0">*</span>
+ <span class="s0">* This function reads the &quot;common part&quot; of the PKCS#7 content blocks</span>
+ <span class="s0">* EncryptedData and EnvelopedData, i.e. version number and symmetrically</span>
+ <span class="s0">* encrypted content block.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The result of the ASN.1 validate and capture process is returned</span>
+ <span class="s0">* to allow the caller to extract further data, e.g. the list of recipients</span>
+ <span class="s0">* in case of a EnvelopedData object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">msg the PKCS#7 object to read the data to.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the ASN.1 representation of the content block.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">validator the ASN.1 structure validator object to use.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the value map captured by validator object.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_fromAsn1</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">, </span><span class="s2">obj</span><span class="s4">, </span><span class="s2">validator</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">validator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#7 message. ' </span><span class="s4">+</span>
+      <span class="s5">'ASN.1 object is not a supported PKCS#7 message.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// Check contentType, so far we only support (raw) Data.</span>
+  <span class="s3">var </span><span class="s2">contentType </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">);</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">contentType </span><span class="s4">!== </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported PKCS#7 message. ' </span><span class="s4">+</span>
+      <span class="s5">'Only wrapped ContentType Data supported.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">content </span><span class="s4">= </span><span class="s5">''</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">)) {</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">) {</span>
+          <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Malformed PKCS#7 message, expecting encrypted ' </span><span class="s4">+</span>
+            <span class="s5">'content constructed of only OCTET STRING objects.'</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s2">content </span><span class="s4">+= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">value</span><span class="s4">;</span>
+      <span class="s4">}</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s2">content </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent </span><span class="s4">= {</span>
+      <span class="s2">algorithm</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encAlgorithm</span><span class="s4">),</span>
+      <span class="s2">parameter</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encParameter</span><span class="s4">.</span><span class="s2">value</span><span class="s4">),</span>
+      <span class="s2">content</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">content</span><span class="s4">)</span>
+    <span class="s4">};</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">content </span><span class="s4">= </span><span class="s5">''</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">)) {</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">) {</span>
+          <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Malformed PKCS#7 message, expecting ' </span><span class="s4">+</span>
+            <span class="s5">'content constructed of only OCTET STRING objects.'</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s2">content </span><span class="s4">+= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">value</span><span class="s4">;</span>
+      <span class="s4">}</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s2">content </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s2">msg</span><span class="s4">.</span><span class="s2">content </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">content</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s2">msg</span><span class="s4">.</span><span class="s2">version </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">version</span><span class="s4">.</span><span class="s2">charCodeAt</span><span class="s4">(</span><span class="s7">0</span><span class="s4">);</span>
+  <span class="s2">msg</span><span class="s4">.</span><span class="s2">rawCapture </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">;</span>
+
+  <span class="s3">return </span><span class="s2">capture</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decrypt the symmetrically encrypted content block of the PKCS#7 message.</span>
+ <span class="s0">*</span>
+ <span class="s0">* Decryption is skipped in case the PKCS#7 message object already has a</span>
+ <span class="s0">* (decrypted) content attribute.  The algorithm, key and cipher parameters</span>
+ <span class="s0">* (probably the iv) are taken from the encryptedContent attribute of the</span>
+ <span class="s0">* message object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">The PKCS#7 message object.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_decryptContent</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">) {</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key </span><span class="s4">=== </span><span class="s2">undefined</span><span class="s4">) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Symmetric key not available.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">content </span><span class="s4">=== </span><span class="s2">undefined</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">ciph</span><span class="s4">;</span>
+
+    <span class="s3">switch</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">) {</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes128-CBC'</span><span class="s4">]:</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes192-CBC'</span><span class="s4">]:</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes256-CBC'</span><span class="s4">]:</span>
+        <span class="s2">ciph </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key</span><span class="s4">);</span>
+        <span class="s3">break</span><span class="s4">;</span>
+
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'desCBC'</span><span class="s4">]:</span>
+      <span class="s3">case </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'des-EDE3-CBC'</span><span class="s4">]:</span>
+        <span class="s2">ciph </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">key</span><span class="s4">);</span>
+        <span class="s3">break</span><span class="s4">;</span>
+
+      <span class="s3">default</span><span class="s4">:</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported symmetric cipher, OID ' </span><span class="s4">+</span>
+          <span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s2">ciph</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">parameter</span><span class="s4">);</span>
+    <span class="s2">ciph</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">encryptedContent</span><span class="s4">.</span><span class="s2">content</span><span class="s4">);</span>
+
+    <span class="s3">if</span><span class="s4">(!</span><span class="s2">ciph</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">()) {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Symmetric decryption failed.'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s2">msg</span><span class="s4">.</span><span class="s2">content </span><span class="s4">= </span><span class="s2">ciph</span><span class="s4">.</span><span class="s2">output</span><span class="s4">;</span>
+  <span class="s4">}</span>
+<span class="s4">}</span>
+</pre>
+</body>
+</html>

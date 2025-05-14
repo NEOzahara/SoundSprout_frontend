@@ -1,0 +1,277 @@
+<html>
+<head>
+<title>func-name-matching.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+func-name-matching.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to require function names to match the name of the variable or property to which they are assigned.</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Annie Zhang, Pavel Strashkin</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//--------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//--------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">esutils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;esutils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//--------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//--------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines if a pattern is `module.exports` or `module[&quot;exports&quot;]`</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} pattern The left side of the AssignmentExpression</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the pattern is `module.exports` or `module[&quot;exports&quot;]`</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isModuleExports</span><span class="s4">(</span><span class="s2">pattern</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;MemberExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">object</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">object</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;module&quot;</span><span class="s4">) {</span>
+
+        <span class="s5">// module.exports</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">property</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">property</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;exports&quot;</span><span class="s4">) {</span>
+            <span class="s6">return true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// module[&quot;exports&quot;]</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">property</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Literal&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">property</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;exports&quot;</span><span class="s4">) {</span>
+            <span class="s6">return true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">return false</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines if a string name is a valid identifier</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} name The string to be checked</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{int} ecmaVersion The ECMAScript version if specified in the parserOptions config</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the string is a valid identifier</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isIdentifier</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">ecmaVersion</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">ecmaVersion </span><span class="s4">&gt;= </span><span class="s7">2015</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">esutils</span><span class="s4">.</span><span class="s2">keyword</span><span class="s4">.</span><span class="s2">isIdentifierES6</span><span class="s4">(</span><span class="s2">name</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s2">esutils</span><span class="s4">.</span><span class="s2">keyword</span><span class="s4">.</span><span class="s2">isIdentifierES5</span><span class="s4">(</span><span class="s2">name</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">alwaysOrNever </span><span class="s4">= { </span><span class="s6">enum</span><span class="s4">: [</span><span class="s3">&quot;always&quot;</span><span class="s4">, </span><span class="s3">&quot;never&quot;</span><span class="s4">] };</span>
+<span class="s6">const </span><span class="s2">optionsObject </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+    <span class="s2">properties</span><span class="s4">: {</span>
+        <span class="s2">considerPropertyDescriptor</span><span class="s4">: {</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span>
+        <span class="s4">},</span>
+        <span class="s2">includeCommonJSModuleExports</span><span class="s4">: {</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+    <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s6">false</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Require function names to match the name of the variable or property to which they are assigned&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/func-name-matching&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: {</span>
+            <span class="s2">anyOf</span><span class="s4">: [{</span>
+                <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;array&quot;</span><span class="s4">,</span>
+                <span class="s2">additionalItems</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+                <span class="s2">items</span><span class="s4">: [</span><span class="s2">alwaysOrNever</span><span class="s4">, </span><span class="s2">optionsObject</span><span class="s4">]</span>
+            <span class="s4">}, {</span>
+                <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;array&quot;</span><span class="s4">,</span>
+                <span class="s2">additionalItems</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+                <span class="s2">items</span><span class="s4">: [</span><span class="s2">optionsObject</span><span class="s4">]</span>
+            <span class="s4">}]</span>
+        <span class="s4">},</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">matchProperty</span><span class="s4">: </span><span class="s3">&quot;Function name `{{funcName}}` should match property name `{{name}}`.&quot;</span><span class="s4">,</span>
+            <span class="s2">matchVariable</span><span class="s4">: </span><span class="s3">&quot;Function name `{{funcName}}` should match variable name `{{name}}`.&quot;</span><span class="s4">,</span>
+            <span class="s2">notMatchProperty</span><span class="s4">: </span><span class="s3">&quot;Function name `{{funcName}}` should not match property name `{{name}}`.&quot;</span><span class="s4">,</span>
+            <span class="s2">notMatchVariable</span><span class="s4">: </span><span class="s3">&quot;Function name `{{funcName}}` should not match variable name `{{name}}`.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">options </span><span class="s4">= (</span><span class="s6">typeof </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] === </span><span class="s3">&quot;object&quot; </span><span class="s4">? </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] : </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">1</span><span class="s4">]) || {};</span>
+        <span class="s6">const </span><span class="s2">nameMatches </span><span class="s4">= </span><span class="s6">typeof </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] === </span><span class="s3">&quot;string&quot; </span><span class="s4">? </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] : </span><span class="s3">&quot;always&quot;</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">considerPropertyDescriptor </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">considerPropertyDescriptor</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">includeModuleExports </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">includeCommonJSModuleExports</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">ecmaVersion </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">languageOptions</span><span class="s4">.</span><span class="s2">ecmaVersion</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check whether node is a certain CallExpression.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} objName object name</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} funcName function name</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to check</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if node matches CallExpression</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isPropertyCall</span><span class="s4">(</span><span class="s2">objName</span><span class="s4">, </span><span class="s2">funcName</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;CallExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isSpecificMemberAccess</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">, </span><span class="s2">objName</span><span class="s4">, </span><span class="s2">funcName</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Compares identifiers based on the nameMatches option</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} x the first identifier</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} y the second identifier</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} whether the two identifiers should warn.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">x</span><span class="s4">, </span><span class="s2">y</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s4">(</span><span class="s2">nameMatches </span><span class="s4">=== </span><span class="s3">&quot;always&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">x </span><span class="s4">!== </span><span class="s2">y</span><span class="s4">) || (</span><span class="s2">nameMatches </span><span class="s4">=== </span><span class="s3">&quot;never&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">x </span><span class="s4">=== </span><span class="s2">y</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Reports</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to report</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} name The variable or property name</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} funcName The function name</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} isProp True if the reported node is a property assignment</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">name</span><span class="s4">, </span><span class="s2">funcName</span><span class="s4">, </span><span class="s2">isProp</span><span class="s4">) {</span>
+            <span class="s6">let </span><span class="s2">messageId</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">nameMatches </span><span class="s4">=== </span><span class="s3">&quot;always&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isProp</span><span class="s4">) {</span>
+                <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;matchProperty&quot;</span><span class="s4">;</span>
+            <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">nameMatches </span><span class="s4">=== </span><span class="s3">&quot;always&quot;</span><span class="s4">) {</span>
+                <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;matchVariable&quot;</span><span class="s4">;</span>
+            <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">isProp</span><span class="s4">) {</span>
+                <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;notMatchProperty&quot;</span><span class="s4">;</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;notMatchVariable&quot;</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                <span class="s2">node</span><span class="s4">,</span>
+                <span class="s2">messageId</span><span class="s4">,</span>
+                <span class="s2">data</span><span class="s4">: {</span>
+                    <span class="s2">name</span><span class="s4">,</span>
+                    <span class="s2">funcName</span>
+                <span class="s4">}</span>
+            <span class="s4">});</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Determines whether a given node is a string literal</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to check</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is a string literal</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isStringLiteral</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Literal&quot; </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">node</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s5">//--------------------------------------------------------------------------</span>
+        <span class="s5">// Public</span>
+        <span class="s5">//--------------------------------------------------------------------------</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">VariableDeclarator</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">node</span><span class="s4">.</span><span class="s2">init </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">init</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;FunctionExpression&quot; </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Identifier&quot;</span><span class="s4">) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">init</span><span class="s4">.</span><span class="s2">id </span><span class="s4">&amp;&amp; </span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">init</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">)) {</span>
+                    <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">init</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">, </span><span class="s6">false</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s2">AssignmentExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span>
+                    <span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;FunctionExpression&quot; </span><span class="s4">||</span>
+                    <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">.</span><span class="s2">computed </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">.</span><span class="s2">property</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Literal&quot;</span><span class="s4">) ||</span>
+                    <span class="s4">(!</span><span class="s2">includeModuleExports </span><span class="s4">&amp;&amp; </span><span class="s2">isModuleExports</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">)) ||</span>
+                    <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;MemberExpression&quot;</span><span class="s4">)</span>
+                <span class="s4">) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">const </span><span class="s2">isProp </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;MemberExpression&quot;</span><span class="s4">;</span>
+                <span class="s6">const </span><span class="s2">name </span><span class="s4">= </span><span class="s2">isProp </span><span class="s4">? </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getStaticPropertyName</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">) : </span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">.</span><span class="s2">id </span><span class="s4">&amp;&amp; </span><span class="s2">name </span><span class="s4">&amp;&amp; </span><span class="s2">isIdentifier</span><span class="s4">(</span><span class="s2">name</span><span class="s4">) &amp;&amp; </span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">)) {</span>
+                    <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">name</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">, </span><span class="s2">isProp</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s3">&quot;Property, PropertyDefinition[value]&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(!(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;FunctionExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">id</span><span class="s4">)) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp; !</span><span class="s2">node</span><span class="s4">.</span><span class="s2">computed</span><span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">functionName </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+                    <span class="s6">let </span><span class="s2">propertyName </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+
+                    <span class="s6">if </span><span class="s4">(</span>
+                        <span class="s2">considerPropertyDescriptor </span><span class="s4">&amp;&amp;</span>
+                        <span class="s2">propertyName </span><span class="s4">=== </span><span class="s3">&quot;value&quot; </span><span class="s4">&amp;&amp;</span>
+                        <span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ObjectExpression&quot;</span>
+                    <span class="s4">) {</span>
+                        <span class="s6">if </span><span class="s4">(</span><span class="s2">isPropertyCall</span><span class="s4">(</span><span class="s3">&quot;Object&quot;</span><span class="s4">, </span><span class="s3">&quot;defineProperty&quot;</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">) || </span><span class="s2">isPropertyCall</span><span class="s4">(</span><span class="s3">&quot;Reflect&quot;</span><span class="s4">, </span><span class="s3">&quot;defineProperty&quot;</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">)) {</span>
+                            <span class="s6">const </span><span class="s2">property </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">1</span><span class="s4">];</span>
+
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">isStringLiteral</span><span class="s4">(</span><span class="s2">property</span><span class="s4">) &amp;&amp; </span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">property</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">)) {</span>
+                                <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">property</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">, </span><span class="s6">true</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+                        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">isPropertyCall</span><span class="s4">(</span><span class="s3">&quot;Object&quot;</span><span class="s4">, </span><span class="s3">&quot;defineProperties&quot;</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">)) {</span>
+                            <span class="s2">propertyName </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+                            <span class="s6">if </span><span class="s4">(!</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">computed </span><span class="s4">&amp;&amp; </span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">)) {</span>
+                                <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">, </span><span class="s6">true</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+                        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">isPropertyCall</span><span class="s4">(</span><span class="s3">&quot;Object&quot;</span><span class="s4">, </span><span class="s3">&quot;create&quot;</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">)) {</span>
+                            <span class="s2">propertyName </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+                            <span class="s6">if </span><span class="s4">(!</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">computed </span><span class="s4">&amp;&amp; </span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">)) {</span>
+                                <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">, </span><span class="s6">true</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+                        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">)) {</span>
+                            <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">, </span><span class="s6">true</span><span class="s4">);</span>
+                        <span class="s4">}</span>
+                    <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">)) {</span>
+                        <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">propertyName</span><span class="s4">, </span><span class="s2">functionName</span><span class="s4">, </span><span class="s6">true</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">if </span><span class="s4">(</span>
+                    <span class="s2">isStringLiteral</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">key</span><span class="s4">) &amp;&amp;</span>
+                    <span class="s2">isIdentifier</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">ecmaVersion</span><span class="s4">) &amp;&amp;</span>
+                    <span class="s2">shouldWarn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">)</span>
+                <span class="s4">) {</span>
+                    <span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">key</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">, </span><span class="s6">true</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

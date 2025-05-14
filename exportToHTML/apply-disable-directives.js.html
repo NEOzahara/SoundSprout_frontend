@@ -1,0 +1,490 @@
+<html>
+<head>
+<title>apply-disable-directives.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+apply-disable-directives.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">A module that filters reported problems based on `eslint-disable` and `eslint-enable` comments</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Teddy Katz</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Typedefs</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).LintMessage} LintMessage */</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Module Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">escapeRegExp </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;escape-string-regexp&quot;</span><span class="s4">);</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Compares the locations of two objects in a source file</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{{line: number, column: number}} itemA The first object</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{{line: number, column: number}} itemB The second object</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{number} A value less than 1 if itemA appears before itemB in the source file, greater than 1 if</span>
+ <span class="s0">* itemA appears after itemB in the source file, or 0 if itemA and itemB have the same location.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">compareLocations</span><span class="s4">(</span><span class="s2">itemA</span><span class="s4">, </span><span class="s2">itemB</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">itemA</span><span class="s4">.</span><span class="s2">line </span><span class="s4">- </span><span class="s2">itemB</span><span class="s4">.</span><span class="s2">line </span><span class="s4">|| </span><span class="s2">itemA</span><span class="s4">.</span><span class="s2">column </span><span class="s4">- </span><span class="s2">itemB</span><span class="s4">.</span><span class="s2">column</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Groups a set of directives into sub-arrays by their parent comment.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Iterable&lt;Directive&gt;} directives Unused directives to be removed.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Directive[][]} Directives grouped by their parent comment.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">groupByParentComment</span><span class="s4">(</span><span class="s2">directives</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">groups </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">();</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">directive of directives</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">unprocessedDirective</span><span class="s4">: { </span><span class="s2">parentComment </span><span class="s4">} } = </span><span class="s2">directive</span><span class="s4">;</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">groups</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">parentComment</span><span class="s4">)) {</span>
+            <span class="s2">groups</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">parentComment</span><span class="s4">).</span><span class="s2">push</span><span class="s4">(</span><span class="s2">directive</span><span class="s4">);</span>
+        <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+            <span class="s2">groups</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">parentComment</span><span class="s4">, [</span><span class="s2">directive</span><span class="s4">]);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s4">[</span><span class="s2">...groups</span><span class="s4">.</span><span class="s2">values</span><span class="s4">()];</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates removal details for a set of directives within the same comment.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Directive[]} directives Unused directives to be removed.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Token} commentToken The backing Comment token.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{{ description, fix, unprocessedDirective }[]} Details for later creation of output Problems.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createIndividualDirectivesRemoval</span><span class="s4">(</span><span class="s2">directives</span><span class="s4">, </span><span class="s2">commentToken</span><span class="s4">) {</span>
+
+    <span class="s5">/* 
+     * `commentToken.value` starts right after `//` or `/*`. 
+     * All calculated offsets will be relative to this index. 
+     */</span>
+    <span class="s6">const </span><span class="s2">commentValueStart </span><span class="s4">= </span><span class="s2">commentToken</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] + </span><span class="s3">&quot;//&quot;</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+
+    <span class="s5">// Find where the list of rules starts. `\S+` matches with the directive name (e.g. `eslint-disable-line`)</span>
+    <span class="s6">const </span><span class="s2">listStartOffset </span><span class="s4">= </span><span class="s8">/^\s*\S+\s+/u</span><span class="s4">.</span><span class="s2">exec</span><span class="s4">(</span><span class="s2">commentToken</span><span class="s4">.</span><span class="s2">value</span><span class="s4">)[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">length</span><span class="s4">;</span>
+
+    <span class="s5">/* 
+     * Get the list text without any surrounding whitespace. In order to preserve the original 
+     * formatting, we don't want to change that whitespace. 
+     * 
+     *     // eslint-disable-line rule-one , rule-two , rule-three -- comment 
+     *                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 
+     */</span>
+    <span class="s6">const </span><span class="s2">listText </span><span class="s4">= </span><span class="s2">commentToken</span><span class="s4">.</span><span class="s2">value</span>
+        <span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s2">listStartOffset</span><span class="s4">) </span><span class="s5">// remove directive name and all whitespace before the list</span>
+        <span class="s4">.</span><span class="s2">split</span><span class="s4">(</span><span class="s8">/\s-{2,}\s/u</span><span class="s4">)[</span><span class="s7">0</span><span class="s4">] </span><span class="s5">// remove `-- comment`, if it exists</span>
+        <span class="s4">.</span><span class="s2">trimEnd</span><span class="s4">(); </span><span class="s5">// remove all whitespace after the list</span>
+
+    <span class="s5">/* 
+     * We can assume that `listText` contains multiple elements. 
+     * Otherwise, this function wouldn't be called - if there is 
+     * only one rule in the list, then the whole comment must be removed. 
+     */</span>
+
+    <span class="s6">return </span><span class="s2">directives</span><span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; {</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">ruleId </span><span class="s4">} = </span><span class="s2">directive</span><span class="s4">;</span>
+
+        <span class="s6">const </span><span class="s2">regex </span><span class="s4">= </span><span class="s6">new </span><span class="s2">RegExp</span><span class="s4">(</span><span class="s2">String</span><span class="s4">.</span><span class="s2">raw</span><span class="s3">`(?:^|</span><span class="s6">\s</span><span class="s3">*,</span><span class="s6">\s</span><span class="s3">*)(?&lt;quote&gt;['&quot;]?)</span><span class="s2">$</span><span class="s4">{</span><span class="s2">escapeRegExp</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">)}</span><span class="s6">\k</span><span class="s3">&lt;quote&gt;(?:</span><span class="s6">\s</span><span class="s3">*,</span><span class="s6">\s</span><span class="s3">*|$)`</span><span class="s4">, </span><span class="s3">&quot;u&quot;</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">match </span><span class="s4">= </span><span class="s2">regex</span><span class="s4">.</span><span class="s2">exec</span><span class="s4">(</span><span class="s2">listText</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">matchedText </span><span class="s4">= </span><span class="s2">match</span><span class="s4">[</span><span class="s7">0</span><span class="s4">];</span>
+        <span class="s6">const </span><span class="s2">matchStartOffset </span><span class="s4">= </span><span class="s2">listStartOffset </span><span class="s4">+ </span><span class="s2">match</span><span class="s4">.</span><span class="s2">index</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">matchEndOffset </span><span class="s4">= </span><span class="s2">matchStartOffset </span><span class="s4">+ </span><span class="s2">matchedText</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+
+        <span class="s6">const </span><span class="s2">firstIndexOfComma </span><span class="s4">= </span><span class="s2">matchedText</span><span class="s4">.</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s3">&quot;,&quot;</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">lastIndexOfComma </span><span class="s4">= </span><span class="s2">matchedText</span><span class="s4">.</span><span class="s2">lastIndexOf</span><span class="s4">(</span><span class="s3">&quot;,&quot;</span><span class="s4">);</span>
+
+        <span class="s6">let </span><span class="s2">removalStartOffset</span><span class="s4">, </span><span class="s2">removalEndOffset</span><span class="s4">;</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">firstIndexOfComma </span><span class="s4">!== </span><span class="s2">lastIndexOfComma</span><span class="s4">) {</span>
+
+            <span class="s5">/* 
+             * Since there are two commas, this must one of the elements in the middle of the list. 
+             * Matched range starts where the previous rule name ends, and ends where the next rule name starts. 
+             * 
+             *     // eslint-disable-line rule-one , rule-two , rule-three -- comment 
+             *                                    ^^^^^^^^^^^^^^ 
+             * 
+             * We want to remove only the content between the two commas, and also one of the commas. 
+             * 
+             *     // eslint-disable-line rule-one , rule-two , rule-three -- comment 
+             *                                     ^^^^^^^^^^^ 
+             */</span>
+            <span class="s2">removalStartOffset </span><span class="s4">= </span><span class="s2">matchStartOffset </span><span class="s4">+ </span><span class="s2">firstIndexOfComma</span><span class="s4">;</span>
+            <span class="s2">removalEndOffset </span><span class="s4">= </span><span class="s2">matchStartOffset </span><span class="s4">+ </span><span class="s2">lastIndexOfComma</span><span class="s4">;</span>
+
+        <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+
+            <span class="s5">/* 
+             * This is either the first element or the last element. 
+             * 
+             * If this is the first element, matched range starts where the first rule name starts 
+             * and ends where the second rule name starts. This is exactly the range we want 
+             * to remove so that the second rule name will start where the first one was starting 
+             * and thus preserve the original formatting. 
+             * 
+             *     // eslint-disable-line rule-one , rule-two , rule-three -- comment 
+             *                            ^^^^^^^^^^^ 
+             * 
+             * Similarly, if this is the last element, we've already matched the range we want to 
+             * remove. The previous rule name will end where the last one was ending, relative 
+             * to the content on the right side. 
+             * 
+             *     // eslint-disable-line rule-one , rule-two , rule-three -- comment 
+             *                                               ^^^^^^^^^^^^^ 
+             */</span>
+            <span class="s2">removalStartOffset </span><span class="s4">= </span><span class="s2">matchStartOffset</span><span class="s4">;</span>
+            <span class="s2">removalEndOffset </span><span class="s4">= </span><span class="s2">matchEndOffset</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">`'</span><span class="s2">$</span><span class="s4">{</span><span class="s2">ruleId</span><span class="s4">}</span><span class="s3">'`</span><span class="s4">,</span>
+            <span class="s2">fix</span><span class="s4">: {</span>
+                <span class="s2">range</span><span class="s4">: [</span>
+                    <span class="s2">commentValueStart </span><span class="s4">+ </span><span class="s2">removalStartOffset</span><span class="s4">,</span>
+                    <span class="s2">commentValueStart </span><span class="s4">+ </span><span class="s2">removalEndOffset</span>
+                <span class="s4">],</span>
+                <span class="s2">text</span><span class="s4">: </span><span class="s3">&quot;&quot;</span>
+            <span class="s4">},</span>
+            <span class="s2">unprocessedDirective</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">unprocessedDirective</span>
+        <span class="s4">};</span>
+    <span class="s4">});</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates a description of deleting an entire unused disable comment.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Directive[]} directives Unused directives to be removed.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Token} commentToken The backing Comment token.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{{ description, fix, unprocessedDirective }} Details for later creation of an output Problem.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createCommentRemoval</span><span class="s4">(</span><span class="s2">directives</span><span class="s4">, </span><span class="s2">commentToken</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s4">{ </span><span class="s2">range </span><span class="s4">} = </span><span class="s2">commentToken</span><span class="s4">;</span>
+    <span class="s6">const </span><span class="s2">ruleIds </span><span class="s4">= </span><span class="s2">directives</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">).</span><span class="s2">map</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; </span><span class="s3">`'</span><span class="s2">$</span><span class="s4">{</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">}</span><span class="s3">'`</span><span class="s4">);</span>
+
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">description</span><span class="s4">: </span><span class="s2">ruleIds</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&lt;= </span><span class="s7">2</span>
+            <span class="s4">? </span><span class="s2">ruleIds</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s3">&quot; or &quot;</span><span class="s4">)</span>
+            <span class="s4">: </span><span class="s3">`</span><span class="s2">$</span><span class="s4">{</span><span class="s2">ruleIds</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s7">0</span><span class="s4">, </span><span class="s2">ruleIds</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">).</span><span class="s2">join</span><span class="s4">(</span><span class="s3">&quot;, &quot;</span><span class="s4">)}</span><span class="s3">, or </span><span class="s2">$</span><span class="s4">{</span><span class="s2">ruleIds</span><span class="s4">[</span><span class="s2">ruleIds</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">]}</span><span class="s3">`</span><span class="s4">,</span>
+        <span class="s2">fix</span><span class="s4">: {</span>
+            <span class="s2">range</span><span class="s4">,</span>
+            <span class="s2">text</span><span class="s4">: </span><span class="s3">&quot; &quot;</span>
+        <span class="s4">},</span>
+        <span class="s2">unprocessedDirective</span><span class="s4">: </span><span class="s2">directives</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">unprocessedDirective</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Parses details from directives to create output Problems.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Iterable&lt;Directive&gt;} allDirectives Unused directives to be removed.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{{ description, fix, unprocessedDirective }[]} Details for later creation of output Problems.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">processUnusedDirectives</span><span class="s4">(</span><span class="s2">allDirectives</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">directiveGroups </span><span class="s4">= </span><span class="s2">groupByParentComment</span><span class="s4">(</span><span class="s2">allDirectives</span><span class="s4">);</span>
+
+    <span class="s6">return </span><span class="s2">directiveGroups</span><span class="s4">.</span><span class="s2">flatMap</span><span class="s4">(</span>
+        <span class="s2">directives </span><span class="s4">=&gt; {</span>
+            <span class="s6">const </span><span class="s4">{ </span><span class="s2">parentComment </span><span class="s4">} = </span><span class="s2">directives</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">unprocessedDirective</span><span class="s4">;</span>
+            <span class="s6">const </span><span class="s2">remainingRuleIds </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">(</span><span class="s2">parentComment</span><span class="s4">.</span><span class="s2">ruleIds</span><span class="s4">);</span>
+
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">directive of directives</span><span class="s4">) {</span>
+                <span class="s2">remainingRuleIds</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">return </span><span class="s2">remainingRuleIds</span><span class="s4">.</span><span class="s2">size</span>
+                <span class="s4">? </span><span class="s2">createIndividualDirectivesRemoval</span><span class="s4">(</span><span class="s2">directives</span><span class="s4">, </span><span class="s2">parentComment</span><span class="s4">.</span><span class="s2">commentToken</span><span class="s4">)</span>
+                <span class="s4">: [</span><span class="s2">createCommentRemoval</span><span class="s4">(</span><span class="s2">directives</span><span class="s4">, </span><span class="s2">parentComment</span><span class="s4">.</span><span class="s2">commentToken</span><span class="s4">)];</span>
+        <span class="s4">}</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Collect eslint-enable comments that are removing suppressions by eslint-disable comments.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Directive[]} directives The directives to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Set&lt;Directive&gt;} The used eslint-enable comments</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">collectUsedEnableDirectives</span><span class="s4">(</span><span class="s2">directives</span><span class="s4">) {</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* A Map of `eslint-enable` keyed by ruleIds that may be marked as used.</span>
+     <span class="s0">* If `eslint-enable` does not have a ruleId, the key will be `null`.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{Map&lt;string|null, Directive&gt;}</span>
+     <span class="s0">*/</span>
+    <span class="s6">const </span><span class="s2">enabledRules </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">();</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* A Set of `eslint-enable` marked as used.</span>
+     <span class="s0">* It is also the return value of `collectUsedEnableDirectives` function.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{Set&lt;Directive&gt;}</span>
+     <span class="s0">*/</span>
+    <span class="s6">const </span><span class="s2">usedEnableDirectives </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">();</span>
+
+    <span class="s5">/* 
+     * Checks the directives backwards to see if the encountered `eslint-enable` is used by the previous `eslint-disable`, 
+     * and if so, stores the `eslint-enable` in `usedEnableDirectives`. 
+     */</span>
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">index </span><span class="s4">= </span><span class="s2">directives</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">; </span><span class="s2">index </span><span class="s4">&gt;= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">index</span><span class="s4">--) {</span>
+        <span class="s6">const </span><span class="s2">directive </span><span class="s4">= </span><span class="s2">directives</span><span class="s4">[</span><span class="s2">index</span><span class="s4">];</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;disable&quot;</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">enabledRules</span><span class="s4">.</span><span class="s2">size </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId </span><span class="s4">=== </span><span class="s6">null</span><span class="s4">) {</span>
+
+                <span class="s5">// If encounter `eslint-disable` without ruleId,</span>
+                <span class="s5">// mark all `eslint-enable` currently held in enabledRules as used.</span>
+                <span class="s5">// e.g.</span>
+                <span class="s5">//    /* eslint-disable */ &lt;- current directive</span>
+                <span class="s5">//    /* eslint-enable rule-id1 */ &lt;- used</span>
+                <span class="s5">//    /* eslint-enable rule-id2 */ &lt;- used</span>
+                <span class="s5">//    /* eslint-enable */ &lt;- used</span>
+                <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">enableDirective of enabledRules</span><span class="s4">.</span><span class="s2">values</span><span class="s4">()) {</span>
+                    <span class="s2">usedEnableDirectives</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">enableDirective</span><span class="s4">);</span>
+                <span class="s4">}</span>
+                <span class="s2">enabledRules</span><span class="s4">.</span><span class="s2">clear</span><span class="s4">();</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s6">const </span><span class="s2">enableDirective </span><span class="s4">= </span><span class="s2">enabledRules</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">);</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">enableDirective</span><span class="s4">) {</span>
+
+                    <span class="s5">// If encounter `eslint-disable` with ruleId, and there is an `eslint-enable` with the same ruleId in enabledRules,</span>
+                    <span class="s5">// mark `eslint-enable` with ruleId as used.</span>
+                    <span class="s5">// e.g.</span>
+                    <span class="s5">//    /* eslint-disable rule-id */ &lt;- current directive</span>
+                    <span class="s5">//    /* eslint-enable rule-id */ &lt;- used</span>
+                    <span class="s2">usedEnableDirectives</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">enableDirective</span><span class="s4">);</span>
+                <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                    <span class="s6">const </span><span class="s2">enabledDirectiveWithoutRuleId </span><span class="s4">= </span><span class="s2">enabledRules</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">null</span><span class="s4">);</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">enabledDirectiveWithoutRuleId</span><span class="s4">) {</span>
+
+                        <span class="s5">// If encounter `eslint-disable` with ruleId, and there is no `eslint-enable` with the same ruleId in enabledRules,</span>
+                        <span class="s5">// mark `eslint-enable` without ruleId as used.</span>
+                        <span class="s5">// e.g.</span>
+                        <span class="s5">//    /* eslint-disable rule-id */ &lt;- current directive</span>
+                        <span class="s5">//    /* eslint-enable */ &lt;- used</span>
+                        <span class="s2">usedEnableDirectives</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">enabledDirectiveWithoutRuleId</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;enable&quot;</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId </span><span class="s4">=== </span><span class="s6">null</span><span class="s4">) {</span>
+
+                <span class="s5">// If encounter `eslint-enable` without ruleId, the `eslint-enable` that follows it are unused.</span>
+                <span class="s5">// So clear enabledRules.</span>
+                <span class="s5">// e.g.</span>
+                <span class="s5">//    /* eslint-enable */ &lt;- current directive</span>
+                <span class="s5">//    /* eslint-enable rule-id *// &lt;- unused</span>
+                <span class="s5">//    /* eslint-enable */ &lt;- unused</span>
+                <span class="s2">enabledRules</span><span class="s4">.</span><span class="s2">clear</span><span class="s4">();</span>
+                <span class="s2">enabledRules</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s6">null</span><span class="s4">, </span><span class="s2">directive</span><span class="s4">);</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s2">enabledRules</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">directive</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s2">usedEnableDirectives</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* This is the same as the exported function, except that it</span>
+ <span class="s0">* doesn't handle disable-line and disable-next-line directives, and it always reports unused</span>
+ <span class="s0">* disable directives.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} options options for applying directives. This is the same as the options</span>
+ <span class="s0">* for the exported function, except that `reportUnusedDisableDirectives` is not supported</span>
+ <span class="s0">* (this function always reports unused disable directives).</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{{problems: LintMessage[], unusedDirectives: LintMessage[]}} An object with a list</span>
+ <span class="s0">* of problems (including suppressed ones) and unused eslint-disable directives</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">applyDirectives</span><span class="s4">(</span><span class="s2">options</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">problems </span><span class="s4">= [];</span>
+    <span class="s6">const </span><span class="s2">usedDisableDirectives </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">();</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">problem of options</span><span class="s4">.</span><span class="s2">problems</span><span class="s4">) {</span>
+        <span class="s6">let </span><span class="s2">disableDirectivesForProblem </span><span class="s4">= [];</span>
+        <span class="s6">let </span><span class="s2">nextDirectiveIndex </span><span class="s4">= </span><span class="s7">0</span><span class="s4">;</span>
+
+        <span class="s6">while </span><span class="s4">(</span>
+            <span class="s2">nextDirectiveIndex </span><span class="s4">&lt; </span><span class="s2">options</span><span class="s4">.</span><span class="s2">directives</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">compareLocations</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">directives</span><span class="s4">[</span><span class="s2">nextDirectiveIndex</span><span class="s4">], </span><span class="s2">problem</span><span class="s4">) &lt;= </span><span class="s7">0</span>
+        <span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">directive </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">directives</span><span class="s4">[</span><span class="s2">nextDirectiveIndex</span><span class="s4">++];</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId </span><span class="s4">=== </span><span class="s6">null </span><span class="s4">|| </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId </span><span class="s4">=== </span><span class="s2">problem</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">) {</span>
+                <span class="s6">switch </span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+                    <span class="s6">case </span><span class="s3">&quot;disable&quot;</span><span class="s4">:</span>
+                        <span class="s2">disableDirectivesForProblem</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">directive</span><span class="s4">);</span>
+                        <span class="s6">break</span><span class="s4">;</span>
+
+                    <span class="s6">case </span><span class="s3">&quot;enable&quot;</span><span class="s4">:</span>
+                        <span class="s2">disableDirectivesForProblem </span><span class="s4">= [];</span>
+                        <span class="s6">break</span><span class="s4">;</span>
+
+                    <span class="s5">// no default</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">disableDirectivesForProblem</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">suppressions </span><span class="s4">= </span><span class="s2">disableDirectivesForProblem</span><span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; ({</span>
+                <span class="s2">kind</span><span class="s4">: </span><span class="s3">&quot;directive&quot;</span><span class="s4">,</span>
+                <span class="s2">justification</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">unprocessedDirective</span><span class="s4">.</span><span class="s2">justification</span>
+            <span class="s4">}));</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">problem</span><span class="s4">.</span><span class="s2">suppressions</span><span class="s4">) {</span>
+                <span class="s2">problem</span><span class="s4">.</span><span class="s2">suppressions </span><span class="s4">= </span><span class="s2">problem</span><span class="s4">.</span><span class="s2">suppressions</span><span class="s4">.</span><span class="s2">concat</span><span class="s4">(</span><span class="s2">suppressions</span><span class="s4">);</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s2">problem</span><span class="s4">.</span><span class="s2">suppressions </span><span class="s4">= </span><span class="s2">suppressions</span><span class="s4">;</span>
+                <span class="s2">usedDisableDirectives</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">disableDirectivesForProblem</span><span class="s4">[</span><span class="s2">disableDirectivesForProblem</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">]);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s2">problems</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">problem</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">const </span><span class="s2">unusedDisableDirectivesToReport </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">directives</span>
+        <span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;disable&quot; </span><span class="s4">&amp;&amp; !</span><span class="s2">usedDisableDirectives</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">directive</span><span class="s4">));</span>
+
+
+    <span class="s6">const </span><span class="s2">unusedEnableDirectivesToReport </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">(</span>
+        <span class="s2">options</span><span class="s4">.</span><span class="s2">directives</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">unprocessedDirective</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;enable&quot;</span><span class="s4">)</span>
+    <span class="s4">);</span>
+
+    <span class="s5">/* 
+     * If directives has the eslint-enable directive, 
+     * check whether the eslint-enable comment is used. 
+     */</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">unusedEnableDirectivesToReport</span><span class="s4">.</span><span class="s2">size </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">directive of collectUsedEnableDirectives</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">directives</span><span class="s4">)) {</span>
+            <span class="s2">unusedEnableDirectivesToReport</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">directive</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s6">const </span><span class="s2">processed </span><span class="s4">= </span><span class="s2">processUnusedDirectives</span><span class="s4">(</span><span class="s2">unusedDisableDirectivesToReport</span><span class="s4">)</span>
+        <span class="s4">.</span><span class="s2">concat</span><span class="s4">(</span><span class="s2">processUnusedDirectives</span><span class="s4">(</span><span class="s2">unusedEnableDirectivesToReport</span><span class="s4">));</span>
+
+    <span class="s6">const </span><span class="s2">unusedDirectives </span><span class="s4">= </span><span class="s2">processed</span>
+        <span class="s4">.</span><span class="s2">map</span><span class="s4">(({ </span><span class="s2">description</span><span class="s4">, </span><span class="s2">fix</span><span class="s4">, </span><span class="s2">unprocessedDirective </span><span class="s4">}) =&gt; {</span>
+            <span class="s6">const </span><span class="s4">{ </span><span class="s2">parentComment</span><span class="s4">, </span><span class="s2">type</span><span class="s4">, </span><span class="s2">line</span><span class="s4">, </span><span class="s2">column </span><span class="s4">} = </span><span class="s2">unprocessedDirective</span><span class="s4">;</span>
+
+            <span class="s6">let </span><span class="s2">message</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;enable&quot;</span><span class="s4">) {</span>
+                <span class="s2">message </span><span class="s4">= </span><span class="s2">description</span>
+                    <span class="s4">? </span><span class="s3">`Unused eslint-enable directive (no matching eslint-disable directives were found for </span><span class="s2">$</span><span class="s4">{</span><span class="s2">description</span><span class="s4">}</span><span class="s3">).`</span>
+                    <span class="s4">: </span><span class="s3">&quot;Unused eslint-enable directive (no matching eslint-disable directives were found).&quot;</span><span class="s4">;</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s2">message </span><span class="s4">= </span><span class="s2">description</span>
+                    <span class="s4">? </span><span class="s3">`Unused eslint-disable directive (no problems were reported from </span><span class="s2">$</span><span class="s4">{</span><span class="s2">description</span><span class="s4">}</span><span class="s3">).`</span>
+                    <span class="s4">: </span><span class="s3">&quot;Unused eslint-disable directive (no problems were reported).&quot;</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">return </span><span class="s4">{</span>
+                <span class="s2">ruleId</span><span class="s4">: </span><span class="s6">null</span><span class="s4">,</span>
+                <span class="s2">message</span><span class="s4">,</span>
+                <span class="s2">line</span><span class="s4">: </span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;disable-next-line&quot; </span><span class="s4">? </span><span class="s2">parentComment</span><span class="s4">.</span><span class="s2">commentToken</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">line </span><span class="s4">: </span><span class="s2">line</span><span class="s4">,</span>
+                <span class="s2">column</span><span class="s4">: </span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;disable-next-line&quot; </span><span class="s4">? </span><span class="s2">parentComment</span><span class="s4">.</span><span class="s2">commentToken</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">column </span><span class="s4">+ </span><span class="s7">1 </span><span class="s4">: </span><span class="s2">column</span><span class="s4">,</span>
+                <span class="s2">severity</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">reportUnusedDisableDirectives </span><span class="s4">=== </span><span class="s3">&quot;warn&quot; </span><span class="s4">? </span><span class="s7">1 </span><span class="s4">: </span><span class="s7">2</span><span class="s4">,</span>
+                <span class="s2">nodeType</span><span class="s4">: </span><span class="s6">null</span><span class="s4">,</span>
+                <span class="s2">...options</span><span class="s4">.</span><span class="s2">disableFixes </span><span class="s4">? {} : { </span><span class="s2">fix </span><span class="s4">}</span>
+            <span class="s4">};</span>
+        <span class="s4">});</span>
+
+    <span class="s6">return </span><span class="s4">{ </span><span class="s2">problems</span><span class="s4">, </span><span class="s2">unusedDirectives </span><span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Given a list of directive comments (i.e. metadata about eslint-disable and eslint-enable comments) and a list</span>
+ <span class="s0">* of reported problems, adds the suppression information to the problems.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} options Information about directives and problems</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{{</span>
+ <span class="s0">*      type: (&quot;disable&quot;|&quot;enable&quot;|&quot;disable-line&quot;|&quot;disable-next-line&quot;),</span>
+ <span class="s0">*      ruleId: (string|null),</span>
+ <span class="s0">*      line: number,</span>
+ <span class="s0">*      column: number,</span>
+ <span class="s0">*      justification: string</span>
+ <span class="s0">* }} options.directives Directive comments found in the file, with one-based columns.</span>
+ <span class="s0">* Two directive comments can only have the same location if they also have the same type (e.g. a single eslint-disable</span>
+ <span class="s0">* comment for two different rules is represented as two directives).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{{ruleId: (string|null), line: number, column: number}[]} options.problems</span>
+ <span class="s0">* A list of problems reported by rules, sorted by increasing location in the file, with one-based columns.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{&quot;off&quot; | &quot;warn&quot; | &quot;error&quot;} options.reportUnusedDisableDirectives If `&quot;warn&quot;` or `&quot;error&quot;`, adds additional problems for unused directives</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} options.disableFixes If true, it doesn't make `fix` properties.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{{ruleId: (string|null), line: number, column: number, suppressions?: {kind: string, justification: string}}[]}</span>
+ <span class="s0">* An object with a list of reported problems, the suppressed of which contain the suppression information.</span>
+ <span class="s0">*/</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= ({ </span><span class="s2">directives</span><span class="s4">, </span><span class="s2">disableFixes</span><span class="s4">, </span><span class="s2">problems</span><span class="s4">, </span><span class="s2">reportUnusedDisableDirectives </span><span class="s4">= </span><span class="s3">&quot;off&quot; </span><span class="s4">}) =&gt; {</span>
+    <span class="s6">const </span><span class="s2">blockDirectives </span><span class="s4">= </span><span class="s2">directives</span>
+        <span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;disable&quot; </span><span class="s4">|| </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;enable&quot;</span><span class="s4">)</span>
+        <span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">assign</span><span class="s4">({}, </span><span class="s2">directive</span><span class="s4">, { </span><span class="s2">unprocessedDirective</span><span class="s4">: </span><span class="s2">directive </span><span class="s4">}))</span>
+        <span class="s4">.</span><span class="s2">sort</span><span class="s4">(</span><span class="s2">compareLocations</span><span class="s4">);</span>
+
+    <span class="s6">const </span><span class="s2">lineDirectives </span><span class="s4">= </span><span class="s2">directives</span><span class="s4">.</span><span class="s2">flatMap</span><span class="s4">(</span><span class="s2">directive </span><span class="s4">=&gt; {</span>
+        <span class="s6">switch </span><span class="s4">(</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+            <span class="s6">case </span><span class="s3">&quot;disable&quot;</span><span class="s4">:</span>
+            <span class="s6">case </span><span class="s3">&quot;enable&quot;</span><span class="s4">:</span>
+                <span class="s6">return </span><span class="s4">[];</span>
+
+            <span class="s6">case </span><span class="s3">&quot;disable-line&quot;</span><span class="s4">:</span>
+                <span class="s6">return </span><span class="s4">[</span>
+                    <span class="s4">{ </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;disable&quot;</span><span class="s4">, </span><span class="s2">line</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">line</span><span class="s4">, </span><span class="s2">column</span><span class="s4">: </span><span class="s7">1</span><span class="s4">, </span><span class="s2">ruleId</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">unprocessedDirective</span><span class="s4">: </span><span class="s2">directive </span><span class="s4">},</span>
+                    <span class="s4">{ </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;enable&quot;</span><span class="s4">, </span><span class="s2">line</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">line </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">, </span><span class="s2">column</span><span class="s4">: </span><span class="s7">0</span><span class="s4">, </span><span class="s2">ruleId</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">unprocessedDirective</span><span class="s4">: </span><span class="s2">directive </span><span class="s4">}</span>
+                <span class="s4">];</span>
+
+            <span class="s6">case </span><span class="s3">&quot;disable-next-line&quot;</span><span class="s4">:</span>
+                <span class="s6">return </span><span class="s4">[</span>
+                    <span class="s4">{ </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;disable&quot;</span><span class="s4">, </span><span class="s2">line</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">line </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">, </span><span class="s2">column</span><span class="s4">: </span><span class="s7">1</span><span class="s4">, </span><span class="s2">ruleId</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">unprocessedDirective</span><span class="s4">: </span><span class="s2">directive </span><span class="s4">},</span>
+                    <span class="s4">{ </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;enable&quot;</span><span class="s4">, </span><span class="s2">line</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">line </span><span class="s4">+ </span><span class="s7">2</span><span class="s4">, </span><span class="s2">column</span><span class="s4">: </span><span class="s7">0</span><span class="s4">, </span><span class="s2">ruleId</span><span class="s4">: </span><span class="s2">directive</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">unprocessedDirective</span><span class="s4">: </span><span class="s2">directive </span><span class="s4">}</span>
+                <span class="s4">];</span>
+
+            <span class="s6">default</span><span class="s4">:</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`Unrecognized directive type '</span><span class="s2">$</span><span class="s4">{</span><span class="s2">directive</span><span class="s4">.</span><span class="s2">type</span><span class="s4">}</span><span class="s3">'`</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}).</span><span class="s2">sort</span><span class="s4">(</span><span class="s2">compareLocations</span><span class="s4">);</span>
+
+    <span class="s6">const </span><span class="s2">blockDirectivesResult </span><span class="s4">= </span><span class="s2">applyDirectives</span><span class="s4">({</span>
+        <span class="s2">problems</span><span class="s4">,</span>
+        <span class="s2">directives</span><span class="s4">: </span><span class="s2">blockDirectives</span><span class="s4">,</span>
+        <span class="s2">disableFixes</span><span class="s4">,</span>
+        <span class="s2">reportUnusedDisableDirectives</span>
+    <span class="s4">});</span>
+    <span class="s6">const </span><span class="s2">lineDirectivesResult </span><span class="s4">= </span><span class="s2">applyDirectives</span><span class="s4">({</span>
+        <span class="s2">problems</span><span class="s4">: </span><span class="s2">blockDirectivesResult</span><span class="s4">.</span><span class="s2">problems</span><span class="s4">,</span>
+        <span class="s2">directives</span><span class="s4">: </span><span class="s2">lineDirectives</span><span class="s4">,</span>
+        <span class="s2">disableFixes</span><span class="s4">,</span>
+        <span class="s2">reportUnusedDisableDirectives</span>
+    <span class="s4">});</span>
+
+    <span class="s6">return </span><span class="s2">reportUnusedDisableDirectives </span><span class="s4">!== </span><span class="s3">&quot;off&quot;</span>
+        <span class="s4">? </span><span class="s2">lineDirectivesResult</span><span class="s4">.</span><span class="s2">problems</span>
+            <span class="s4">.</span><span class="s2">concat</span><span class="s4">(</span><span class="s2">blockDirectivesResult</span><span class="s4">.</span><span class="s2">unusedDirectives</span><span class="s4">)</span>
+            <span class="s4">.</span><span class="s2">concat</span><span class="s4">(</span><span class="s2">lineDirectivesResult</span><span class="s4">.</span><span class="s2">unusedDirectives</span><span class="s4">)</span>
+            <span class="s4">.</span><span class="s2">sort</span><span class="s4">(</span><span class="s2">compareLocations</span><span class="s4">)</span>
+        <span class="s4">: </span><span class="s2">lineDirectivesResult</span><span class="s4">.</span><span class="s2">problems</span><span class="s4">;</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

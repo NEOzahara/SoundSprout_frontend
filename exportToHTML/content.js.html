@@ -1,0 +1,319 @@
+<html>
+<head>
+<title>content.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #cf8e6d;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+content.js</font>
+</center></td></tr></table>
+<pre><span class="s0">// @ts-check</span>
+
+<span class="s2">import </span><span class="s1">fs from </span><span class="s3">'fs'</span>
+<span class="s2">import </span><span class="s1">path from </span><span class="s3">'path'</span>
+<span class="s2">import </span><span class="s1">isGlob from </span><span class="s3">'is-glob'</span>
+<span class="s2">import </span><span class="s1">fastGlob from </span><span class="s3">'fast-glob'</span>
+<span class="s2">import </span><span class="s1">normalizePath from </span><span class="s3">'normalize-path'</span>
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">parseGlob </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'../util/parseGlob'</span>
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">env </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'./sharedState'</span>
+<span class="s2">import </span><span class="s1">log from </span><span class="s3">'../util/log'</span>
+<span class="s2">import </span><span class="s1">micromatch from </span><span class="s3">'micromatch'</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import('../../types/config.js').RawFile} RawFile */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import('../../types/config.js').FilePath} FilePath */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ContentPath</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} original</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} base</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string | null} glob</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} ignore</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} pattern</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Turn a list of content paths (absolute or not; glob or not) into a list of</span>
+ <span class="s5">* absolute file paths that exist on the filesystem</span>
+ <span class="s5">*</span>
+ <span class="s5">* If there are symlinks in the path then multiple paths will be returned</span>
+ <span class="s5">* one for the symlink and one for the actual file</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{*} context</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{import('tailwindcss').Config} tailwindConfig</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ContentPath[]}</span>
+ <span class="s5">*/</span>
+<span class="s2">export function </span><span class="s1">parseCandidateFiles</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">tailwindConfig</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">files </span><span class="s4">= </span><span class="s1">tailwindConfig</span><span class="s4">.</span><span class="s1">content</span><span class="s4">.</span><span class="s1">files</span>
+
+  <span class="s0">// Normalize the file globs</span>
+  <span class="s1">files </span><span class="s4">= </span><span class="s1">files</span><span class="s4">.</span><span class="s1">filter</span><span class="s4">((</span><span class="s1">filePath</span><span class="s4">) =&gt; </span><span class="s2">typeof </span><span class="s1">filePath </span><span class="s4">=== </span><span class="s3">'string'</span><span class="s4">)</span>
+  <span class="s1">files </span><span class="s4">= </span><span class="s1">files</span><span class="s4">.</span><span class="s1">map</span><span class="s4">(</span><span class="s1">normalizePath</span><span class="s4">)</span>
+
+  <span class="s0">// Split into included and excluded globs</span>
+  <span class="s2">let </span><span class="s1">tasks </span><span class="s4">= </span><span class="s1">fastGlob</span><span class="s4">.</span><span class="s1">generateTasks</span><span class="s4">(</span><span class="s1">files</span><span class="s4">)</span>
+
+  <span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContentPath[]} */</span>
+  <span class="s2">let </span><span class="s1">included </span><span class="s4">= []</span>
+
+  <span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContentPath[]} */</span>
+  <span class="s2">let </span><span class="s1">excluded </span><span class="s4">= []</span>
+
+  <span class="s2">for </span><span class="s4">(</span><span class="s2">const </span><span class="s1">task of tasks</span><span class="s4">) {</span>
+    <span class="s1">included</span><span class="s4">.</span><span class="s1">push</span><span class="s4">(</span><span class="s1">...task</span><span class="s4">.</span><span class="s1">positive</span><span class="s4">.</span><span class="s1">map</span><span class="s4">((</span><span class="s1">filePath</span><span class="s4">) =&gt; </span><span class="s1">parseFilePath</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">, </span><span class="s2">false</span><span class="s4">)))</span>
+    <span class="s1">excluded</span><span class="s4">.</span><span class="s1">push</span><span class="s4">(</span><span class="s1">...task</span><span class="s4">.</span><span class="s1">negative</span><span class="s4">.</span><span class="s1">map</span><span class="s4">((</span><span class="s1">filePath</span><span class="s4">) =&gt; </span><span class="s1">parseFilePath</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">, </span><span class="s2">true</span><span class="s4">)))</span>
+  <span class="s4">}</span>
+
+  <span class="s2">let </span><span class="s1">paths </span><span class="s4">= [</span><span class="s1">...included</span><span class="s4">, </span><span class="s1">...excluded</span><span class="s4">]</span>
+
+  <span class="s0">// Resolve paths relative to the config file or cwd</span>
+  <span class="s1">paths </span><span class="s4">= </span><span class="s1">resolveRelativePaths</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">paths</span><span class="s4">)</span>
+
+  <span class="s0">// Resolve symlinks if possible</span>
+  <span class="s1">paths </span><span class="s4">= </span><span class="s1">paths</span><span class="s4">.</span><span class="s1">flatMap</span><span class="s4">(</span><span class="s1">resolvePathSymlinks</span><span class="s4">)</span>
+
+  <span class="s0">// Update cached patterns</span>
+  <span class="s1">paths </span><span class="s4">= </span><span class="s1">paths</span><span class="s4">.</span><span class="s1">map</span><span class="s4">(</span><span class="s1">resolveGlobPattern</span><span class="s4">)</span>
+
+  <span class="s2">return </span><span class="s1">paths</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} filePath</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} ignore</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ContentPath}</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">parseFilePath</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">, </span><span class="s1">ignore</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">contentPath </span><span class="s4">= {</span>
+    <span class="s1">original</span><span class="s4">: </span><span class="s1">filePath</span><span class="s4">,</span>
+    <span class="s1">base</span><span class="s4">: </span><span class="s1">filePath</span><span class="s4">,</span>
+    <span class="s1">ignore</span><span class="s4">,</span>
+    <span class="s1">pattern</span><span class="s4">: </span><span class="s1">filePath</span><span class="s4">,</span>
+    <span class="s1">glob</span><span class="s4">: </span><span class="s2">null</span><span class="s4">,</span>
+  <span class="s4">}</span>
+
+  <span class="s2">if </span><span class="s4">(</span><span class="s1">isGlob</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">)) {</span>
+    <span class="s1">Object</span><span class="s4">.</span><span class="s1">assign</span><span class="s4">(</span><span class="s1">contentPath</span><span class="s4">, </span><span class="s1">parseGlob</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">))</span>
+  <span class="s4">}</span>
+
+  <span class="s2">return </span><span class="s1">contentPath</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContentPath} contentPath</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ContentPath}</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">resolveGlobPattern</span><span class="s4">(</span><span class="s1">contentPath</span><span class="s4">) {</span>
+  <span class="s0">// This is required for Windows support to properly pick up Glob paths.</span>
+  <span class="s0">// Afaik, this technically shouldn't be needed but there's probably</span>
+  <span class="s0">// some internal, direct path matching with a normalized path in</span>
+  <span class="s0">// a package which can't handle mixed directory separators</span>
+  <span class="s2">let </span><span class="s1">base </span><span class="s4">= </span><span class="s1">normalizePath</span><span class="s4">(</span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">base</span><span class="s4">)</span>
+
+  <span class="s0">// If the user's file path contains any special characters (like parens) for instance fast-glob</span>
+  <span class="s0">// is like &quot;OOOH SHINY&quot; and treats them as such. So we have to escape the base path to fix this</span>
+  <span class="s1">base </span><span class="s4">= </span><span class="s1">fastGlob</span><span class="s4">.</span><span class="s1">escapePath</span><span class="s4">(</span><span class="s1">base</span><span class="s4">)</span>
+
+  <span class="s1">contentPath</span><span class="s4">.</span><span class="s1">pattern </span><span class="s4">= </span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">glob </span><span class="s4">? </span><span class="s3">`</span><span class="s1">$</span><span class="s4">{</span><span class="s1">base</span><span class="s4">}</span><span class="s3">/</span><span class="s1">$</span><span class="s4">{</span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">glob</span><span class="s4">}</span><span class="s3">` </span><span class="s4">: </span><span class="s1">base</span>
+  <span class="s1">contentPath</span><span class="s4">.</span><span class="s1">pattern </span><span class="s4">= </span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">ignore </span><span class="s4">? </span><span class="s3">`!</span><span class="s1">$</span><span class="s4">{</span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">pattern</span><span class="s4">}</span><span class="s3">` </span><span class="s4">: </span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">pattern</span>
+
+  <span class="s2">return </span><span class="s1">contentPath</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Resolve each path relative to the config file (when possible) if the experimental flag is enabled</span>
+ <span class="s5">* Otherwise, resolve relative to the current working directory</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{any} context</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContentPath[]} contentPaths</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ContentPath[]}</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">resolveRelativePaths</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">contentPaths</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">resolveFrom </span><span class="s4">= []</span>
+
+  <span class="s0">// Resolve base paths relative to the config file (when possible) if the experimental flag is enabled</span>
+  <span class="s2">if </span><span class="s4">(</span><span class="s1">context</span><span class="s4">.</span><span class="s1">userConfigPath </span><span class="s4">&amp;&amp; </span><span class="s1">context</span><span class="s4">.</span><span class="s1">tailwindConfig</span><span class="s4">.</span><span class="s1">content</span><span class="s4">.</span><span class="s1">relative</span><span class="s4">) {</span>
+    <span class="s1">resolveFrom </span><span class="s4">= [</span><span class="s1">path</span><span class="s4">.</span><span class="s1">dirname</span><span class="s4">(</span><span class="s1">context</span><span class="s4">.</span><span class="s1">userConfigPath</span><span class="s4">)]</span>
+  <span class="s4">}</span>
+
+  <span class="s2">return </span><span class="s1">contentPaths</span><span class="s4">.</span><span class="s1">map</span><span class="s4">((</span><span class="s1">contentPath</span><span class="s4">) =&gt; {</span>
+    <span class="s1">contentPath</span><span class="s4">.</span><span class="s1">base </span><span class="s4">= </span><span class="s1">path</span><span class="s4">.</span><span class="s1">resolve</span><span class="s4">(</span><span class="s1">...resolveFrom</span><span class="s4">, </span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">base</span><span class="s4">)</span>
+
+    <span class="s2">return </span><span class="s1">contentPath</span>
+  <span class="s4">})</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Resolve the symlink for the base directory / file in each path</span>
+ <span class="s5">* These are added as additional dependencies to watch for changes because</span>
+ <span class="s5">* some tools (like webpack) will only watch the actual file or directory</span>
+ <span class="s5">* but not the symlink itself even in projects that use monorepos.</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContentPath} contentPath</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ContentPath[]}</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">resolvePathSymlinks</span><span class="s4">(</span><span class="s1">contentPath</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">paths </span><span class="s4">= [</span><span class="s1">contentPath</span><span class="s4">]</span>
+
+  <span class="s2">try </span><span class="s4">{</span>
+    <span class="s2">let </span><span class="s1">resolvedPath </span><span class="s4">= </span><span class="s1">fs</span><span class="s4">.</span><span class="s1">realpathSync</span><span class="s4">(</span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">base</span><span class="s4">)</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">resolvedPath </span><span class="s4">!== </span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">base</span><span class="s4">) {</span>
+      <span class="s1">paths</span><span class="s4">.</span><span class="s1">push</span><span class="s4">({</span>
+        <span class="s1">...contentPath</span><span class="s4">,</span>
+        <span class="s1">base</span><span class="s4">: </span><span class="s1">resolvedPath</span><span class="s4">,</span>
+      <span class="s4">})</span>
+    <span class="s4">}</span>
+  <span class="s4">} </span><span class="s2">catch </span><span class="s4">{</span>
+    <span class="s0">// TODO: log this?</span>
+  <span class="s4">}</span>
+
+  <span class="s2">return </span><span class="s1">paths</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{any} context</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContentPath[]} candidateFiles</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Map&lt;string, number&gt;} fileModifiedMap</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{[{ content: string, extension: string }[], Map&lt;string, number&gt;]}</span>
+ <span class="s5">*/</span>
+<span class="s2">export function </span><span class="s1">resolvedChangedContent</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">candidateFiles</span><span class="s4">, </span><span class="s1">fileModifiedMap</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">changedContent </span><span class="s4">= </span><span class="s1">context</span><span class="s4">.</span><span class="s1">tailwindConfig</span><span class="s4">.</span><span class="s1">content</span><span class="s4">.</span><span class="s1">files</span>
+    <span class="s4">.</span><span class="s1">filter</span><span class="s4">((</span><span class="s1">item</span><span class="s4">) =&gt; </span><span class="s2">typeof </span><span class="s1">item</span><span class="s4">.</span><span class="s1">raw </span><span class="s4">=== </span><span class="s3">'string'</span><span class="s4">)</span>
+    <span class="s4">.</span><span class="s1">map</span><span class="s4">(({ </span><span class="s1">raw</span><span class="s4">, </span><span class="s1">extension </span><span class="s4">= </span><span class="s3">'html' </span><span class="s4">}) =&gt; ({ </span><span class="s1">content</span><span class="s4">: </span><span class="s1">raw</span><span class="s4">, </span><span class="s1">extension </span><span class="s4">}))</span>
+
+  <span class="s2">let </span><span class="s4">[</span><span class="s1">changedFiles</span><span class="s4">, </span><span class="s1">mTimesToCommit</span><span class="s4">] = </span><span class="s1">resolveChangedFiles</span><span class="s4">(</span><span class="s1">candidateFiles</span><span class="s4">, </span><span class="s1">fileModifiedMap</span><span class="s4">)</span>
+
+  <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">changedFile of changedFiles</span><span class="s4">) {</span>
+    <span class="s2">let </span><span class="s1">extension </span><span class="s4">= </span><span class="s1">path</span><span class="s4">.</span><span class="s1">extname</span><span class="s4">(</span><span class="s1">changedFile</span><span class="s4">).</span><span class="s1">slice</span><span class="s4">(</span><span class="s7">1</span><span class="s4">)</span>
+    <span class="s1">changedContent</span><span class="s4">.</span><span class="s1">push</span><span class="s4">({ </span><span class="s1">file</span><span class="s4">: </span><span class="s1">changedFile</span><span class="s4">, </span><span class="s1">extension </span><span class="s4">})</span>
+  <span class="s4">}</span>
+
+  <span class="s2">return </span><span class="s4">[</span><span class="s1">changedContent</span><span class="s4">, </span><span class="s1">mTimesToCommit</span><span class="s4">]</span>
+<span class="s4">}</span>
+
+<span class="s2">const </span><span class="s1">LARGE_DIRECTORIES </span><span class="s4">= [</span>
+  <span class="s3">'node_modules'</span><span class="s4">, </span><span class="s0">// Node</span>
+<span class="s4">]</span>
+
+<span class="s0">// Ensures that `node_modules` has to match as-is, otherwise `mynode_modules`</span>
+<span class="s0">// would match as well, but that is not a known large directory.</span>
+<span class="s2">const </span><span class="s1">LARGE_DIRECTORIES_REGEX </span><span class="s4">= </span><span class="s2">new </span><span class="s1">RegExp</span><span class="s4">(</span>
+  <span class="s3">`(</span><span class="s1">$</span><span class="s4">{</span><span class="s1">LARGE_DIRECTORIES</span><span class="s4">.</span><span class="s1">map</span><span class="s4">((</span><span class="s1">dir</span><span class="s4">) =&gt; </span><span class="s1">String</span><span class="s4">.</span><span class="s1">raw</span><span class="s3">`</span><span class="s2">\b</span><span class="s1">$</span><span class="s4">{</span><span class="s1">dir</span><span class="s4">}</span><span class="s2">\b</span><span class="s3">`</span><span class="s4">).</span><span class="s1">join</span><span class="s4">(</span><span class="s3">'|'</span><span class="s4">)}</span><span class="s3">)`</span>
+<span class="s4">)</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} paths</span>
+ <span class="s5">*/</span>
+<span class="s2">export function </span><span class="s1">createBroadPatternCheck</span><span class="s4">(</span><span class="s1">paths</span><span class="s4">) {</span>
+  <span class="s0">// Detect whether a glob pattern might be too broad. This means that it:</span>
+  <span class="s0">// - Includes `**`</span>
+  <span class="s0">// - Does not include any of the known large directories (e.g.: node_modules)</span>
+  <span class="s2">let </span><span class="s1">maybeBroadPattern </span><span class="s4">= </span><span class="s1">paths</span><span class="s4">.</span><span class="s1">some</span><span class="s4">(</span>
+    <span class="s4">(</span><span class="s1">path</span><span class="s4">) =&gt; </span><span class="s1">path</span><span class="s4">.</span><span class="s1">includes</span><span class="s4">(</span><span class="s3">'**'</span><span class="s4">) &amp;&amp; !</span><span class="s1">LARGE_DIRECTORIES_REGEX</span><span class="s4">.</span><span class="s1">test</span><span class="s4">(</span><span class="s1">path</span><span class="s4">)</span>
+  <span class="s4">)</span>
+
+  <span class="s0">// Didn't detect any potentially broad patterns, so we can skip further</span>
+  <span class="s0">// checks.</span>
+  <span class="s2">if </span><span class="s4">(!</span><span class="s1">maybeBroadPattern</span><span class="s4">) {</span>
+    <span class="s2">return </span><span class="s4">() =&gt; {}</span>
+  <span class="s4">}</span>
+
+  <span class="s0">// All glob matchers</span>
+  <span class="s2">let </span><span class="s1">matchers </span><span class="s4">= []</span>
+
+  <span class="s0">// All glob matchers that explicitly contain any of the known large</span>
+  <span class="s0">// directories (e.g.: node_modules).</span>
+  <span class="s2">let </span><span class="s1">explicitMatchers </span><span class="s4">= []</span>
+
+  <span class="s0">// Create matchers for all paths</span>
+  <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">path of paths</span><span class="s4">) {</span>
+    <span class="s2">let </span><span class="s1">matcher </span><span class="s4">= </span><span class="s1">micromatch</span><span class="s4">.</span><span class="s1">matcher</span><span class="s4">(</span><span class="s1">path</span><span class="s4">)</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">LARGE_DIRECTORIES_REGEX</span><span class="s4">.</span><span class="s1">test</span><span class="s4">(</span><span class="s1">path</span><span class="s4">)) {</span>
+      <span class="s1">explicitMatchers</span><span class="s4">.</span><span class="s1">push</span><span class="s4">(</span><span class="s1">matcher</span><span class="s4">)</span>
+    <span class="s4">}</span>
+
+    <span class="s1">matchers</span><span class="s4">.</span><span class="s1">push</span><span class="s4">(</span><span class="s1">matcher</span><span class="s4">)</span>
+  <span class="s4">}</span>
+
+  <span class="s0">// Keep track of whether we already warned about the broad pattern issue or</span>
+  <span class="s0">// not. The `log.warn` function already does something similar where we only</span>
+  <span class="s0">// output the log once. However, with this we can also skip the other checks</span>
+  <span class="s0">// when we already warned about the broad pattern.</span>
+  <span class="s2">let </span><span class="s1">warned </span><span class="s4">= </span><span class="s2">false</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} file</span>
+   <span class="s5">*/</span>
+  <span class="s2">return </span><span class="s4">(</span><span class="s1">file</span><span class="s4">) =&gt; {</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">warned</span><span class="s4">) </span><span class="s2">return </span><span class="s0">// Already warned about the broad pattern</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">explicitMatchers</span><span class="s4">.</span><span class="s1">some</span><span class="s4">((</span><span class="s1">matcher</span><span class="s4">) =&gt; </span><span class="s1">matcher</span><span class="s4">(</span><span class="s1">file</span><span class="s4">))) </span><span class="s2">return </span><span class="s0">// Explicitly included, so we can skip further checks</span>
+
+    <span class="s0">// When a broad pattern is used, we have to double check that the file was</span>
+    <span class="s0">// not explicitly included in the globs.</span>
+    <span class="s2">let </span><span class="s1">matchingGlobIndex </span><span class="s4">= </span><span class="s1">matchers</span><span class="s4">.</span><span class="s1">findIndex</span><span class="s4">((</span><span class="s1">matcher</span><span class="s4">) =&gt; </span><span class="s1">matcher</span><span class="s4">(</span><span class="s1">file</span><span class="s4">))</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">matchingGlobIndex </span><span class="s4">=== -</span><span class="s7">1</span><span class="s4">) </span><span class="s2">return </span><span class="s0">// This should never happen</span>
+    <span class="s2">let </span><span class="s1">matchingGlob </span><span class="s4">= </span><span class="s1">paths</span><span class="s4">[</span><span class="s1">matchingGlobIndex</span><span class="s4">]</span>
+
+    <span class="s0">// Create relative paths to make the output a bit more readable.</span>
+    <span class="s2">let </span><span class="s1">relativeMatchingGlob </span><span class="s4">= </span><span class="s1">path</span><span class="s4">.</span><span class="s1">relative</span><span class="s4">(</span><span class="s1">process</span><span class="s4">.</span><span class="s1">cwd</span><span class="s4">(), </span><span class="s1">matchingGlob</span><span class="s4">)</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">relativeMatchingGlob</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] !== </span><span class="s3">'.'</span><span class="s4">) </span><span class="s1">relativeMatchingGlob </span><span class="s4">= </span><span class="s3">`./</span><span class="s1">$</span><span class="s4">{</span><span class="s1">relativeMatchingGlob</span><span class="s4">}</span><span class="s3">`</span>
+
+    <span class="s2">let </span><span class="s1">largeDirectory </span><span class="s4">= </span><span class="s1">LARGE_DIRECTORIES</span><span class="s4">.</span><span class="s1">find</span><span class="s4">((</span><span class="s1">directory</span><span class="s4">) =&gt; </span><span class="s1">file</span><span class="s4">.</span><span class="s1">includes</span><span class="s4">(</span><span class="s1">directory</span><span class="s4">))</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">largeDirectory</span><span class="s4">) {</span>
+      <span class="s1">warned </span><span class="s4">= </span><span class="s2">true</span>
+
+      <span class="s1">log</span><span class="s4">.</span><span class="s1">warn</span><span class="s4">(</span><span class="s3">'broad-content-glob-pattern'</span><span class="s4">, [</span>
+        <span class="s3">`Your </span><span class="s2">\`</span><span class="s3">content</span><span class="s2">\` </span><span class="s3">configuration includes a pattern which looks like it's accidentally matching all of </span><span class="s2">\`</span><span class="s1">$</span><span class="s4">{</span><span class="s1">largeDirectory</span><span class="s4">}</span><span class="s2">\` </span><span class="s3">and can cause serious performance issues.`</span><span class="s4">,</span>
+        <span class="s3">`Pattern: </span><span class="s2">\`</span><span class="s1">$</span><span class="s4">{</span><span class="s1">relativeMatchingGlob</span><span class="s4">}</span><span class="s2">\`</span><span class="s3">`</span><span class="s4">,</span>
+        <span class="s3">`See our documentation for recommendations:`</span><span class="s4">,</span>
+        <span class="s3">'https://tailwindcss.com/docs/content-configuration#pattern-recommendations'</span><span class="s4">,</span>
+      <span class="s4">])</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContentPath[]} candidateFiles</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Map&lt;string, number&gt;} fileModifiedMap</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{[Set&lt;string&gt;, Map&lt;string, number&gt;]}</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">resolveChangedFiles</span><span class="s4">(</span><span class="s1">candidateFiles</span><span class="s4">, </span><span class="s1">fileModifiedMap</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">paths </span><span class="s4">= </span><span class="s1">candidateFiles</span><span class="s4">.</span><span class="s1">map</span><span class="s4">((</span><span class="s1">contentPath</span><span class="s4">) =&gt; </span><span class="s1">contentPath</span><span class="s4">.</span><span class="s1">pattern</span><span class="s4">)</span>
+  <span class="s2">let </span><span class="s1">mTimesToCommit </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Map</span><span class="s4">()</span>
+
+  <span class="s2">let </span><span class="s1">checkBroadPattern </span><span class="s4">= </span><span class="s1">createBroadPatternCheck</span><span class="s4">(</span><span class="s1">paths</span><span class="s4">)</span>
+
+  <span class="s2">let </span><span class="s1">changedFiles </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Set</span><span class="s4">()</span>
+  <span class="s1">env</span><span class="s4">.</span><span class="s1">DEBUG </span><span class="s4">&amp;&amp; </span><span class="s1">console</span><span class="s4">.</span><span class="s1">time</span><span class="s4">(</span><span class="s3">'Finding changed files'</span><span class="s4">)</span>
+  <span class="s2">let </span><span class="s1">files </span><span class="s4">= </span><span class="s1">fastGlob</span><span class="s4">.</span><span class="s1">sync</span><span class="s4">(</span><span class="s1">paths</span><span class="s4">, { </span><span class="s1">absolute</span><span class="s4">: </span><span class="s2">true </span><span class="s4">})</span>
+  <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">file of files</span><span class="s4">) {</span>
+    <span class="s1">checkBroadPattern</span><span class="s4">(</span><span class="s1">file</span><span class="s4">)</span>
+
+    <span class="s2">let </span><span class="s1">prevModified </span><span class="s4">= </span><span class="s1">fileModifiedMap</span><span class="s4">.</span><span class="s1">get</span><span class="s4">(</span><span class="s1">file</span><span class="s4">) || -</span><span class="s1">Infinity</span>
+    <span class="s2">let </span><span class="s1">modified </span><span class="s4">= </span><span class="s1">fs</span><span class="s4">.</span><span class="s1">statSync</span><span class="s4">(</span><span class="s1">file</span><span class="s4">).</span><span class="s1">mtimeMs</span>
+
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">modified </span><span class="s4">&gt; </span><span class="s1">prevModified</span><span class="s4">) {</span>
+      <span class="s1">changedFiles</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">file</span><span class="s4">)</span>
+      <span class="s1">mTimesToCommit</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">file</span><span class="s4">, </span><span class="s1">modified</span><span class="s4">)</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+  <span class="s1">env</span><span class="s4">.</span><span class="s1">DEBUG </span><span class="s4">&amp;&amp; </span><span class="s1">console</span><span class="s4">.</span><span class="s1">timeEnd</span><span class="s4">(</span><span class="s3">'Finding changed files'</span><span class="s4">)</span>
+  <span class="s2">return </span><span class="s4">[</span><span class="s1">changedFiles</span><span class="s4">, </span><span class="s1">mTimesToCommit</span><span class="s4">]</span>
+<span class="s4">}</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,252 @@
+<html>
+<head>
+<title>EvalSourceMapDevToolPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+EvalSourceMapDevToolPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">ConcatSource</span><span class="s3">, </span><span class="s1">RawSource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;webpack-sources&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleFilenameHelpers </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleFilenameHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">NormalModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./NormalModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">RuntimeGlobals </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./RuntimeGlobals&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">SourceMapDevToolModuleOptionsPlugin </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./SourceMapDevToolModuleOptionsPlugin&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">JavascriptModulesPlugin </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./javascript/JavascriptModulesPlugin&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ConcatenatedModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./optimize/ConcatenatedModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">generateDebugId </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/generateDebugId&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">makePathsAbsolute </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/identifier&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../declarations/WebpackOptions&quot;).DevTool} DevToolOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../declarations/plugins/SourceMapDevToolPlugin&quot;).SourceMapDevToolPluginOptions} SourceMapDevToolPluginOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;).ModuleId} ModuleId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./NormalModule&quot;).SourceMap} SourceMap */</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Source, Source&gt;} */</span>
+<span class="s4">const </span><span class="s1">cache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s4">const </span><span class="s1">devtoolWarning </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s2">`/* 
+ * ATTENTION: An &quot;eval-source-map&quot; devtool has been used. 
+ * This devtool is neither made for production nor for readable output files. 
+ * It uses &quot;eval()&quot; calls to create a separate source file with attached SourceMaps in the browser devtools. 
+ * If you are trying to read the output file, select a different devtool (https://webpack.js.org/configuration/devtool/) 
+ * or disable the default devtool with &quot;devtool: false&quot;. 
+ * If you are looking for production-ready output files, see mode: &quot;production&quot; (https://webpack.js.org/configuration/mode/). 
+ */ 
+`</span><span class="s3">);</span>
+
+<span class="s4">class </span><span class="s1">EvalSourceMapDevToolPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{SourceMapDevToolPluginOptions|string} inputOptions Options object</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">inputOptions</span><span class="s3">) {</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMapDevToolPluginOptions} */</span>
+		<span class="s4">let </span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">inputOptions </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+			<span class="s1">options </span><span class="s3">= {</span>
+				<span class="s1">append</span><span class="s3">: </span><span class="s1">inputOptions</span>
+			<span class="s3">};</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">options </span><span class="s3">= </span><span class="s1">inputOptions</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">sourceMapComment </span><span class="s3">=</span>
+			<span class="s1">options</span><span class="s3">.</span><span class="s1">append </span><span class="s3">&amp;&amp; </span><span class="s4">typeof </span><span class="s1">options</span><span class="s3">.</span><span class="s1">append </span><span class="s3">!== </span><span class="s2">&quot;function&quot;</span>
+				<span class="s3">? </span><span class="s1">options</span><span class="s3">.</span><span class="s1">append</span>
+				<span class="s3">: </span><span class="s2">&quot;//# sourceURL=[module]</span><span class="s4">\n</span><span class="s2">//# sourceMappingURL=[url]&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">moduleFilenameTemplate </span><span class="s3">=</span>
+			<span class="s1">options</span><span class="s3">.</span><span class="s1">moduleFilenameTemplate </span><span class="s3">||</span>
+			<span class="s2">&quot;webpack://[namespace]/[resource-path]?[hash]&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">namespace </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespace </span><span class="s3">|| </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">options </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;EvalSourceMapDevToolPlugin&quot;</span><span class="s3">,</span>
+			<span class="s1">compilation </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">JavascriptModulesPlugin</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+				<span class="s4">new </span><span class="s1">SourceMapDevToolModuleOptionsPlugin</span><span class="s3">(</span><span class="s1">options</span><span class="s3">).</span><span class="s1">apply</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">matchModule </span><span class="s3">= </span><span class="s1">ModuleFilenameHelpers</span><span class="s3">.</span><span class="s1">matchObject</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span>
+					<span class="s1">ModuleFilenameHelpers</span><span class="s3">,</span>
+					<span class="s1">options</span>
+				<span class="s3">);</span>
+				<span class="s1">hooks</span><span class="s3">.</span><span class="s1">renderModuleContent</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s2">&quot;EvalSourceMapDevToolPlugin&quot;</span><span class="s3">,</span>
+					<span class="s3">(</span><span class="s1">source</span><span class="s3">, </span><span class="s1">m</span><span class="s3">, { </span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">, </span><span class="s1">chunkGraph </span><span class="s3">}) =&gt; {</span>
+						<span class="s4">const </span><span class="s1">cachedSource </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedSource </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s4">return </span><span class="s1">cachedSource</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Source} r result</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Source} result</span>
+						 <span class="s5">*/</span>
+						<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">r </span><span class="s3">=&gt; {</span>
+							<span class="s1">cache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">source</span><span class="s3">, </span><span class="s1">r</span><span class="s3">);</span>
+							<span class="s4">return </span><span class="s1">r</span><span class="s3">;</span>
+						<span class="s3">};</span>
+
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">m </span><span class="s4">instanceof </span><span class="s1">NormalModule</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NormalModule} */ </span><span class="s3">(</span><span class="s1">m</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">matchModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">)) {</span>
+								<span class="s4">return </span><span class="s1">result</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">m </span><span class="s4">instanceof </span><span class="s1">ConcatenatedModule</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">concatModule </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ConcatenatedModule} */ </span><span class="s3">(</span><span class="s1">m</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">concatModule</span><span class="s3">.</span><span class="s1">rootModule </span><span class="s4">instanceof </span><span class="s1">NormalModule</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NormalModule} */ </span><span class="s3">(</span>
+									<span class="s1">concatModule</span><span class="s3">.</span><span class="s1">rootModule</span>
+								<span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">matchModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">)) {</span>
+									<span class="s4">return </span><span class="s1">result</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">return </span><span class="s1">result</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s4">return </span><span class="s1">result</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s4">const </span><span class="s1">namespace </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">namespace</span><span class="s3">, {</span>
+							<span class="s1">chunk</span>
+						<span class="s3">});</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMap} */</span>
+						<span class="s4">let </span><span class="s1">sourceMap</span><span class="s3">;</span>
+						<span class="s4">let </span><span class="s1">content</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">source</span><span class="s3">.</span><span class="s1">sourceAndMap</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">sourceAndMap </span><span class="s3">= </span><span class="s1">source</span><span class="s3">.</span><span class="s1">sourceAndMap</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+							<span class="s1">sourceMap </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMap} */ </span><span class="s3">(</span><span class="s1">sourceAndMap</span><span class="s3">.</span><span class="s1">map</span><span class="s3">);</span>
+							<span class="s1">content </span><span class="s3">= </span><span class="s1">sourceAndMap</span><span class="s3">.</span><span class="s1">source</span><span class="s3">;</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s1">sourceMap </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMap} */ </span><span class="s3">(</span><span class="s1">source</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">options</span><span class="s3">));</span>
+							<span class="s1">content </span><span class="s3">= </span><span class="s1">source</span><span class="s3">.</span><span class="s1">source</span><span class="s3">();</span>
+						<span class="s3">}</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">sourceMap</span><span class="s3">) {</span>
+							<span class="s4">return </span><span class="s1">result</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Clone (flat) the sourcemap to ensure that the mutations below do not persist.</span>
+						<span class="s1">sourceMap </span><span class="s3">= { </span><span class="s1">...sourceMap </span><span class="s3">};</span>
+						<span class="s4">const </span><span class="s1">context </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">context</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">root </span><span class="s3">= </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">root</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sources</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">source </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">source</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">&quot;webpack://&quot;</span><span class="s3">)) </span><span class="s4">return </span><span class="s1">source</span><span class="s3">;</span>
+							<span class="s1">source </span><span class="s3">= </span><span class="s1">makePathsAbsolute</span><span class="s3">(</span><span class="s1">context</span><span class="s3">, </span><span class="s1">source</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">10</span><span class="s3">), </span><span class="s1">root</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">findModule</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+							<span class="s4">return </span><span class="s1">module </span><span class="s3">|| </span><span class="s1">source</span><span class="s3">;</span>
+						<span class="s3">});</span>
+						<span class="s4">let </span><span class="s1">moduleFilenames </span><span class="s3">= </span><span class="s1">modules</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">module </span><span class="s3">=&gt;</span>
+							<span class="s1">ModuleFilenameHelpers</span><span class="s3">.</span><span class="s1">createFilename</span><span class="s3">(</span>
+								<span class="s1">module</span><span class="s3">,</span>
+								<span class="s3">{</span>
+									<span class="s1">moduleFilenameTemplate</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">moduleFilenameTemplate</span><span class="s3">,</span>
+									<span class="s1">namespace</span>
+								<span class="s3">},</span>
+								<span class="s3">{</span>
+									<span class="s1">requestShortener</span><span class="s3">: </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">requestShortener</span><span class="s3">,</span>
+									<span class="s1">chunkGraph</span><span class="s3">,</span>
+									<span class="s1">hashFunction</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashFunction</span>
+								<span class="s3">}</span>
+							<span class="s3">)</span>
+						<span class="s3">);</span>
+						<span class="s1">moduleFilenames </span><span class="s3">= </span><span class="s1">ModuleFilenameHelpers</span><span class="s3">.</span><span class="s1">replaceDuplicates</span><span class="s3">(</span>
+							<span class="s1">moduleFilenames</span><span class="s3">,</span>
+							<span class="s3">(</span><span class="s1">filename</span><span class="s3">, </span><span class="s1">i</span><span class="s3">, </span><span class="s1">n</span><span class="s3">) =&gt; {</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">j </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">j </span><span class="s3">&lt; </span><span class="s1">n</span><span class="s3">; </span><span class="s1">j</span><span class="s3">++) </span><span class="s1">filename </span><span class="s3">+= </span><span class="s2">&quot;*&quot;</span><span class="s3">;</span>
+								<span class="s4">return </span><span class="s1">filename</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">);</span>
+						<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sources </span><span class="s3">= </span><span class="s1">moduleFilenames</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">noSources</span><span class="s3">) {</span>
+							<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sourcesContent </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">|| </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">moduleId </span><span class="s3">=</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */</span>
+							<span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">m</span><span class="s3">));</span>
+						<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">file </span><span class="s3">=</span>
+							<span class="s4">typeof </span><span class="s1">moduleId </span><span class="s3">=== </span><span class="s2">&quot;number&quot; </span><span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">moduleId</span><span class="s3">}</span><span class="s2">.js` </span><span class="s3">: </span><span class="s1">moduleId</span><span class="s3">;</span>
+
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">debugIds</span><span class="s3">) {</span>
+							<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">debugId </span><span class="s3">= </span><span class="s1">generateDebugId</span><span class="s3">(</span><span class="s1">content</span><span class="s3">, </span><span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">file</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s4">const </span><span class="s1">footer </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">sourceMapComment</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span>
+							<span class="s8">/\[url\]/g</span><span class="s3">,</span>
+							<span class="s2">`data:application/json;charset=utf-8;base64,</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+								<span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">),</span>
+								<span class="s2">&quot;utf8&quot;</span>
+							<span class="s3">).</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;base64&quot;</span><span class="s3">)}</span><span class="s2">`</span>
+						<span class="s3">)}</span><span class="s4">\n</span><span class="s2">//# sourceURL=webpack-internal:///</span><span class="s1">$</span><span class="s3">{</span><span class="s1">moduleId</span><span class="s3">}</span><span class="s4">\n</span><span class="s2">`</span><span class="s3">; </span><span class="s0">// workaround for chrome bug</span>
+
+						<span class="s4">return </span><span class="s1">result</span><span class="s3">(</span>
+							<span class="s4">new </span><span class="s1">RawSource</span><span class="s3">(</span>
+								<span class="s2">`eval(</span><span class="s1">$</span><span class="s3">{</span>
+									<span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">trustedTypes</span>
+										<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">createScript</span><span class="s3">}</span><span class="s2">(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+												<span class="s1">content </span><span class="s3">+ </span><span class="s1">footer</span>
+											<span class="s3">)}</span><span class="s2">)`</span>
+										<span class="s3">: </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">content </span><span class="s3">+ </span><span class="s1">footer</span><span class="s3">)</span>
+								<span class="s3">}</span><span class="s2">);`</span>
+							<span class="s3">)</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+				<span class="s1">hooks</span><span class="s3">.</span><span class="s1">inlineInRuntimeBailout</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s2">&quot;EvalDevToolModulePlugin&quot;</span><span class="s3">,</span>
+					<span class="s3">() =&gt; </span><span class="s2">&quot;the eval-source-map devtool is used.&quot;</span>
+				<span class="s3">);</span>
+				<span class="s1">hooks</span><span class="s3">.</span><span class="s1">render</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s2">&quot;EvalSourceMapDevToolPlugin&quot;</span><span class="s3">,</span>
+					<span class="s1">source </span><span class="s3">=&gt; </span><span class="s4">new </span><span class="s1">ConcatSource</span><span class="s3">(</span><span class="s1">devtoolWarning</span><span class="s3">, </span><span class="s1">source</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s1">hooks</span><span class="s3">.</span><span class="s1">chunkHash</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;EvalSourceMapDevToolPlugin&quot;</span><span class="s3">, (</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">hash</span><span class="s3">) =&gt; {</span>
+					<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s2">&quot;EvalSourceMapDevToolPlugin&quot;</span><span class="s3">);</span>
+					<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s2">&quot;2&quot;</span><span class="s3">);</span>
+				<span class="s3">});</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">trustedTypes</span><span class="s3">) {</span>
+					<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">additionalModuleRuntimeRequirements</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+						<span class="s2">&quot;EvalSourceMapDevToolPlugin&quot;</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">set</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) =&gt; {</span>
+							<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">createScript</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">EvalSourceMapDevToolPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

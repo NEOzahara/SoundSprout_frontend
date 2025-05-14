@@ -1,0 +1,397 @@
+<html>
+<head>
+<title>Dependency.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+Dependency.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">RawModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./RawModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">memoize </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/memoize&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./DependenciesBlock&quot;)} DependenciesBlock */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./DependencyTemplates&quot;)} DependencyTemplates */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleGraphConnection&quot;)} ModuleGraphConnection */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleGraphConnection&quot;).ConnectionState} ConnectionState */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./RuntimeTemplate&quot;)} RuntimeTemplate */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./WebpackError&quot;)} WebpackError */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./serialization/ObjectMiddleware&quot;).ObjectDeserializerContext} ObjectDeserializerContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./serialization/ObjectMiddleware&quot;).ObjectSerializerContext} ObjectSerializerContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/Hash&quot;)} Hash */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} UpdateHashContext</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ChunkGraph} chunkGraph</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RuntimeSpec} runtime</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RuntimeTemplate=} runtimeTemplate</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} SourcePosition</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} line</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number=} column</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} RealDependencyLocation</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SourcePosition} start</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SourcePosition=} end</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number=} index</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} SyntheticDependencyLocation</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} name</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number=} index</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{SyntheticDependencyLocation | RealDependencyLocation} DependencyLocation */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ExportSpec</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} name the name of the export</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} canMangle can the export be renamed (defaults to true)</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} terminalBinding is the export a terminal binding that should be checked for export star conflicts</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(string | ExportSpec)[]=} exports nested exports</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ModuleGraphConnection=} from when reexported: from which module</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[] | null=} export when reexported: from which export</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number=} priority when reexported: with which priority</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} hidden export is not visible, because another export blends over it</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ExportsSpec</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(string | ExportSpec)[] | true | null} exports exported names, true for unknown exports or null for no exports</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Set&lt;string&gt;=} excludeExports when exports = true, list of unaffected exports</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(Set&lt;string&gt; | null)=} hideExports list of maybe prior exposed, but now hidden exports</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ModuleGraphConnection=} from when reexported: from which module</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number=} priority when reexported: with which priority</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} canMangle can the export be renamed (defaults to true)</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} terminalBinding are the exports terminal bindings that should be checked for export star conflicts</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Module[]=} dependencies module on which the result depends on</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ReferencedExport</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[]} name name of the referenced export</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} canMangle when false, referenced export can not be mangled, defaults to true</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(moduleGraphConnection: ModuleGraphConnection, runtime: RuntimeSpec) =&gt; ConnectionState} GetConditionFn */</span>
+
+<span class="s4">const </span><span class="s1">TRANSITIVE </span><span class="s3">= </span><span class="s1">Symbol</span><span class="s3">(</span><span class="s2">&quot;transitive&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">getIgnoredModule </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(</span>
+	<span class="s3">() =&gt; </span><span class="s4">new </span><span class="s1">RawModule</span><span class="s3">(</span><span class="s2">&quot;/* (ignored) */&quot;</span><span class="s3">, </span><span class="s2">&quot;ignored&quot;</span><span class="s3">, </span><span class="s2">&quot;(ignored)&quot;</span><span class="s3">)</span>
+<span class="s3">);</span>
+
+<span class="s4">class </span><span class="s1">Dependency </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">() {</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_parentModule </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependenciesBlock | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_parentDependenciesBlock </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_parentDependenciesBlockIndex </span><span class="s3">= -</span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s0">// TODO check if this can be moved into ModuleDependency</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{boolean} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">weak </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s0">// TODO check if this can be moved into ModuleDependency</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{boolean} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">optional </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSC </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEC </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locI </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locN </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_loc </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} a display name for the type of dependency</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get type</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s2">&quot;unknown&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} a dependency category, typical categories are &quot;commonjs&quot;, &quot;amd&quot;, &quot;esm&quot;</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get category</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s2">&quot;unknown&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{DependencyLocation} location</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get loc</span><span class="s3">() {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_loc </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return this</span><span class="s3">.</span><span class="s1">_loc</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SyntheticDependencyLocation &amp; RealDependencyLocation} */</span>
+		<span class="s4">const </span><span class="s1">loc </span><span class="s3">= {</span>
+			<span class="s1">start</span><span class="s3">: { </span><span class="s1">line</span><span class="s3">: </span><span class="s7">0</span><span class="s3">, </span><span class="s1">column</span><span class="s3">: </span><span class="s7">0 </span><span class="s3">},</span>
+			<span class="s1">end</span><span class="s3">: { </span><span class="s1">line</span><span class="s3">: </span><span class="s7">0</span><span class="s3">, </span><span class="s1">column</span><span class="s3">: </span><span class="s7">0 </span><span class="s3">},</span>
+			<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s1">index</span><span class="s3">: -</span><span class="s7">1</span>
+		<span class="s3">};</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s1">loc</span><span class="s3">.</span><span class="s1">start </span><span class="s3">= { </span><span class="s1">line</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL</span><span class="s3">, </span><span class="s1">column</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locSC </span><span class="s3">};</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s1">loc</span><span class="s3">.</span><span class="s1">end </span><span class="s3">= { </span><span class="s1">line</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL</span><span class="s3">, </span><span class="s1">column</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locEC </span><span class="s3">};</span>
+		<span class="s3">}</span>
+
+		<span class="s1">loc</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locN</span><span class="s3">;</span>
+
+		<span class="s1">loc</span><span class="s3">.</span><span class="s1">index </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locI</span><span class="s3">;</span>
+
+		<span class="s4">return </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_loc </span><span class="s3">= </span><span class="s1">loc</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">set loc</span><span class="s3">(</span><span class="s1">loc</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;start&quot; </span><span class="s4">in </span><span class="s1">loc </span><span class="s3">&amp;&amp; </span><span class="s4">typeof </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">start </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL </span><span class="s3">= </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">start</span><span class="s3">.</span><span class="s1">line </span><span class="s3">|| </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSC </span><span class="s3">= </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">start</span><span class="s3">.</span><span class="s1">column </span><span class="s3">|| </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSC </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;end&quot; </span><span class="s4">in </span><span class="s1">loc </span><span class="s3">&amp;&amp; </span><span class="s4">typeof </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">end </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL </span><span class="s3">= </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">end</span><span class="s3">.</span><span class="s1">line </span><span class="s3">|| </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEC </span><span class="s3">= </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">end</span><span class="s3">.</span><span class="s1">column </span><span class="s3">|| </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEC </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locI </span><span class="s3">= </span><span class="s2">&quot;index&quot; </span><span class="s4">in </span><span class="s1">loc </span><span class="s3">? </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">index </span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locN </span><span class="s3">= </span><span class="s2">&quot;name&quot; </span><span class="s4">in </span><span class="s1">loc </span><span class="s3">? </span><span class="s1">loc</span><span class="s3">.</span><span class="s1">name </span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_loc </span><span class="s3">= </span><span class="s1">loc</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} startLine start line</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} startColumn start column</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} endLine end line</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} endColumn end column</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setLoc</span><span class="s3">(</span><span class="s1">startLine</span><span class="s3">, </span><span class="s1">startColumn</span><span class="s3">, </span><span class="s1">endLine</span><span class="s3">, </span><span class="s1">endColumn</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL </span><span class="s3">= </span><span class="s1">startLine</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSC </span><span class="s3">= </span><span class="s1">startColumn</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL </span><span class="s3">= </span><span class="s1">endLine</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEC </span><span class="s3">= </span><span class="s1">endColumn</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locI </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locN </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_loc </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | undefined} a request context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getContext</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | null} an identifier to merge equal requests</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getResourceIdentifier</span><span class="s3">() {</span>
+		<span class="s4">return null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean | TRANSITIVE} true, when changes to the referenced module could affect the referencing module; TRANSITIVE, when changes to the referenced module could affect referencing modules of the referencing module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">couldAffectReferencingModule</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s1">TRANSITIVE</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Returns the referenced module and export</span>
+	 <span class="s5">* </span><span class="s6">@deprecated</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{never} throws error</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getReference</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+			<span class="s2">&quot;Dependency.getReference was removed in favor of Dependency.getReferencedExports, ModuleGraph.getModule and ModuleGraph.getConnection().active&quot;</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Returns list of exports referenced by this dependency</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime the runtime for which the module is analysed</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(string[] | ReferencedExport)[]} referenced exports</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getReferencedExports</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">Dependency</span><span class="s3">.</span><span class="s1">EXPORTS_OBJECT_REFERENCED</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{null | false | GetConditionFn} function to determine if the connection is active</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getCondition</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">return null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Returns the exported names</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ExportsSpec | undefined} export names</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getExports</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Returns warnings</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{WebpackError[] | null | undefined} warnings</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getWarnings</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">return null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Returns errors</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{WebpackError[] | null | undefined} errors</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getErrors</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">return null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Update the hash</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Hash} hash hash to be updated</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{UpdateHashContext} context context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">updateHash</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* implement this method to allow the occurrence order plugin to count correctly</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} count how often the id is used in this dependency</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getNumberOfIdOccurrences</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph the module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ConnectionState} how this dependency connects the module to referencing modules</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getModuleEvaluationSideEffectsState</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">return true</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} context context directory</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Module | null} a module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">createIgnoredModule</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">getIgnoredModule</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectSerializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">serialize</span><span class="s3">({ </span><span class="s1">write </span><span class="s3">}) {</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">weak</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">optional</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locSC</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locEC</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locI</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_locN</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectDeserializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">deserialize</span><span class="s3">({ </span><span class="s1">read </span><span class="s3">}) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">weak </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">optional </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSL </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locSC </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEL </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locEC </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locI </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_locN </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[][]} */</span>
+<span class="s1">Dependency</span><span class="s3">.</span><span class="s1">NO_EXPORTS_REFERENCED </span><span class="s3">= [];</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[][]} */</span>
+<span class="s1">Dependency</span><span class="s3">.</span><span class="s1">EXPORTS_OBJECT_REFERENCED </span><span class="s3">= [[]];</span>
+
+<span class="s0">// TODO remove in webpack 6</span>
+<span class="s1">Object</span><span class="s3">.</span><span class="s1">defineProperty</span><span class="s3">(</span><span class="s1">Dependency</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">, </span><span class="s2">&quot;module&quot;</span><span class="s3">, {</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@deprecated</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{EXPECTED_ANY} throws</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get</span><span class="s3">() {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+			<span class="s2">&quot;module property was removed from Dependency (use compilation.moduleGraph.getModule(dependency) instead)&quot;</span>
+		<span class="s3">);</span>
+	<span class="s3">},</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@deprecated</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{never} throws</span>
+	 <span class="s5">*/</span>
+	<span class="s1">set</span><span class="s3">() {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+			<span class="s2">&quot;module property was removed from Dependency (use compilation.moduleGraph.updateModule(dependency, module) instead)&quot;</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">});</span>
+
+<span class="s0">// TODO remove in webpack 6</span>
+<span class="s1">Object</span><span class="s3">.</span><span class="s1">defineProperty</span><span class="s3">(</span><span class="s1">Dependency</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">, </span><span class="s2">&quot;disconnect&quot;</span><span class="s3">, {</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@deprecated</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{EXPECTED_ANY} throws</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get</span><span class="s3">() {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+			<span class="s2">&quot;disconnect was removed from Dependency (Dependency no longer carries graph specific information)&quot;</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">});</span>
+
+<span class="s1">Dependency</span><span class="s3">.</span><span class="s1">TRANSITIVE </span><span class="s3">= </span><span class="s1">TRANSITIVE</span><span class="s3">;</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">Dependency</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,623 @@
+<html>
+<head>
+<title>flat-config-schema.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+flat-config-schema.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Flat config schema</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Nicholas C. Zakas</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s5">/* 
+ * Note: This can be removed in ESLint v9 because structuredClone is available globally 
+ * starting in Node.js v17. 
+ */</span>
+<span class="s6">const </span><span class="s2">structuredClone </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@ungap/structured-clone&quot;</span><span class="s4">).</span><span class="s2">default</span><span class="s4">;</span>
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">normalizeSeverityToNumber </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../shared/severity&quot;</span><span class="s4">);</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Type Definitions</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">ObjectPropertySchema</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Function|string} merge The function or name of the function to call</span>
+ <span class="s0">*      to merge multiple objects with this property.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Function|string} validate The function or name of the function to call</span>
+ <span class="s0">*      to validate the value of this property.</span>
+ <span class="s0">*/</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">ruleSeverities </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">([</span>
+    <span class="s4">[</span><span class="s7">0</span><span class="s4">, </span><span class="s7">0</span><span class="s4">], [</span><span class="s3">&quot;off&quot;</span><span class="s4">, </span><span class="s7">0</span><span class="s4">],</span>
+    <span class="s4">[</span><span class="s7">1</span><span class="s4">, </span><span class="s7">1</span><span class="s4">], [</span><span class="s3">&quot;warn&quot;</span><span class="s4">, </span><span class="s7">1</span><span class="s4">],</span>
+    <span class="s4">[</span><span class="s7">2</span><span class="s4">, </span><span class="s7">2</span><span class="s4">], [</span><span class="s3">&quot;error&quot;</span><span class="s4">, </span><span class="s7">2</span><span class="s4">]</span>
+<span class="s4">]);</span>
+
+<span class="s6">const </span><span class="s2">globalVariablesValues </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">([</span>
+    <span class="s6">true</span><span class="s4">, </span><span class="s3">&quot;true&quot;</span><span class="s4">, </span><span class="s3">&quot;writable&quot;</span><span class="s4">, </span><span class="s3">&quot;writeable&quot;</span><span class="s4">,</span>
+    <span class="s6">false</span><span class="s4">, </span><span class="s3">&quot;false&quot;</span><span class="s4">, </span><span class="s3">&quot;readonly&quot;</span><span class="s4">, </span><span class="s3">&quot;readable&quot;</span><span class="s4">, </span><span class="s6">null</span><span class="s4">,</span>
+    <span class="s3">&quot;off&quot;</span>
+<span class="s4">]);</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a value is a non-null object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the value is a non-null object.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isNonNullObject</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+    <span class="s6">return typeof </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;object&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">value </span><span class="s4">!== </span><span class="s6">null</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a value is a non-null non-array object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the value is a non-null non-array object.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isNonArrayObject</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">isNonNullObject</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) &amp;&amp; !</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">value</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a value is undefined.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the value is undefined.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isUndefined</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+    <span class="s6">return typeof </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot;</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Deeply merges two non-array objects.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} first The base object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} second The overrides object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Map&lt;string, Map&lt;string, Object&gt;&gt;} [mergeMap] Maps the combination of first and second arguments to a merged result.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} An object with properties from both first and second.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">deepMerge</span><span class="s4">(</span><span class="s2">first</span><span class="s4">, </span><span class="s2">second</span><span class="s4">, </span><span class="s2">mergeMap </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">()) {</span>
+
+    <span class="s6">let </span><span class="s2">secondMergeMap </span><span class="s4">= </span><span class="s2">mergeMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">first</span><span class="s4">);</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">secondMergeMap</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">result </span><span class="s4">= </span><span class="s2">secondMergeMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">second</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">result</span><span class="s4">) {</span>
+
+            <span class="s5">// If this combination of first and second arguments has been already visited, return the previously created result.</span>
+            <span class="s6">return </span><span class="s2">result</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+        <span class="s2">secondMergeMap </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">();</span>
+        <span class="s2">mergeMap</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">first</span><span class="s4">, </span><span class="s2">secondMergeMap</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s5">/* 
+     * First create a result object where properties from the second object 
+     * overwrite properties from the first. This sets up a baseline to use 
+     * later rather than needing to inspect and change every property 
+     * individually. 
+     */</span>
+    <span class="s6">const </span><span class="s2">result </span><span class="s4">= {</span>
+        <span class="s2">...first</span><span class="s4">,</span>
+        <span class="s2">...second</span>
+    <span class="s4">};</span>
+
+    <span class="s6">delete </span><span class="s2">result</span><span class="s4">.</span><span class="s2">__proto__</span><span class="s4">; </span><span class="s5">// eslint-disable-line no-proto -- don't merge own property &quot;__proto__&quot;</span>
+
+    <span class="s5">// Store the pending result for this combination of first and second arguments.</span>
+    <span class="s2">secondMergeMap</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">second</span><span class="s4">, </span><span class="s2">result</span><span class="s4">);</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">key of Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">second</span><span class="s4">)) {</span>
+
+        <span class="s5">// avoid hairy edge case</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">key </span><span class="s4">=== </span><span class="s3">&quot;__proto__&quot; </span><span class="s4">|| !</span><span class="s2">Object</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">propertyIsEnumerable</span><span class="s4">.</span><span class="s2">call</span><span class="s4">(</span><span class="s2">first</span><span class="s4">, </span><span class="s2">key</span><span class="s4">)) {</span>
+            <span class="s6">continue</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s2">firstValue </span><span class="s4">= </span><span class="s2">first</span><span class="s4">[</span><span class="s2">key</span><span class="s4">];</span>
+        <span class="s6">const </span><span class="s2">secondValue </span><span class="s4">= </span><span class="s2">second</span><span class="s4">[</span><span class="s2">key</span><span class="s4">];</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">isNonArrayObject</span><span class="s4">(</span><span class="s2">firstValue</span><span class="s4">) &amp;&amp; </span><span class="s2">isNonArrayObject</span><span class="s4">(</span><span class="s2">secondValue</span><span class="s4">)) {</span>
+            <span class="s2">result</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] = </span><span class="s2">deepMerge</span><span class="s4">(</span><span class="s2">firstValue</span><span class="s4">, </span><span class="s2">secondValue</span><span class="s4">, </span><span class="s2">mergeMap</span><span class="s4">);</span>
+        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">isUndefined</span><span class="s4">(</span><span class="s2">secondValue</span><span class="s4">)) {</span>
+            <span class="s2">result</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] = </span><span class="s2">firstValue</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">result</span><span class="s4">;</span>
+
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Normalizes the rule options config for a given rule by ensuring that</span>
+ <span class="s0">* it is an array and that the first item is 0, 1, or 2.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Array|string|number} ruleOptions The rule options config.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array} An array of rule options.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">normalizeRuleOptions</span><span class="s4">(</span><span class="s2">ruleOptions</span><span class="s4">) {</span>
+
+    <span class="s6">const </span><span class="s2">finalOptions </span><span class="s4">= </span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">ruleOptions</span><span class="s4">)</span>
+        <span class="s4">? </span><span class="s2">ruleOptions</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s7">0</span><span class="s4">)</span>
+        <span class="s4">: [</span><span class="s2">ruleOptions</span><span class="s4">];</span>
+
+    <span class="s2">finalOptions</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] = </span><span class="s2">ruleSeverities</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">finalOptions</span><span class="s4">[</span><span class="s7">0</span><span class="s4">]);</span>
+    <span class="s6">return </span><span class="s2">structuredClone</span><span class="s4">(</span><span class="s2">finalOptions</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Assertions</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The error type when a rule's options are configured with an invalid type.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">InvalidRuleOptionsError </span><span class="s6">extends </span><span class="s2">Error </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} ruleId Rule name being configured.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The invalid value.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s6">super</span><span class="s4">(</span><span class="s3">`Key &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">ruleId</span><span class="s4">}</span><span class="s3">&quot;: Expected severity of &quot;off&quot;, 0, &quot;warn&quot;, 1, &quot;error&quot;, or 2.`</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageTemplate </span><span class="s4">= </span><span class="s3">&quot;invalid-rule-options&quot;</span><span class="s4">;</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageData </span><span class="s4">= { </span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value </span><span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Validates that a value is a valid rule options entry.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} ruleId Rule name being configured.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{InvalidRuleOptionsError} If the value isn't a valid rule options.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">assertIsRuleOptions</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;string&quot; </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;number&quot; </span><span class="s4">&amp;&amp; !</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+        <span class="s6">throw new </span><span class="s2">InvalidRuleOptionsError</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The error type when a rule's severity is invalid.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">InvalidRuleSeverityError </span><span class="s6">extends </span><span class="s2">Error </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} ruleId Rule name being configured.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The invalid value.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s6">super</span><span class="s4">(</span><span class="s3">`Key &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">ruleId</span><span class="s4">}</span><span class="s3">&quot;: Expected severity of &quot;off&quot;, 0, &quot;warn&quot;, 1, &quot;error&quot;, or 2.`</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageTemplate </span><span class="s4">= </span><span class="s3">&quot;invalid-rule-severity&quot;</span><span class="s4">;</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageData </span><span class="s4">= { </span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value </span><span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Validates that a value is valid rule severity.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} ruleId Rule name being configured.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{InvalidRuleSeverityError} If the value isn't a valid rule severity.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">assertIsRuleSeverity</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">severity </span><span class="s4">= </span><span class="s2">ruleSeverities</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">value</span><span class="s4">);</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">severity </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot;</span><span class="s4">) {</span>
+        <span class="s6">throw new </span><span class="s2">InvalidRuleSeverityError</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">value</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Validates that a given string is the form pluginName/objectName.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} value The string to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{TypeError} If the string isn't in the correct format.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">assertIsPluginMemberName</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s8">/[@a-z0-9-_$]+(?:\/(?:[a-z0-9-_$]+))+$/iu</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+        <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`Expected string in the form &quot;pluginName/objectName&quot; but found &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">value</span><span class="s4">}</span><span class="s3">&quot;.`</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Validates that a value is an object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} value The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{TypeError} If the value isn't an object.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">assertIsObject</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonNullObject</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+        <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Expected an object.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The error type when there's an eslintrc-style options in a flat config.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">IncompatibleKeyError </span><span class="s6">extends </span><span class="s2">Error </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} key The invalid key.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">key</span><span class="s4">) {</span>
+        <span class="s6">super</span><span class="s4">(</span><span class="s3">&quot;This appears to be in eslintrc format rather than flat config format.&quot;</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageTemplate </span><span class="s4">= </span><span class="s3">&quot;eslintrc-incompat&quot;</span><span class="s4">;</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageData </span><span class="s4">= { </span><span class="s2">key </span><span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The error type when there's an eslintrc-style plugins array found.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">IncompatiblePluginsError </span><span class="s6">extends </span><span class="s2">Error </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates a new instance.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Array&lt;string&gt;} plugins The plugins array.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">plugins</span><span class="s4">) {</span>
+        <span class="s6">super</span><span class="s4">(</span><span class="s3">&quot;This appears to be in eslintrc format (array of strings) rather than flat config format (object).&quot;</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageTemplate </span><span class="s4">= </span><span class="s3">&quot;eslintrc-plugins&quot;</span><span class="s4">;</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">messageData </span><span class="s4">= { </span><span class="s2">plugins </span><span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Low-Level Schemas</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">booleanSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">: </span><span class="s3">&quot;replace&quot;</span><span class="s4">,</span>
+    <span class="s2">validate</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span>
+<span class="s4">};</span>
+
+<span class="s6">const </span><span class="s2">ALLOWED_SEVERITIES </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">([</span><span class="s3">&quot;error&quot;</span><span class="s4">, </span><span class="s3">&quot;warn&quot;</span><span class="s4">, </span><span class="s3">&quot;off&quot;</span><span class="s4">, </span><span class="s7">2</span><span class="s4">, </span><span class="s7">1</span><span class="s4">, </span><span class="s7">0</span><span class="s4">]);</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">disableDirectiveSeveritySchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">(</span><span class="s2">first</span><span class="s4">, </span><span class="s2">second</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">value </span><span class="s4">= </span><span class="s2">second </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">? </span><span class="s2">first </span><span class="s4">: </span><span class="s2">second</span><span class="s4">;</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">value </span><span class="s4">? </span><span class="s3">&quot;warn&quot; </span><span class="s4">: </span><span class="s3">&quot;off&quot;</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s2">normalizeSeverityToNumber</span><span class="s4">(</span><span class="s2">value</span><span class="s4">);</span>
+    <span class="s4">},</span>
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(!(</span><span class="s2">ALLOWED_SEVERITIES</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) || </span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Expected one of: </span><span class="s6">\&quot;</span><span class="s3">error</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">warn</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">off</span><span class="s6">\&quot;</span><span class="s3">, 0, 1, 2, or a boolean.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">deepObjectAssignSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">(</span><span class="s2">first </span><span class="s4">= {}, </span><span class="s2">second </span><span class="s4">= {}) {</span>
+        <span class="s6">return </span><span class="s2">deepMerge</span><span class="s4">(</span><span class="s2">first</span><span class="s4">, </span><span class="s2">second</span><span class="s4">);</span>
+    <span class="s4">},</span>
+    <span class="s2">validate</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span>
+<span class="s4">};</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// High-Level Schemas</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">globalsSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">: </span><span class="s3">&quot;assign&quot;</span><span class="s4">,</span>
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+
+        <span class="s2">assertIsObject</span><span class="s4">(</span><span class="s2">value</span><span class="s4">);</span>
+
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">key of Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+
+            <span class="s5">// avoid hairy edge case</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">key </span><span class="s4">=== </span><span class="s3">&quot;__proto__&quot;</span><span class="s4">) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">key </span><span class="s4">!== </span><span class="s2">key</span><span class="s4">.</span><span class="s2">trim</span><span class="s4">()) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`Global &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">key</span><span class="s4">}</span><span class="s3">&quot; has leading or trailing whitespace.`</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">globalVariablesValues</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">value</span><span class="s4">[</span><span class="s2">key</span><span class="s4">])) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`Key &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">key</span><span class="s4">}</span><span class="s3">&quot;: Expected &quot;readonly&quot;, &quot;writable&quot;, or &quot;off&quot;.`</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">parserSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">: </span><span class="s3">&quot;replace&quot;</span><span class="s4">,</span>
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">value </span><span class="s4">|| </span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;object&quot; </span><span class="s4">||</span>
+            <span class="s4">(</span><span class="s6">typeof </span><span class="s2">value</span><span class="s4">.</span><span class="s2">parse </span><span class="s4">!== </span><span class="s3">&quot;function&quot; </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">value</span><span class="s4">.</span><span class="s2">parseForESLint </span><span class="s4">!== </span><span class="s3">&quot;function&quot;</span><span class="s4">)</span>
+        <span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Expected object with parse() or parseForESLint() method.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">pluginsSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">(</span><span class="s2">first </span><span class="s4">= {}, </span><span class="s2">second </span><span class="s4">= {}) {</span>
+        <span class="s6">const </span><span class="s2">keys </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">([</span><span class="s2">...Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">first</span><span class="s4">), </span><span class="s2">...Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">second</span><span class="s4">)]);</span>
+        <span class="s6">const </span><span class="s2">result </span><span class="s4">= {};</span>
+
+        <span class="s5">// manually validate that plugins are not redefined</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">key of keys</span><span class="s4">) {</span>
+
+            <span class="s5">// avoid hairy edge case</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">key </span><span class="s4">=== </span><span class="s3">&quot;__proto__&quot;</span><span class="s4">) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">key </span><span class="s6">in </span><span class="s2">first </span><span class="s4">&amp;&amp; </span><span class="s2">key </span><span class="s6">in </span><span class="s2">second </span><span class="s4">&amp;&amp; </span><span class="s2">first</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] !== </span><span class="s2">second</span><span class="s4">[</span><span class="s2">key</span><span class="s4">]) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`Cannot redefine plugin &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">key</span><span class="s4">}</span><span class="s3">&quot;.`</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s2">result</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] = </span><span class="s2">second</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] || </span><span class="s2">first</span><span class="s4">[</span><span class="s2">key</span><span class="s4">];</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s2">result</span><span class="s4">;</span>
+    <span class="s4">},</span>
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+
+        <span class="s5">// first check the value to be sure it's an object</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">value </span><span class="s4">=== </span><span class="s6">null </span><span class="s4">|| </span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;object&quot;</span><span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Expected an object.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// make sure it's not an array, which would mean eslintrc-style is used</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">IncompatiblePluginsError</span><span class="s4">(</span><span class="s2">value</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// second check the keys to make sure they are objects</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">key of Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+
+            <span class="s5">// avoid hairy edge case</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">key </span><span class="s4">=== </span><span class="s3">&quot;__proto__&quot;</span><span class="s4">) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">value</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] === </span><span class="s6">null </span><span class="s4">|| </span><span class="s6">typeof </span><span class="s2">value</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] !== </span><span class="s3">&quot;object&quot;</span><span class="s4">) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`Key &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">key</span><span class="s4">}</span><span class="s3">&quot;: Expected an object.`</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">processorSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">: </span><span class="s3">&quot;replace&quot;</span><span class="s4">,</span>
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">) {</span>
+            <span class="s2">assertIsPluginMemberName</span><span class="s4">(</span><span class="s2">value</span><span class="s4">);</span>
+        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">value </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;object&quot;</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">value</span><span class="s4">.</span><span class="s2">preprocess </span><span class="s4">!== </span><span class="s3">&quot;function&quot; </span><span class="s4">|| </span><span class="s6">typeof </span><span class="s2">value</span><span class="s4">.</span><span class="s2">postprocess </span><span class="s4">!== </span><span class="s3">&quot;function&quot;</span><span class="s4">) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Object must have a preprocess() and a postprocess() method.&quot;</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+            <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Expected an object or a string.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">rulesSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">(</span><span class="s2">first </span><span class="s4">= {}, </span><span class="s2">second </span><span class="s4">= {}) {</span>
+
+        <span class="s6">const </span><span class="s2">result </span><span class="s4">= {</span>
+            <span class="s2">...first</span><span class="s4">,</span>
+            <span class="s2">...second</span>
+        <span class="s4">};</span>
+
+
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">ruleId of Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">result</span><span class="s4">)) {</span>
+
+            <span class="s6">try </span><span class="s4">{</span>
+
+                <span class="s5">// avoid hairy edge case</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">ruleId </span><span class="s4">=== </span><span class="s3">&quot;__proto__&quot;</span><span class="s4">) {</span>
+
+                    <span class="s5">/* eslint-disable-next-line no-proto -- Though deprecated, may still be present */</span>
+                    <span class="s6">delete </span><span class="s2">result</span><span class="s4">.</span><span class="s2">__proto__</span><span class="s4">;</span>
+                    <span class="s6">continue</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s2">result</span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">] = </span><span class="s2">normalizeRuleOptions</span><span class="s4">(</span><span class="s2">result</span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">]);</span>
+
+                <span class="s5">/* 
+                 * If either rule config is missing, then the correct 
+                 * config is already present and we just need to normalize 
+                 * the severity. 
+                 */</span>
+                <span class="s6">if </span><span class="s4">(!(</span><span class="s2">ruleId </span><span class="s6">in </span><span class="s2">first</span><span class="s4">) || !(</span><span class="s2">ruleId </span><span class="s6">in </span><span class="s2">second</span><span class="s4">)) {</span>
+                    <span class="s6">continue</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">const </span><span class="s2">firstRuleOptions </span><span class="s4">= </span><span class="s2">normalizeRuleOptions</span><span class="s4">(</span><span class="s2">first</span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">]);</span>
+                <span class="s6">const </span><span class="s2">secondRuleOptions </span><span class="s4">= </span><span class="s2">normalizeRuleOptions</span><span class="s4">(</span><span class="s2">second</span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">]);</span>
+
+                <span class="s5">/* 
+                 * If the second rule config only has a severity (length of 1), 
+                 * then use that severity and keep the rest of the options from 
+                 * the first rule config. 
+                 */</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">secondRuleOptions</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">1</span><span class="s4">) {</span>
+                    <span class="s2">result</span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">] = [</span><span class="s2">secondRuleOptions</span><span class="s4">[</span><span class="s7">0</span><span class="s4">], </span><span class="s2">...firstRuleOptions</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s7">1</span><span class="s4">)];</span>
+                    <span class="s6">continue</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s5">/* 
+                 * In any other situation, then the second rule config takes 
+                 * precedence. That means the value at `result[ruleId]` is 
+                 * already correct and no further work is necessary. 
+                 */</span>
+            <span class="s4">} </span><span class="s6">catch </span><span class="s4">(</span><span class="s2">ex</span><span class="s4">) {</span>
+                <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">`Key &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">ruleId</span><span class="s4">}</span><span class="s3">&quot;: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">ex</span><span class="s4">.</span><span class="s2">message</span><span class="s4">}</span><span class="s3">`</span><span class="s4">, { </span><span class="s2">cause</span><span class="s4">: </span><span class="s2">ex </span><span class="s4">});</span>
+            <span class="s4">}</span>
+
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s2">result</span><span class="s4">;</span>
+
+
+    <span class="s4">},</span>
+
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s2">assertIsObject</span><span class="s4">(</span><span class="s2">value</span><span class="s4">);</span>
+
+        <span class="s5">/* 
+         * We are not checking the rule schema here because there is no 
+         * guarantee that the rule definition is present at this point. Instead 
+         * we wait and check the rule schema during the finalization step 
+         * of calculating a config. 
+         */</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">ruleId of Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+
+            <span class="s5">// avoid hairy edge case</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">ruleId </span><span class="s4">=== </span><span class="s3">&quot;__proto__&quot;</span><span class="s4">) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">ruleOptions </span><span class="s4">= </span><span class="s2">value</span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">];</span>
+
+            <span class="s2">assertIsRuleOptions</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">ruleOptions</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">ruleOptions</span><span class="s4">)) {</span>
+                <span class="s2">assertIsRuleSeverity</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">ruleOptions</span><span class="s4">[</span><span class="s7">0</span><span class="s4">]);</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s2">assertIsRuleSeverity</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">ruleOptions</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">ecmaVersionSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">: </span><span class="s3">&quot;replace&quot;</span><span class="s4">,</span>
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;number&quot; </span><span class="s4">|| </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;latest&quot;</span><span class="s4">) {</span>
+            <span class="s6">return</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Expected a number or </span><span class="s6">\&quot;</span><span class="s3">latest</span><span class="s6">\&quot;</span><span class="s3">.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ObjectPropertySchema} */</span>
+<span class="s6">const </span><span class="s2">sourceTypeSchema </span><span class="s4">= {</span>
+    <span class="s2">merge</span><span class="s4">: </span><span class="s3">&quot;replace&quot;</span><span class="s4">,</span>
+    <span class="s2">validate</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;string&quot; </span><span class="s4">|| !</span><span class="s8">/^(?:script|module|commonjs)$/u</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">value</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Expected </span><span class="s6">\&quot;</span><span class="s3">script</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">module</span><span class="s6">\&quot;</span><span class="s3">, or </span><span class="s6">\&quot;</span><span class="s3">commonjs</span><span class="s6">\&quot;</span><span class="s3">.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates a schema that always throws an error. Useful for warning</span>
+ <span class="s0">* about eslintrc-style keys.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} key The eslintrc key to create a schema for.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ObjectPropertySchema} The schema.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createEslintrcErrorSchema</span><span class="s4">(</span><span class="s2">key</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">merge</span><span class="s4">: </span><span class="s3">&quot;replace&quot;</span><span class="s4">,</span>
+        <span class="s2">validate</span><span class="s4">() {</span>
+            <span class="s6">throw new </span><span class="s2">IncompatibleKeyError</span><span class="s4">(</span><span class="s2">key</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s6">const </span><span class="s2">eslintrcKeys </span><span class="s4">= [</span>
+    <span class="s3">&quot;env&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;extends&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;globals&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;ignorePatterns&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;noInlineConfig&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;overrides&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;parser&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;parserOptions&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;reportUnusedDisableDirectives&quot;</span><span class="s4">,</span>
+    <span class="s3">&quot;root&quot;</span>
+<span class="s4">];</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Full schema</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">flatConfigSchema </span><span class="s4">= {</span>
+
+    <span class="s5">// eslintrc-style keys that should always error</span>
+    <span class="s2">...Object</span><span class="s4">.</span><span class="s2">fromEntries</span><span class="s4">(</span><span class="s2">eslintrcKeys</span><span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">key </span><span class="s4">=&gt; [</span><span class="s2">key</span><span class="s4">, </span><span class="s2">createEslintrcErrorSchema</span><span class="s4">(</span><span class="s2">key</span><span class="s4">)])),</span>
+
+    <span class="s5">// flat config keys</span>
+    <span class="s2">settings</span><span class="s4">: </span><span class="s2">deepObjectAssignSchema</span><span class="s4">,</span>
+    <span class="s2">linterOptions</span><span class="s4">: {</span>
+        <span class="s2">schema</span><span class="s4">: {</span>
+            <span class="s2">noInlineConfig</span><span class="s4">: </span><span class="s2">booleanSchema</span><span class="s4">,</span>
+            <span class="s2">reportUnusedDisableDirectives</span><span class="s4">: </span><span class="s2">disableDirectiveSeveritySchema</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+    <span class="s2">languageOptions</span><span class="s4">: {</span>
+        <span class="s2">schema</span><span class="s4">: {</span>
+            <span class="s2">ecmaVersion</span><span class="s4">: </span><span class="s2">ecmaVersionSchema</span><span class="s4">,</span>
+            <span class="s2">sourceType</span><span class="s4">: </span><span class="s2">sourceTypeSchema</span><span class="s4">,</span>
+            <span class="s2">globals</span><span class="s4">: </span><span class="s2">globalsSchema</span><span class="s4">,</span>
+            <span class="s2">parser</span><span class="s4">: </span><span class="s2">parserSchema</span><span class="s4">,</span>
+            <span class="s2">parserOptions</span><span class="s4">: </span><span class="s2">deepObjectAssignSchema</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+    <span class="s2">processor</span><span class="s4">: </span><span class="s2">processorSchema</span><span class="s4">,</span>
+    <span class="s2">plugins</span><span class="s4">: </span><span class="s2">pluginsSchema</span><span class="s4">,</span>
+    <span class="s2">rules</span><span class="s4">: </span><span class="s2">rulesSchema</span>
+<span class="s4">};</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Exports</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">flatConfigSchema</span><span class="s4">,</span>
+    <span class="s2">assertIsRuleSeverity</span><span class="s4">,</span>
+    <span class="s2">assertIsRuleOptions</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

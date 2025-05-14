@@ -1,0 +1,168 @@
+<html>
+<head>
+<title>LibManifestPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+LibManifestPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">EntryDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/EntryDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">someInIterable </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/IterableHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareModulesById </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">dirname</span><span class="s3">, </span><span class="s1">mkdirp </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/fs&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;).ModuleId} ModuleId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;).IntermediateFileSystem} IntermediateFileSystem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).BuildMeta} BuildMeta */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ManifestModuleData</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string | number} id</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{BuildMeta} buildMeta</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean | string[] | undefined} exports</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} LibManifestPluginOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} context Context of requests in the manifest file (defaults to the webpack context).</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} entryOnly If true, only entry points will be exposed (default: true).</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean=} format If true, manifest json file (output) will be formatted.</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} name Name of the exposed dll function (external name, use value of 'output.library').</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} path Absolute path to the manifest json file (output).</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} type Type of the dll bundle (external type, use value of 'output.libraryTarget').</span>
+ <span class="s5">*/</span>
+
+<span class="s4">class </span><span class="s1">LibManifestPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibManifestPluginOptions} options the options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+			<span class="s3">{</span>
+				<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;LibManifestPlugin&quot;</span><span class="s3">,</span>
+				<span class="s1">stage</span><span class="s3">: </span><span class="s7">110</span>
+			<span class="s3">},</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+				<span class="s0">// store used paths to detect issue and output an error. #18200</span>
+				<span class="s4">const </span><span class="s1">usedPaths </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+					<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">),</span>
+					<span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">canBeInitial</span><span class="s3">()) {</span>
+							<span class="s1">callback</span><span class="s3">();</span>
+							<span class="s4">return</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">targetPath </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">path</span><span class="s3">, {</span>
+							<span class="s1">chunk</span>
+						<span class="s3">});</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">usedPaths</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">targetPath</span><span class="s3">)) {</span>
+							<span class="s1">callback</span><span class="s3">(</span><span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;each chunk must have a unique path&quot;</span><span class="s3">));</span>
+							<span class="s4">return</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s1">usedPaths</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">targetPath</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">name </span><span class="s3">=</span>
+							<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">name </span><span class="s3">&amp;&amp;</span>
+							<span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">name</span><span class="s3">, {</span>
+								<span class="s1">chunk</span><span class="s3">,</span>
+								<span class="s1">contentHashType</span><span class="s3">: </span><span class="s2">&quot;javascript&quot;</span>
+							<span class="s3">});</span>
+						<span class="s4">const </span><span class="s1">content </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of chunkGraph</span><span class="s3">.</span><span class="s1">getOrderedChunkModulesIterable</span><span class="s3">(</span>
+							<span class="s1">chunk</span><span class="s3">,</span>
+							<span class="s1">compareModulesById</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">)</span>
+						<span class="s3">)) {</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">entryOnly </span><span class="s3">&amp;&amp;</span>
+								<span class="s3">!</span><span class="s1">someInIterable</span><span class="s3">(</span>
+									<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getIncomingConnections</span><span class="s3">(</span><span class="s1">module</span><span class="s3">),</span>
+									<span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">dependency </span><span class="s4">instanceof </span><span class="s1">EntryDependency</span>
+								<span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">continue</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">ident </span><span class="s3">= </span><span class="s1">module</span><span class="s3">.</span><span class="s1">libIdent</span><span class="s3">({</span>
+								<span class="s1">context</span><span class="s3">:</span>
+									<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">context </span><span class="s3">||</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">context</span><span class="s3">),</span>
+								<span class="s1">associatedObjectForCache</span><span class="s3">: </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">root</span>
+							<span class="s3">});</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">ident</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">providedExports </span><span class="s3">= </span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getProvidedExports</span><span class="s3">();</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ManifestModuleData} */</span>
+								<span class="s4">const </span><span class="s1">data </span><span class="s3">= {</span>
+									<span class="s1">id</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)),</span>
+									<span class="s1">buildMeta</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildMeta} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildMeta</span><span class="s3">),</span>
+									<span class="s1">exports</span><span class="s3">: </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">providedExports</span><span class="s3">)</span>
+										<span class="s3">? </span><span class="s1">providedExports</span>
+										<span class="s3">: </span><span class="s1">undefined</span>
+								<span class="s3">};</span>
+								<span class="s1">content</span><span class="s3">[</span><span class="s1">ident</span><span class="s3">] = </span><span class="s1">data</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+						<span class="s4">const </span><span class="s1">manifest </span><span class="s3">= {</span>
+							<span class="s1">name</span><span class="s3">,</span>
+							<span class="s1">type</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">type</span><span class="s3">,</span>
+							<span class="s1">content</span>
+						<span class="s3">};</span>
+						<span class="s0">// Apply formatting to content if format flag is true;</span>
+						<span class="s4">const </span><span class="s1">manifestContent </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">format</span>
+							<span class="s3">? </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">manifest</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s7">2</span><span class="s3">)</span>
+							<span class="s3">: </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">manifest</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">buffer </span><span class="s3">= </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">manifestContent</span><span class="s3">, </span><span class="s2">&quot;utf8&quot;</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">intermediateFileSystem </span><span class="s3">=</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{IntermediateFileSystem} */ </span><span class="s3">(</span>
+								<span class="s1">compiler</span><span class="s3">.</span><span class="s1">intermediateFileSystem</span>
+							<span class="s3">);</span>
+						<span class="s1">mkdirp</span><span class="s3">(</span>
+							<span class="s1">intermediateFileSystem</span><span class="s3">,</span>
+							<span class="s1">dirname</span><span class="s3">(</span><span class="s1">intermediateFileSystem</span><span class="s3">, </span><span class="s1">targetPath</span><span class="s3">),</span>
+							<span class="s1">err </span><span class="s3">=&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s1">intermediateFileSystem</span><span class="s3">.</span><span class="s1">writeFile</span><span class="s3">(</span><span class="s1">targetPath</span><span class="s3">, </span><span class="s1">buffer</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">);</span>
+					<span class="s3">},</span>
+					<span class="s1">callback</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">LibManifestPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

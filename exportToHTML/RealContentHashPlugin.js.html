@@ -1,0 +1,493 @@
+<html>
+<head>
+<title>RealContentHashPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+RealContentHashPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">SyncBailHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">RawSource</span><span class="s3">, </span><span class="s1">CachedSource</span><span class="s3">, </span><span class="s1">CompatSource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;webpack-sources&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Compilation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Compilation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WebpackError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../WebpackError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareSelect</span><span class="s3">, </span><span class="s1">compareStrings </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createHash </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/createHash&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Cache&quot;).Etag} Etag */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compilation&quot;).AssetInfo} AssetInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{typeof import(&quot;../util/Hash&quot;)} Hash */</span>
+
+<span class="s4">const </span><span class="s1">EMPTY_SET </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T | T[]} itemOrItems item or items</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;T&gt;} list list</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">addToList </span><span class="s3">= (</span><span class="s1">itemOrItems</span><span class="s3">, </span><span class="s1">list</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">itemOrItems</span><span class="s3">)) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of itemOrItems</span><span class="s3">) {</span>
+			<span class="s1">list</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">itemOrItems</span><span class="s3">) {</span>
+		<span class="s1">list</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">itemOrItems</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T[]} input list</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(item: T) =&gt; Buffer} fn map function</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Buffer[]} buffers without duplicates</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">mapAndDeduplicateBuffers </span><span class="s3">= (</span><span class="s1">input</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">) =&gt; {</span>
+	<span class="s0">// Buffer.equals compares size first so this should be efficient enough</span>
+	<span class="s0">// If it becomes a performance problem we can use a map and group by size</span>
+	<span class="s0">// instead of looping over all assets.</span>
+	<span class="s4">const </span><span class="s1">result </span><span class="s3">= [];</span>
+	<span class="s1">outer</span><span class="s3">: </span><span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">value of input</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">buf </span><span class="s3">= </span><span class="s1">fn</span><span class="s3">(</span><span class="s1">value</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">other of result</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">buf</span><span class="s3">.</span><span class="s1">equals</span><span class="s3">(</span><span class="s1">other</span><span class="s3">)) </span><span class="s4">continue </span><span class="s1">outer</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s1">result</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">buf</span><span class="s3">);</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Escapes regular expression metacharacters</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} str String to quote</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} Escaped string</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">quoteMeta </span><span class="s3">= </span><span class="s1">str </span><span class="s3">=&gt; </span><span class="s1">str</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s7">/[-[\]\\/{}()*+?.^$|]/g</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\\</span><span class="s2">$&amp;&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">cachedSourceMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Source} source source</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CachedSource} cached source</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">toCachedSource </span><span class="s3">= </span><span class="s1">source </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">source </span><span class="s4">instanceof </span><span class="s1">CachedSource</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">source</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">const </span><span class="s1">entry </span><span class="s3">= </span><span class="s1">cachedSourceMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">entry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">entry</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">newSource </span><span class="s3">= </span><span class="s4">new </span><span class="s1">CachedSource</span><span class="s3">(</span><span class="s1">CompatSource</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">source</span><span class="s3">));</span>
+	<span class="s1">cachedSourceMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">source</span><span class="s3">, </span><span class="s1">newSource</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">newSource</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Set&lt;string&gt;} OwnHashes */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Set&lt;string&gt;} ReferencedHashes */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Set&lt;string&gt;} Hashes */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} AssetInfoForRealContentHash</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} name</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{AssetInfo} info</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Source} source</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RawSource | undefined} newSource</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RawSource | undefined} newSourceWithoutOwn</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} content</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{OwnHashes | undefined} ownHashes</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Promise&lt;void&gt; | undefined} contentComputePromise</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Promise&lt;void&gt; | undefined} contentComputeWithoutOwnPromise</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ReferencedHashes | undefined} referencedHashes</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Hashes} hashes</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} CompilationHooks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SyncBailHook&lt;[Buffer[], string], string | void&gt;} updateHash</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Compilation, CompilationHooks&gt;} */</span>
+<span class="s4">const </span><span class="s1">compilationHooksMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} RealContentHashPluginOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string | Hash} hashFunction the hash function to use</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} hashDigest the hash digest to use</span>
+ <span class="s5">*/</span>
+
+<span class="s4">class </span><span class="s1">RealContentHashPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CompilationHooks} the attached hooks</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!(</span><span class="s1">compilation </span><span class="s4">instanceof </span><span class="s1">Compilation</span><span class="s3">)) {</span>
+			<span class="s4">throw new </span><span class="s1">TypeError</span><span class="s3">(</span>
+				<span class="s2">&quot;The 'compilation' argument must be an instance of Compilation&quot;</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hooks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">hooks </span><span class="s3">= {</span>
+				<span class="s1">updateHash</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;content&quot;</span><span class="s3">, </span><span class="s2">&quot;oldHash&quot;</span><span class="s3">])</span>
+			<span class="s3">};</span>
+			<span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">hooks</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">hooks</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RealContentHashPluginOptions} options options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">({ </span><span class="s1">hashFunction</span><span class="s3">, </span><span class="s1">hashDigest </span><span class="s3">}) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_hashFunction </span><span class="s3">= </span><span class="s1">hashFunction</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_hashDigest </span><span class="s3">= </span><span class="s1">hashDigest</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;RealContentHashPlugin&quot;</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s4">const </span><span class="s1">cacheAnalyse </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getCache</span><span class="s3">(</span>
+				<span class="s2">&quot;RealContentHashPlugin|analyse&quot;</span>
+			<span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">cacheGenerate </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getCache</span><span class="s3">(</span>
+				<span class="s2">&quot;RealContentHashPlugin|generate&quot;</span>
+			<span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">RealContentHashPlugin</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">processAssets</span><span class="s3">.</span><span class="s1">tapPromise</span><span class="s3">(</span>
+				<span class="s3">{</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;RealContentHashPlugin&quot;</span><span class="s3">,</span>
+					<span class="s1">stage</span><span class="s3">: </span><span class="s1">Compilation</span><span class="s3">.</span><span class="s1">PROCESS_ASSETS_STAGE_OPTIMIZE_HASH</span>
+				<span class="s3">},</span>
+				<span class="s1">async </span><span class="s3">() =&gt; {</span>
+					<span class="s4">const </span><span class="s1">assets </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getAssets</span><span class="s3">();</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssetInfoForRealContentHash[]} */</span>
+					<span class="s4">const </span><span class="s1">assetsWithInfo </span><span class="s3">= [];</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, [AssetInfoForRealContentHash]&gt;} */</span>
+					<span class="s4">const </span><span class="s1">hashToAssets </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">{ </span><span class="s1">source</span><span class="s3">, </span><span class="s1">info</span><span class="s3">, </span><span class="s1">name </span><span class="s3">} </span><span class="s1">of assets</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">cachedSource </span><span class="s3">= </span><span class="s1">toCachedSource</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">content </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">cachedSource</span><span class="s3">.</span><span class="s1">source</span><span class="s3">());</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Hashes} */</span>
+						<span class="s4">const </span><span class="s1">hashes </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+						<span class="s1">addToList</span><span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">contenthash</span><span class="s3">, </span><span class="s1">hashes</span><span class="s3">);</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssetInfoForRealContentHash} */</span>
+						<span class="s4">const </span><span class="s1">data </span><span class="s3">= {</span>
+							<span class="s1">name</span><span class="s3">,</span>
+							<span class="s1">info</span><span class="s3">,</span>
+							<span class="s1">source</span><span class="s3">: </span><span class="s1">cachedSource</span><span class="s3">,</span>
+							<span class="s1">newSource</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+							<span class="s1">newSourceWithoutOwn</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+							<span class="s1">content</span><span class="s3">,</span>
+							<span class="s1">ownHashes</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+							<span class="s1">contentComputePromise</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+							<span class="s1">contentComputeWithoutOwnPromise</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+							<span class="s1">referencedHashes</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+							<span class="s1">hashes</span>
+						<span class="s3">};</span>
+						<span class="s1">assetsWithInfo</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">data</span><span class="s3">);</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hash of hashes</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">list </span><span class="s3">= </span><span class="s1">hashToAssets</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">list </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s1">hashToAssets</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">, [</span><span class="s1">data</span><span class="s3">]);</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s1">list</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">data</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">hashToAssets</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s8">0</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">hashRegExp </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RegExp</span><span class="s3">(</span>
+						<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">hashToAssets</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(), </span><span class="s1">quoteMeta</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;|&quot;</span><span class="s3">),</span>
+						<span class="s2">&quot;g&quot;</span>
+					<span class="s3">);</span>
+					<span class="s4">await </span><span class="s1">Promise</span><span class="s3">.</span><span class="s1">all</span><span class="s3">(</span>
+						<span class="s1">assetsWithInfo</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">async asset </span><span class="s3">=&gt; {</span>
+							<span class="s4">const </span><span class="s3">{ </span><span class="s1">name</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, </span><span class="s1">content</span><span class="s3">, </span><span class="s1">hashes </span><span class="s3">} = </span><span class="s1">asset</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">isBuffer</span><span class="s3">(</span><span class="s1">content</span><span class="s3">)) {</span>
+								<span class="s1">asset</span><span class="s3">.</span><span class="s1">referencedHashes </span><span class="s3">= </span><span class="s1">EMPTY_SET</span><span class="s3">;</span>
+								<span class="s1">asset</span><span class="s3">.</span><span class="s1">ownHashes </span><span class="s3">= </span><span class="s1">EMPTY_SET</span><span class="s3">;</span>
+								<span class="s4">return</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">etag </span><span class="s3">= </span><span class="s1">cacheAnalyse</span><span class="s3">.</span><span class="s1">mergeEtags</span><span class="s3">(</span>
+								<span class="s1">cacheAnalyse</span><span class="s3">.</span><span class="s1">getLazyHashedEtag</span><span class="s3">(</span><span class="s1">source</span><span class="s3">),</span>
+								<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">hashes</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;|&quot;</span><span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s3">[</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">referencedHashes</span><span class="s3">, </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">ownHashes</span><span class="s3">] =</span>
+								<span class="s4">await </span><span class="s1">cacheAnalyse</span><span class="s3">.</span><span class="s1">providePromise</span><span class="s3">(</span><span class="s1">name</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, () =&gt; {</span>
+									<span class="s4">const </span><span class="s1">referencedHashes </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+									<span class="s4">const </span><span class="s1">ownHashes </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+									<span class="s4">const </span><span class="s1">inContent </span><span class="s3">= </span><span class="s1">content</span><span class="s3">.</span><span class="s1">match</span><span class="s3">(</span><span class="s1">hashRegExp</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">inContent</span><span class="s3">) {</span>
+										<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hash of inContent</span><span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">hashes</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)) {</span>
+												<span class="s1">ownHashes</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+												<span class="s4">continue</span><span class="s3">;</span>
+											<span class="s3">}</span>
+											<span class="s1">referencedHashes</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+										<span class="s3">}</span>
+									<span class="s3">}</span>
+									<span class="s4">return </span><span class="s3">[</span><span class="s1">referencedHashes</span><span class="s3">, </span><span class="s1">ownHashes</span><span class="s3">];</span>
+								<span class="s3">});</span>
+						<span class="s3">})</span>
+					<span class="s3">);</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} hash the hash</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{undefined | ReferencedHashes} the referenced hashes</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">getDependencies </span><span class="s3">= </span><span class="s1">hash </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">assets </span><span class="s3">= </span><span class="s1">hashToAssets</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">assets</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">referencingAssets </span><span class="s3">= </span><span class="s1">assetsWithInfo</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">asset </span><span class="s3">=&gt;</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ReferencedHashes} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">referencedHashes</span><span class="s3">).</span><span class="s1">has</span><span class="s3">(</span>
+									<span class="s1">hash</span>
+								<span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">err </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WebpackError</span><span class="s3">(</span><span class="s2">`RealContentHashPlugin 
+Some kind of unexpected caching problem occurred. 
+An asset was cached with a reference to another asset (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">hash</span><span class="s3">}</span><span class="s2">) that's not in the compilation anymore. 
+Either the asset was incorrectly cached, or the referenced asset should also be restored from cache. 
+Referenced by: 
+</span><span class="s1">$</span><span class="s3">{</span><span class="s1">referencingAssets</span>
+	<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">a </span><span class="s3">=&gt; {</span>
+		<span class="s4">const </span><span class="s1">match </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RegExp</span><span class="s3">(</span><span class="s2">`.{0,20}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">quoteMeta</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)}</span><span class="s2">.{0,20}`</span><span class="s3">).</span><span class="s1">exec</span><span class="s3">(</span>
+			<span class="s1">a</span><span class="s3">.</span><span class="s1">content</span>
+		<span class="s3">);</span>
+		<span class="s4">return </span><span class="s2">` - </span><span class="s1">$</span><span class="s3">{</span><span class="s1">a</span><span class="s3">.</span><span class="s1">name</span><span class="s3">}</span><span class="s2">: ...</span><span class="s1">$</span><span class="s3">{</span><span class="s1">match </span><span class="s3">? </span><span class="s1">match</span><span class="s3">[</span><span class="s8">0</span><span class="s3">] : </span><span class="s2">&quot;???&quot;</span><span class="s3">}</span><span class="s2">...`</span><span class="s3">;</span>
+	<span class="s3">})</span>
+	<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">);</span>
+							<span class="s1">compilation</span><span class="s3">.</span><span class="s1">errors</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+							<span class="s4">return</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s4">const </span><span class="s1">hashes </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">{ </span><span class="s1">referencedHashes</span><span class="s3">, </span><span class="s1">ownHashes </span><span class="s3">} </span><span class="s1">of assets</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(!(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OwnHashes} */ </span><span class="s3">(</span><span class="s1">ownHashes</span><span class="s3">).</span><span class="s1">has</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">))) {</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hash of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OwnHashes} */ </span><span class="s3">(</span><span class="s1">ownHashes</span><span class="s3">)) {</span>
+									<span class="s1">hashes</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hash of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ReferencedHashes} */ </span><span class="s3">(</span>
+								<span class="s1">referencedHashes</span>
+							<span class="s3">)) {</span>
+								<span class="s1">hashes</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+						<span class="s4">return </span><span class="s1">hashes</span><span class="s3">;</span>
+					<span class="s3">};</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} hash the hash</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} the hash info</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">hashInfo </span><span class="s3">= </span><span class="s1">hash </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">assets </span><span class="s3">= </span><span class="s1">hashToAssets</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+						<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">hash</span><span class="s3">} </span><span class="s2">(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssetInfoForRealContentHash[]} */ </span><span class="s3">(</span><span class="s1">assets</span><span class="s3">),</span>
+							<span class="s1">a </span><span class="s3">=&gt; </span><span class="s1">a</span><span class="s3">.</span><span class="s1">name</span>
+						<span class="s3">)}</span><span class="s2">)`</span><span class="s3">;</span>
+					<span class="s3">};</span>
+					<span class="s4">const </span><span class="s1">hashesInOrder </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hash of hashToAssets</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">()) {</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} hash the hash</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;string&gt;} stack stack of hashes</span>
+						 <span class="s5">*/</span>
+						<span class="s4">const </span><span class="s1">add </span><span class="s3">= (</span><span class="s1">hash</span><span class="s3">, </span><span class="s1">stack</span><span class="s3">) =&gt; {</span>
+							<span class="s4">const </span><span class="s1">deps </span><span class="s3">= </span><span class="s1">getDependencies</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">deps</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s1">stack</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of deps</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">hashesInOrder</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">stack</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">)) {</span>
+									<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+										<span class="s2">`Circular hash dependency </span><span class="s1">$</span><span class="s3">{</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+											<span class="s1">stack</span><span class="s3">,</span>
+											<span class="s1">hashInfo</span>
+										<span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot; -&gt; &quot;</span><span class="s3">)} </span><span class="s2">-&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">hashInfo</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">)}</span><span class="s2">`</span>
+									<span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">add</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">stack</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s1">hashesInOrder</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+							<span class="s1">stack</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+						<span class="s3">};</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">hashesInOrder</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+						<span class="s1">add</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">, </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">());</span>
+					<span class="s3">}</span>
+					<span class="s4">const </span><span class="s1">hashToNewHash </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssetInfoForRealContentHash} asset asset info</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Etag} etag</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">getEtag </span><span class="s3">= </span><span class="s1">asset </span><span class="s3">=&gt;</span>
+						<span class="s1">cacheGenerate</span><span class="s3">.</span><span class="s1">mergeEtags</span><span class="s3">(</span>
+							<span class="s1">cacheGenerate</span><span class="s3">.</span><span class="s1">getLazyHashedEtag</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">source</span><span class="s3">),</span>
+							<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ReferencedHashes} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">referencedHashes</span><span class="s3">),</span>
+								<span class="s1">hash </span><span class="s3">=&gt; </span><span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)</span>
+							<span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;|&quot;</span><span class="s3">)</span>
+						<span class="s3">);</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssetInfoForRealContentHash} asset asset info</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;void&gt;}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">computeNewContent </span><span class="s3">= </span><span class="s1">asset </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">contentComputePromise</span><span class="s3">) </span><span class="s4">return </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">contentComputePromise</span><span class="s3">;</span>
+						<span class="s4">return </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">contentComputePromise </span><span class="s3">= (</span><span class="s1">async </span><span class="s3">() =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OwnHashes} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">ownHashes</span><span class="s3">).</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s8">0 </span><span class="s3">||</span>
+								<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ReferencedHashes} */</span>
+									<span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">referencedHashes</span><span class="s3">)</span>
+								<span class="s3">).</span><span class="s1">some</span><span class="s3">(</span><span class="s1">hash </span><span class="s3">=&gt; </span><span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">) !== </span><span class="s1">hash</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">identifier </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">name</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">etag </span><span class="s3">= </span><span class="s1">getEtag</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">);</span>
+								<span class="s1">asset</span><span class="s3">.</span><span class="s1">newSource </span><span class="s3">= </span><span class="s4">await </span><span class="s1">cacheGenerate</span><span class="s3">.</span><span class="s1">providePromise</span><span class="s3">(</span>
+									<span class="s1">identifier</span><span class="s3">,</span>
+									<span class="s1">etag</span><span class="s3">,</span>
+									<span class="s3">() =&gt; {</span>
+										<span class="s4">const </span><span class="s1">newContent </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">content</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s1">hashRegExp</span><span class="s3">, </span><span class="s1">hash </span><span class="s3">=&gt;</span>
+											<span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)</span>
+										<span class="s3">);</span>
+										<span class="s4">return new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">newContent</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">})());</span>
+					<span class="s3">};</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssetInfoForRealContentHash} asset asset info</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;void&gt;}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">computeNewContentWithoutOwn </span><span class="s3">= </span><span class="s1">asset </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">contentComputeWithoutOwnPromise</span><span class="s3">)</span>
+							<span class="s4">return </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">contentComputeWithoutOwnPromise</span><span class="s3">;</span>
+						<span class="s4">return </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">contentComputeWithoutOwnPromise </span><span class="s3">= (</span><span class="s1">async </span><span class="s3">() =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OwnHashes} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">ownHashes</span><span class="s3">).</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s8">0 </span><span class="s3">||</span>
+								<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ReferencedHashes} */</span>
+									<span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">referencedHashes</span><span class="s3">)</span>
+								<span class="s3">).</span><span class="s1">some</span><span class="s3">(</span><span class="s1">hash </span><span class="s3">=&gt; </span><span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">) !== </span><span class="s1">hash</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">identifier </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">name</span><span class="s3">}</span><span class="s2">|without-own`</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">etag </span><span class="s3">= </span><span class="s1">getEtag</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">);</span>
+								<span class="s1">asset</span><span class="s3">.</span><span class="s1">newSourceWithoutOwn </span><span class="s3">= </span><span class="s4">await </span><span class="s1">cacheGenerate</span><span class="s3">.</span><span class="s1">providePromise</span><span class="s3">(</span>
+									<span class="s1">identifier</span><span class="s3">,</span>
+									<span class="s1">etag</span><span class="s3">,</span>
+									<span class="s3">() =&gt; {</span>
+										<span class="s4">const </span><span class="s1">newContent </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">content</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span>
+											<span class="s1">hashRegExp</span><span class="s3">,</span>
+											<span class="s1">hash </span><span class="s3">=&gt; {</span>
+												<span class="s4">if </span><span class="s3">(</span>
+													<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OwnHashes} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">ownHashes</span><span class="s3">).</span><span class="s1">has</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)</span>
+												<span class="s3">) {</span>
+													<span class="s4">return </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+												<span class="s3">}</span>
+												<span class="s4">return </span><span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+											<span class="s3">}</span>
+										<span class="s3">);</span>
+										<span class="s4">return new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">newContent</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">})());</span>
+					<span class="s3">};</span>
+					<span class="s4">const </span><span class="s1">comparator </span><span class="s3">= </span><span class="s1">compareSelect</span><span class="s3">(</span><span class="s1">a </span><span class="s3">=&gt; </span><span class="s1">a</span><span class="s3">.</span><span class="s1">name</span><span class="s3">, </span><span class="s1">compareStrings</span><span class="s3">);</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">oldHash of hashesInOrder</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">assets </span><span class="s3">=</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssetInfoForRealContentHash[]} */</span>
+							<span class="s3">(</span><span class="s1">hashToAssets</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">oldHash</span><span class="s3">));</span>
+						<span class="s1">assets</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span><span class="s1">comparator</span><span class="s3">);</span>
+						<span class="s4">await </span><span class="s1">Promise</span><span class="s3">.</span><span class="s1">all</span><span class="s3">(</span>
+							<span class="s1">assets</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">asset </span><span class="s3">=&gt;</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OwnHashes} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">ownHashes</span><span class="s3">).</span><span class="s1">has</span><span class="s3">(</span><span class="s1">oldHash</span><span class="s3">)</span>
+									<span class="s3">? </span><span class="s1">computeNewContentWithoutOwn</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">)</span>
+									<span class="s3">: </span><span class="s1">computeNewContent</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">)</span>
+							<span class="s3">)</span>
+						<span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">assetsContent </span><span class="s3">= </span><span class="s1">mapAndDeduplicateBuffers</span><span class="s3">(</span><span class="s1">assets</span><span class="s3">, </span><span class="s1">asset </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OwnHashes} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">ownHashes</span><span class="s3">).</span><span class="s1">has</span><span class="s3">(</span><span class="s1">oldHash</span><span class="s3">)) {</span>
+								<span class="s4">return </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">newSourceWithoutOwn</span>
+									<span class="s3">? </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">newSourceWithoutOwn</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">()</span>
+									<span class="s3">: </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">();</span>
+							<span class="s3">}</span>
+							<span class="s4">return </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">newSource</span>
+								<span class="s3">? </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">newSource</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">()</span>
+								<span class="s3">: </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">();</span>
+						<span class="s3">});</span>
+						<span class="s4">let </span><span class="s1">newHash </span><span class="s3">= </span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">updateHash</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">assetsContent</span><span class="s3">, </span><span class="s1">oldHash</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">newHash</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">createHash</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_hashFunction</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashSalt</span><span class="s3">) {</span>
+								<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashSalt</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">content of assetsContent</span><span class="s3">) {</span>
+								<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">content</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">digest </span><span class="s3">= </span><span class="s1">hash</span><span class="s3">.</span><span class="s1">digest</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_hashDigest</span><span class="s3">);</span>
+							<span class="s1">newHash </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">digest</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s8">0</span><span class="s3">, </span><span class="s1">oldHash</span><span class="s3">.</span><span class="s1">length</span><span class="s3">));</span>
+						<span class="s3">}</span>
+						<span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">oldHash</span><span class="s3">, </span><span class="s1">newHash</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">await </span><span class="s1">Promise</span><span class="s3">.</span><span class="s1">all</span><span class="s3">(</span>
+						<span class="s1">assetsWithInfo</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">async asset </span><span class="s3">=&gt; {</span>
+							<span class="s4">await </span><span class="s1">computeNewContent</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">newName </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">name</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s1">hashRegExp</span><span class="s3">, </span><span class="s1">hash </span><span class="s3">=&gt;</span>
+								<span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)</span>
+							<span class="s3">);</span>
+
+							<span class="s4">const </span><span class="s1">infoUpdate </span><span class="s3">= {};</span>
+							<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">info</span><span class="s3">.</span><span class="s1">contenthash</span><span class="s3">;</span>
+							<span class="s1">infoUpdate</span><span class="s3">.</span><span class="s1">contenthash </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">)</span>
+								<span class="s3">? </span><span class="s1">hash</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">hash </span><span class="s3">=&gt; </span><span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">))</span>
+								<span class="s3">: </span><span class="s1">hashToNewHash</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">hash</span><span class="s3">);</span>
+
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">newSource </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">updateAsset</span><span class="s3">(</span>
+									<span class="s1">asset</span><span class="s3">.</span><span class="s1">name</span><span class="s3">,</span>
+									<span class="s1">asset</span><span class="s3">.</span><span class="s1">newSource</span><span class="s3">,</span>
+									<span class="s1">infoUpdate</span>
+								<span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">updateAsset</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">name</span><span class="s3">, </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">source</span><span class="s3">, </span><span class="s1">infoUpdate</span><span class="s3">);</span>
+							<span class="s3">}</span>
+
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">name </span><span class="s3">!== </span><span class="s1">newName</span><span class="s3">) {</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">renameAsset</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">name</span><span class="s3">, </span><span class="s1">newName</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">})</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">RealContentHashPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,399 @@
+<html>
+<head>
+<title>HarmonyImportDependencyParserPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+HarmonyImportDependencyParserPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">HotModuleReplacementPlugin </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../HotModuleReplacementPlugin&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">getImportAttributes </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../javascript/JavascriptParser&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">InnerGraph </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../optimize/InnerGraph&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ConstDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ConstDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyAcceptDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyAcceptDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyAcceptImportDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyAcceptImportDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyEvaluatedImportSpecifierDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyEvaluatedImportSpecifierDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyExports </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyExports&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">ExportPresenceModes </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyImportDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyImportSideEffectDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyImportSideEffectDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyImportSpecifierDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyImportSpecifierDependency&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Expression} Expression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Identifier} Identifier */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Literal} Literal */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).MemberExpression} MemberExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).ObjectExpression} ObjectExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Property} Property */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).JavascriptParserOptions} JavascriptParserOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).DependencyLocation} DependencyLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/BasicEvaluatedExpression&quot;)} BasicEvaluatedExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;)} JavascriptParser */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).DestructuringAssignmentProperty} DestructuringAssignmentProperty */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).ExportAllDeclaration} ExportAllDeclaration */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).ExportNamedDeclaration} ExportNamedDeclaration */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).ImportAttributes} ImportAttributes */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).ImportDeclaration} ImportDeclaration */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).ImportExpression} ImportExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).Range} Range */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).TagData} TagData */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../optimize/InnerGraph&quot;).InnerGraph} InnerGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../optimize/InnerGraph&quot;).TopLevelSymbol} TopLevelSymbol */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./HarmonyImportDependency&quot;)} HarmonyImportDependency */</span>
+
+<span class="s4">const </span><span class="s1">harmonySpecifierTag </span><span class="s3">= </span><span class="s1">Symbol</span><span class="s3">(</span><span class="s2">&quot;harmony import&quot;</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} HarmonySettings</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[]} ids</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} source</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} sourceOrder</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} name</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} await</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Record&lt;string, any&gt; | undefined} attributes</span>
+ <span class="s5">*/</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s4">class </span><span class="s1">HarmonyImportDependencyParserPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParserOptions} options options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">exportPresenceMode </span><span class="s3">=</span>
+			<span class="s1">options</span><span class="s3">.</span><span class="s1">importExportsPresence </span><span class="s3">!== </span><span class="s1">undefined</span>
+				<span class="s3">? </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">fromUserOption</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">importExportsPresence</span><span class="s3">)</span>
+				<span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">exportsPresence </span><span class="s3">!== </span><span class="s1">undefined</span>
+					<span class="s3">? </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">fromUserOption</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exportsPresence</span><span class="s3">)</span>
+					<span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">strictExportPresence</span>
+						<span class="s3">? </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">ERROR</span>
+						<span class="s3">: </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">AUTO</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">strictThisContextOnImports </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">strictThisContextOnImports</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">exportPresenceMode </span><span class="s3">} = </span><span class="s4">this</span><span class="s3">;</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} members members</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean[]} membersOptionals members Optionals</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string[]} a non optional part</span>
+		 <span class="s5">*/</span>
+		<span class="s4">function </span><span class="s1">getNonOptionalPart</span><span class="s3">(</span><span class="s1">members</span><span class="s3">, </span><span class="s1">membersOptionals</span><span class="s3">) {</span>
+			<span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s4">while </span><span class="s3">(</span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&amp;&amp; </span><span class="s1">membersOptionals</span><span class="s3">[</span><span class="s1">i</span><span class="s3">] === </span><span class="s4">false</span><span class="s3">) </span><span class="s1">i</span><span class="s3">++;</span>
+			<span class="s4">return </span><span class="s1">i </span><span class="s3">!== </span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">? </span><span class="s1">members</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s1">i</span><span class="s3">) : </span><span class="s1">members</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{TODO} node member expression</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} count count</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Expression} member expression</span>
+		 <span class="s5">*/</span>
+		<span class="s4">function </span><span class="s1">getNonOptionalMemberChain</span><span class="s3">(</span><span class="s1">node</span><span class="s3">, </span><span class="s1">count</span><span class="s3">) {</span>
+			<span class="s4">while </span><span class="s3">(</span><span class="s1">count</span><span class="s3">--) </span><span class="s1">node </span><span class="s3">= </span><span class="s1">node</span><span class="s3">.</span><span class="s1">object</span><span class="s3">;</span>
+			<span class="s4">return </span><span class="s1">node</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">isPure</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;Identifier&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">, </span><span class="s1">expression </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">expr </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Identifier} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">isVariableDefined</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) ||</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">getTagData</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">name</span><span class="s3">, </span><span class="s1">harmonySpecifierTag</span><span class="s3">)</span>
+				<span class="s3">) {</span>
+					<span class="s4">return true</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">import</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">statement</span><span class="s3">, </span><span class="s1">source</span><span class="s3">) =&gt; {</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">lastHarmonyImportOrder </span><span class="s3">=</span>
+					<span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">lastHarmonyImportOrder </span><span class="s3">|| </span><span class="s7">0</span><span class="s3">) + </span><span class="s7">1</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">clearDep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">])</span>
+						<span class="s3">? </span><span class="s2">&quot;;&quot;</span>
+						<span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s1">clearDep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">clearDep</span><span class="s3">);</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">unsetAsiPosition</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">1</span><span class="s3">]);</span>
+				<span class="s4">const </span><span class="s1">attributes </span><span class="s3">= </span><span class="s1">getImportAttributes</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">sideEffectDep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyImportSideEffectDependency</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">source</span><span class="s3">),</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">lastHarmonyImportOrder</span><span class="s3">,</span>
+					<span class="s1">attributes</span>
+				<span class="s3">);</span>
+				<span class="s1">sideEffectDep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">sideEffectDep</span><span class="s3">);</span>
+				<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">importSpecifier</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">statement</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, </span><span class="s1">name</span><span class="s3">) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">ids </span><span class="s3">= </span><span class="s1">id </span><span class="s3">=== </span><span class="s4">null </span><span class="s3">? [] : [</span><span class="s1">id</span><span class="s3">];</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">tagVariable</span><span class="s3">(</span><span class="s1">name</span><span class="s3">, </span><span class="s1">harmonySpecifierTag</span><span class="s3">, {</span>
+					<span class="s1">name</span><span class="s3">,</span>
+					<span class="s1">source</span><span class="s3">,</span>
+					<span class="s1">ids</span><span class="s3">,</span>
+					<span class="s1">sourceOrder</span><span class="s3">: </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">lastHarmonyImportOrder</span><span class="s3">,</span>
+					<span class="s1">attributes</span><span class="s3">: </span><span class="s1">getImportAttributes</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">)</span>
+				<span class="s3">});</span>
+				<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">binaryExpression</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">,</span>
+			<span class="s1">expression </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">!== </span><span class="s2">&quot;in&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+
+				<span class="s4">const </span><span class="s1">leftPartEvaluated </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">left</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">leftPartEvaluated</span><span class="s3">.</span><span class="s1">couldHaveSideEffects</span><span class="s3">()) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">leftPart </span><span class="s3">= </span><span class="s1">leftPartEvaluated</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">();</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">leftPart</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+
+				<span class="s4">const </span><span class="s1">rightPart </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">right</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">rightPart</span><span class="s3">.</span><span class="s1">isIdentifier</span><span class="s3">()) </span><span class="s4">return</span><span class="s3">;</span>
+
+				<span class="s4">const </span><span class="s1">rootInfo </span><span class="s3">= </span><span class="s1">rightPart</span><span class="s3">.</span><span class="s1">rootInfo</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span>
+					<span class="s4">typeof </span><span class="s1">rootInfo </span><span class="s3">=== </span><span class="s2">&quot;string&quot; </span><span class="s3">||</span>
+					<span class="s3">!</span><span class="s1">rootInfo </span><span class="s3">||</span>
+					<span class="s3">!</span><span class="s1">rootInfo</span><span class="s3">.</span><span class="s1">tagInfo </span><span class="s3">||</span>
+					<span class="s1">rootInfo</span><span class="s3">.</span><span class="s1">tagInfo</span><span class="s3">.</span><span class="s1">tag </span><span class="s3">!== </span><span class="s1">harmonySpecifierTag</span>
+				<span class="s3">)</span>
+					<span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">settings </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TagData} */ </span><span class="s3">(</span><span class="s1">rootInfo</span><span class="s3">.</span><span class="s1">tagInfo</span><span class="s3">.</span><span class="s1">data</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">members </span><span class="s3">=</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{(() =&gt; string[])} */</span>
+					<span class="s3">(</span><span class="s1">rightPart</span><span class="s3">.</span><span class="s1">getMembers</span><span class="s3">)();</span>
+				<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyEvaluatedImportSpecifierDependency</span><span class="s3">(</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">source</span><span class="s3">,</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">,</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">ids</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">members</span><span class="s3">).</span><span class="s1">concat</span><span class="s3">([</span><span class="s1">leftPart</span><span class="s3">]),</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">name</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">attributes</span><span class="s3">,</span>
+					<span class="s2">&quot;in&quot;</span>
+				<span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">directImport </span><span class="s3">= </span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">;</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">asiSafe </span><span class="s3">= !</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+				<span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">e </span><span class="s3">=&gt; (</span><span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">e</span><span class="s3">));</span>
+				<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">harmonySpecifierTag</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">settings </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HarmonySettings} */ </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">currentTagData</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyImportSpecifierDependency</span><span class="s3">(</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">source</span><span class="s3">,</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">,</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">ids</span><span class="s3">,</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">name</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+					<span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+					<span class="s1">exportPresenceMode</span><span class="s3">,</span>
+					<span class="s1">settings</span><span class="s3">.</span><span class="s1">attributes</span><span class="s3">,</span>
+					<span class="s3">[]</span>
+				<span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">referencedPropertiesInDestructuring </span><span class="s3">=</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">destructuringAssignmentPropertiesFor</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">shorthand </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">inShorthand</span><span class="s3">;</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">directImport </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">asiSafe </span><span class="s3">= !</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+				<span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">call </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">inTaggedTemplateTag</span><span class="s3">;</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">e </span><span class="s3">=&gt; (</span><span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">e</span><span class="s3">));</span>
+				<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expressionMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">harmonySpecifierTag</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+				<span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">expression</span><span class="s3">, </span><span class="s1">members</span><span class="s3">, </span><span class="s1">membersOptionals</span><span class="s3">, </span><span class="s1">memberRanges</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s1">settings </span><span class="s3">=</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HarmonySettings} */</span>
+						<span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">currentTagData</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">nonOptionalMembers </span><span class="s3">= </span><span class="s1">getNonOptionalPart</span><span class="s3">(</span>
+						<span class="s1">members</span><span class="s3">,</span>
+						<span class="s1">membersOptionals</span>
+					<span class="s3">);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range[]} */</span>
+					<span class="s4">const </span><span class="s1">ranges </span><span class="s3">= </span><span class="s1">memberRanges</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span>
+						<span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">memberRanges</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- (</span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s1">nonOptionalMembers</span><span class="s3">.</span><span class="s1">length</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">expr </span><span class="s3">=</span>
+						<span class="s1">nonOptionalMembers </span><span class="s3">!== </span><span class="s1">members</span>
+							<span class="s3">? </span><span class="s1">getNonOptionalMemberChain</span><span class="s3">(</span>
+									<span class="s1">expression</span><span class="s3">,</span>
+									<span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s1">nonOptionalMembers</span><span class="s3">.</span><span class="s1">length</span>
+								<span class="s3">)</span>
+							<span class="s3">: </span><span class="s1">expression</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">ids </span><span class="s3">= </span><span class="s1">settings</span><span class="s3">.</span><span class="s1">ids</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">nonOptionalMembers</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyImportSpecifierDependency</span><span class="s3">(</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">source</span><span class="s3">,</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">,</span>
+						<span class="s1">ids</span><span class="s3">,</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">name</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+						<span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+						<span class="s1">exportPresenceMode</span><span class="s3">,</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">attributes</span><span class="s3">,</span>
+						<span class="s1">ranges</span>
+					<span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">referencedPropertiesInDestructuring </span><span class="s3">=</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">destructuringAssignmentPropertiesFor</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">asiSafe </span><span class="s3">= !</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+						<span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+					<span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">e </span><span class="s3">=&gt; (</span><span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">e</span><span class="s3">));</span>
+					<span class="s4">return true</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">callMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">harmonySpecifierTag</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+				<span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">expression</span><span class="s3">, </span><span class="s1">members</span><span class="s3">, </span><span class="s1">membersOptionals</span><span class="s3">, </span><span class="s1">memberRanges</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s3">{ </span><span class="s1">arguments</span><span class="s3">: </span><span class="s1">args</span><span class="s3">, </span><span class="s1">callee </span><span class="s3">} = </span><span class="s1">expression</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">settings </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HarmonySettings} */ </span><span class="s3">(</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">currentTagData</span>
+					<span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">nonOptionalMembers </span><span class="s3">= </span><span class="s1">getNonOptionalPart</span><span class="s3">(</span>
+						<span class="s1">members</span><span class="s3">,</span>
+						<span class="s1">membersOptionals</span>
+					<span class="s3">);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range[]} */</span>
+					<span class="s4">const </span><span class="s1">ranges </span><span class="s3">= </span><span class="s1">memberRanges</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span>
+						<span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">memberRanges</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- (</span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s1">nonOptionalMembers</span><span class="s3">.</span><span class="s1">length</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">expr </span><span class="s3">=</span>
+						<span class="s1">nonOptionalMembers </span><span class="s3">!== </span><span class="s1">members</span>
+							<span class="s3">? </span><span class="s1">getNonOptionalMemberChain</span><span class="s3">(</span>
+									<span class="s1">callee</span><span class="s3">,</span>
+									<span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s1">nonOptionalMembers</span><span class="s3">.</span><span class="s1">length</span>
+								<span class="s3">)</span>
+							<span class="s3">: </span><span class="s1">callee</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">ids </span><span class="s3">= </span><span class="s1">settings</span><span class="s3">.</span><span class="s1">ids</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">nonOptionalMembers</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyImportSpecifierDependency</span><span class="s3">(</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">source</span><span class="s3">,</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">,</span>
+						<span class="s1">ids</span><span class="s3">,</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">name</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+						<span class="s1">exportPresenceMode</span><span class="s3">,</span>
+						<span class="s1">settings</span><span class="s3">.</span><span class="s1">attributes</span><span class="s3">,</span>
+						<span class="s1">ranges</span>
+					<span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">directImport </span><span class="s3">= </span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">call </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">asiSafe </span><span class="s3">= !</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+					<span class="s3">);</span>
+					<span class="s0">// only in case when we strictly follow the spec we need a special case here</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">namespaceObjectAsContext </span><span class="s3">=</span>
+						<span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">&amp;&amp;</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{boolean} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">strictThisContextOnImports</span><span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">args</span><span class="s3">) </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpressions</span><span class="s3">(</span><span class="s1">args</span><span class="s3">);</span>
+					<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">e </span><span class="s3">=&gt; (</span><span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">e</span><span class="s3">));</span>
+					<span class="s4">return true</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">hotAcceptCallback</span><span class="s3">, </span><span class="s1">hotAcceptWithoutCallback </span><span class="s3">} =</span>
+			<span class="s1">HotModuleReplacementPlugin</span><span class="s3">.</span><span class="s1">getParserHooks</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">);</span>
+		<span class="s1">hotAcceptCallback</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">requests</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">HarmonyExports</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) {</span>
+					<span class="s0">// This is not a harmony module, skip it</span>
+					<span class="s4">return</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">const </span><span class="s1">dependencies </span><span class="s3">= </span><span class="s1">requests</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">request </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyAcceptImportDependency</span><span class="s3">(</span><span class="s1">request</span><span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s4">return </span><span class="s1">dep</span><span class="s3">;</span>
+				<span class="s3">});</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyAcceptDependency</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+						<span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+						<span class="s1">dependencies</span><span class="s3">,</span>
+						<span class="s4">true</span>
+					<span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+		<span class="s1">hotAcceptWithoutCallback</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;HarmonyImportDependencyParserPlugin&quot;</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">requests</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">HarmonyExports</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) {</span>
+					<span class="s0">// This is not a harmony module, skip it</span>
+					<span class="s4">return</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">const </span><span class="s1">dependencies </span><span class="s3">= </span><span class="s1">requests</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">request </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyAcceptImportDependency</span><span class="s3">(</span><span class="s1">request</span><span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s4">return </span><span class="s1">dep</span><span class="s3">;</span>
+				<span class="s3">});</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HarmonyAcceptDependency</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+						<span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+						<span class="s1">dependencies</span><span class="s3">,</span>
+						<span class="s4">false</span>
+					<span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">harmonySpecifierTag </span><span class="s3">= </span><span class="s1">harmonySpecifierTag</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

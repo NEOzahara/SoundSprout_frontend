@@ -1,0 +1,423 @@
+<html>
+<head>
+<title>TemplatedPathPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+TemplatedPathPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Jason Anderson @diurnalist 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">mime </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;mime-types&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">basename</span><span class="s3">, </span><span class="s1">extname </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;path&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">util </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;util&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Chunk </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Chunk&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Module </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Module&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">parseResource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/identifier&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;).ModuleId} ModuleId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;).AssetInfo} AssetInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;).PathData} PathData */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+
+<span class="s4">const </span><span class="s1">REGEXP </span><span class="s3">= </span><span class="s7">/\[\\*([\w:]+)\\*\]/gi</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | number} id id</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | number} result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">prepareId </span><span class="s3">= </span><span class="s1">id </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">id </span><span class="s3">!== </span><span class="s2">&quot;string&quot;</span><span class="s3">) </span><span class="s4">return </span><span class="s1">id</span><span class="s3">;</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s7">/^&quot;\s\+*.*\+\s*&quot;$/</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)) {</span>
+		<span class="s4">const </span><span class="s1">match </span><span class="s3">= </span><span class="s7">/^&quot;\s\+*\s*(.*)\s*\+\s*&quot;$/</span><span class="s3">.</span><span class="s1">exec</span><span class="s3">(</span><span class="s1">id</span><span class="s3">);</span>
+
+		<span class="s4">return </span><span class="s2">`&quot; + (</span><span class="s1">$</span><span class="s3">{</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */ </span><span class="s3">(</span><span class="s1">match</span><span class="s3">)[</span><span class="s8">1</span><span class="s3">]</span>
+		<span class="s3">} </span><span class="s2">+ &quot;&quot;).replace(/(^[.-]|[^a-zA-Z0-9_-])+/g, &quot;_&quot;) + &quot;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s4">return </span><span class="s1">id</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s7">/(^[.-]|[^a-zA-Z0-9_-])+/g</span><span class="s3">, </span><span class="s2">&quot;_&quot;</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">ReplacerFunction</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} match</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | undefined} arg</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} input</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ReplacerFunction} replacer replacer</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{((arg0: number) =&gt; string) | undefined} handler handler</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssetInfo | undefined} assetInfo asset info</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} hashName hash name</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Replacer} hash replacer function</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">hashLength </span><span class="s3">= (</span><span class="s1">replacer</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">, </span><span class="s1">assetInfo</span><span class="s3">, </span><span class="s1">hashName</span><span class="s3">) =&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Replacer} */</span>
+	<span class="s4">const </span><span class="s1">fn </span><span class="s3">= (</span><span class="s1">match</span><span class="s3">, </span><span class="s1">arg</span><span class="s3">, </span><span class="s1">input</span><span class="s3">) =&gt; {</span>
+		<span class="s4">let </span><span class="s1">result</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">length </span><span class="s3">= </span><span class="s1">arg </span><span class="s3">&amp;&amp; </span><span class="s1">Number</span><span class="s3">.</span><span class="s1">parseInt</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">, </span><span class="s8">10</span><span class="s3">);</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">length </span><span class="s3">&amp;&amp; </span><span class="s1">handler</span><span class="s3">) {</span>
+			<span class="s1">result </span><span class="s3">= </span><span class="s1">handler</span><span class="s3">(</span><span class="s1">length</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">match</span><span class="s3">, </span><span class="s1">arg</span><span class="s3">, </span><span class="s1">input</span><span class="s3">);</span>
+
+			<span class="s1">result </span><span class="s3">= </span><span class="s1">length </span><span class="s3">? </span><span class="s1">hash</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s8">0</span><span class="s3">, </span><span class="s1">length</span><span class="s3">) : </span><span class="s1">hash</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">assetInfo</span><span class="s3">) {</span>
+			<span class="s1">assetInfo</span><span class="s3">.</span><span class="s1">immutable </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">assetInfo</span><span class="s3">[</span><span class="s1">hashName</span><span class="s3">])) {</span>
+				<span class="s1">assetInfo</span><span class="s3">[</span><span class="s1">hashName</span><span class="s3">] = [</span><span class="s1">...assetInfo</span><span class="s3">[</span><span class="s1">hashName</span><span class="s3">], </span><span class="s1">result</span><span class="s3">];</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">assetInfo</span><span class="s3">[</span><span class="s1">hashName</span><span class="s3">]) {</span>
+				<span class="s1">assetInfo</span><span class="s3">[</span><span class="s1">hashName</span><span class="s3">] = [</span><span class="s1">assetInfo</span><span class="s3">[</span><span class="s1">hashName</span><span class="s3">], </span><span class="s1">result</span><span class="s3">];</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">assetInfo</span><span class="s3">[</span><span class="s1">hashName</span><span class="s3">] = </span><span class="s1">result</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+	<span class="s3">};</span>
+
+	<span class="s4">return </span><span class="s1">fn</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(match: string, arg: string | undefined, input: string) =&gt; string} Replacer */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | number | null | undefined | (() =&gt; string | number | null | undefined)} value value</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean=} allowEmpty allow empty</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Replacer} replacer</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">replacer </span><span class="s3">= (</span><span class="s1">value</span><span class="s3">, </span><span class="s1">allowEmpty</span><span class="s3">) =&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Replacer} */</span>
+	<span class="s4">const </span><span class="s1">fn </span><span class="s3">= (</span><span class="s1">match</span><span class="s3">, </span><span class="s1">arg</span><span class="s3">, </span><span class="s1">input</span><span class="s3">) =&gt; {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">value </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+			<span class="s1">value </span><span class="s3">= </span><span class="s1">value</span><span class="s3">();</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">value </span><span class="s3">=== </span><span class="s4">null </span><span class="s3">|| </span><span class="s1">value </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">allowEmpty</span><span class="s3">) {</span>
+				<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+					<span class="s2">`Path variable </span><span class="s1">$</span><span class="s3">{</span><span class="s1">match</span><span class="s3">} </span><span class="s2">not implemented in this context: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">input</span><span class="s3">}</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s4">return </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">value</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+	<span class="s3">};</span>
+
+	<span class="s4">return </span><span class="s1">fn</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">deprecationCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+<span class="s4">const </span><span class="s1">deprecatedFunction </span><span class="s3">= (() =&gt; () =&gt; {})();</span>
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{(...args: EXPECTED_ANY[]) =&gt; EXPECTED_ANY} T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} fn function</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} message message</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} code code</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{T} function with deprecation output</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">deprecated </span><span class="s3">= (</span><span class="s1">fn</span><span class="s3">, </span><span class="s1">message</span><span class="s3">, </span><span class="s1">code</span><span class="s3">) =&gt; {</span>
+	<span class="s4">let </span><span class="s1">d </span><span class="s3">= </span><span class="s1">deprecationCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">message</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">d </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s1">d </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">deprecate</span><span class="s3">(</span><span class="s1">deprecatedFunction</span><span class="s3">, </span><span class="s1">message</span><span class="s3">, </span><span class="s1">code</span><span class="s3">);</span>
+		<span class="s1">deprecationCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">message</span><span class="s3">, </span><span class="s1">d</span><span class="s3">);</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{T} */ </span><span class="s3">(</span>
+		<span class="s3">(</span><span class="s1">...args</span><span class="s3">) =&gt; {</span>
+			<span class="s1">d</span><span class="s3">();</span>
+			<span class="s4">return </span><span class="s1">fn</span><span class="s3">(</span><span class="s1">...args</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{string | ((pathData: PathData, assetInfo?: AssetInfo) =&gt; string)} TemplatePath */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{TemplatePath} path the raw path</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{PathData} data context data</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssetInfo | undefined} assetInfo extra info about the asset (will be written to)</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} the interpolated path</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">replacePathVariables </span><span class="s3">= (</span><span class="s1">path</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">assetInfo</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, Replacer&gt;} */</span>
+	<span class="s4">const </span><span class="s1">replacements </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s0">// Filename context</span>
+	<span class="s0">//</span>
+	<span class="s0">// Placeholders</span>
+	<span class="s0">//</span>
+	<span class="s0">// for /some/path/file.js?query#fragment:</span>
+	<span class="s0">// [file] - /some/path/file.js</span>
+	<span class="s0">// [query] - ?query</span>
+	<span class="s0">// [fragment] - #fragment</span>
+	<span class="s0">// [base] - file.js</span>
+	<span class="s0">// [path] - /some/path/</span>
+	<span class="s0">// [name] - file</span>
+	<span class="s0">// [ext] - .js</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">data</span><span class="s3">.</span><span class="s1">filename </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+		<span class="s0">// check that filename is data uri</span>
+		<span class="s4">const </span><span class="s1">match </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">filename</span><span class="s3">.</span><span class="s1">match</span><span class="s3">(</span><span class="s7">/^data:([^;,]+)/</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">match</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">ext </span><span class="s3">= </span><span class="s1">mime</span><span class="s3">.</span><span class="s1">extension</span><span class="s3">(</span><span class="s1">match</span><span class="s3">[</span><span class="s8">1</span><span class="s3">]);</span>
+			<span class="s4">const </span><span class="s1">emptyReplacer </span><span class="s3">= </span><span class="s1">replacer</span><span class="s3">(</span><span class="s2">&quot;&quot;</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+			<span class="s0">// &quot;XXXX&quot; used for `updateHash`, so we don't need it here</span>
+			<span class="s4">const </span><span class="s1">contentHash </span><span class="s3">=</span>
+				<span class="s1">data</span><span class="s3">.</span><span class="s1">contentHash </span><span class="s3">&amp;&amp; !</span><span class="s7">/X+/</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">contentHash</span><span class="s3">)</span>
+					<span class="s3">? </span><span class="s1">data</span><span class="s3">.</span><span class="s1">contentHash</span>
+					<span class="s3">: </span><span class="s4">false</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">baseReplacer </span><span class="s3">= </span><span class="s1">contentHash </span><span class="s3">? </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">contentHash</span><span class="s3">) : </span><span class="s1">emptyReplacer</span><span class="s3">;</span>
+
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;file&quot;</span><span class="s3">, </span><span class="s1">emptyReplacer</span><span class="s3">);</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;query&quot;</span><span class="s3">, </span><span class="s1">emptyReplacer</span><span class="s3">);</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;fragment&quot;</span><span class="s3">, </span><span class="s1">emptyReplacer</span><span class="s3">);</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;path&quot;</span><span class="s3">, </span><span class="s1">emptyReplacer</span><span class="s3">);</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;base&quot;</span><span class="s3">, </span><span class="s1">baseReplacer</span><span class="s3">);</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;name&quot;</span><span class="s3">, </span><span class="s1">baseReplacer</span><span class="s3">);</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;ext&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">ext </span><span class="s3">? </span><span class="s2">`.</span><span class="s1">$</span><span class="s3">{</span><span class="s1">ext</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">, </span><span class="s4">true</span><span class="s3">));</span>
+			<span class="s0">// Legacy</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+				<span class="s2">&quot;filebase&quot;</span><span class="s3">,</span>
+				<span class="s1">deprecated</span><span class="s3">(</span>
+					<span class="s1">baseReplacer</span><span class="s3">,</span>
+					<span class="s2">&quot;[filebase] is now [base]&quot;</span><span class="s3">,</span>
+					<span class="s2">&quot;DEP_WEBPACK_TEMPLATE_PATH_PLUGIN_REPLACE_PATH_VARIABLES_FILENAME&quot;</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s3">{ </span><span class="s1">path</span><span class="s3">: </span><span class="s1">file</span><span class="s3">, </span><span class="s1">query</span><span class="s3">, </span><span class="s1">fragment </span><span class="s3">} = </span><span class="s1">parseResource</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">filename</span><span class="s3">);</span>
+
+			<span class="s4">const </span><span class="s1">ext </span><span class="s3">= </span><span class="s1">extname</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">base </span><span class="s3">= </span><span class="s1">basename</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">base</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s8">0</span><span class="s3">, </span><span class="s1">base</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s1">ext</span><span class="s3">.</span><span class="s1">length</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">path </span><span class="s3">= </span><span class="s1">file</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s8">0</span><span class="s3">, </span><span class="s1">file</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s1">base</span><span class="s3">.</span><span class="s1">length</span><span class="s3">);</span>
+
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;file&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">file</span><span class="s3">));</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;query&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">query</span><span class="s3">, </span><span class="s4">true</span><span class="s3">));</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;fragment&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">fragment</span><span class="s3">, </span><span class="s4">true</span><span class="s3">));</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;path&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">path</span><span class="s3">, </span><span class="s4">true</span><span class="s3">));</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;base&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">base</span><span class="s3">));</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;name&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">name</span><span class="s3">));</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;ext&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">ext</span><span class="s3">, </span><span class="s4">true</span><span class="s3">));</span>
+			<span class="s0">// Legacy</span>
+			<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+				<span class="s2">&quot;filebase&quot;</span><span class="s3">,</span>
+				<span class="s1">deprecated</span><span class="s3">(</span>
+					<span class="s1">replacer</span><span class="s3">(</span><span class="s1">base</span><span class="s3">),</span>
+					<span class="s2">&quot;[filebase] is now [base]&quot;</span><span class="s3">,</span>
+					<span class="s2">&quot;DEP_WEBPACK_TEMPLATE_PATH_PLUGIN_REPLACE_PATH_VARIABLES_FILENAME&quot;</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// Compilation context</span>
+	<span class="s0">//</span>
+	<span class="s0">// Placeholders</span>
+	<span class="s0">//</span>
+	<span class="s0">// [fullhash] - data.hash (3a4b5c6e7f)</span>
+	<span class="s0">//</span>
+	<span class="s0">// Legacy Placeholders</span>
+	<span class="s0">//</span>
+	<span class="s0">// [hash] - data.hash (3a4b5c6e7f)</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">hashReplacer </span><span class="s3">= </span><span class="s1">hashLength</span><span class="s3">(</span>
+			<span class="s1">replacer</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">),</span>
+			<span class="s1">data</span><span class="s3">.</span><span class="s1">hashWithLength</span><span class="s3">,</span>
+			<span class="s1">assetInfo</span><span class="s3">,</span>
+			<span class="s2">&quot;fullhash&quot;</span>
+		<span class="s3">);</span>
+
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;fullhash&quot;</span><span class="s3">, </span><span class="s1">hashReplacer</span><span class="s3">);</span>
+
+		<span class="s0">// Legacy</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+			<span class="s2">&quot;hash&quot;</span><span class="s3">,</span>
+			<span class="s1">deprecated</span><span class="s3">(</span>
+				<span class="s1">hashReplacer</span><span class="s3">,</span>
+				<span class="s2">&quot;[hash] is now [fullhash] (also consider using [chunkhash] or [contenthash], see documentation for details)&quot;</span><span class="s3">,</span>
+				<span class="s2">&quot;DEP_WEBPACK_TEMPLATE_PATH_PLUGIN_REPLACE_PATH_VARIABLES_HASH&quot;</span>
+			<span class="s3">)</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// Chunk Context</span>
+	<span class="s0">//</span>
+	<span class="s0">// Placeholders</span>
+	<span class="s0">//</span>
+	<span class="s0">// [id] - chunk.id (0.js)</span>
+	<span class="s0">// [name] - chunk.name (app.js)</span>
+	<span class="s0">// [chunkhash] - chunk.hash (7823t4t4.js)</span>
+	<span class="s0">// [contenthash] - chunk.contentHash[type] (3256u3zg.js)</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">chunk</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">chunk </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">chunk</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">contentHashType </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">contentHashType</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">idReplacer </span><span class="s3">= </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">nameReplacer </span><span class="s3">= </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">name </span><span class="s3">|| </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">chunkhashReplacer </span><span class="s3">= </span><span class="s1">hashLength</span><span class="s3">(</span>
+			<span class="s1">replacer</span><span class="s3">(</span><span class="s1">chunk </span><span class="s4">instanceof </span><span class="s1">Chunk </span><span class="s3">? </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">renderedHash </span><span class="s3">: </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">),</span>
+			<span class="s2">&quot;hashWithLength&quot; </span><span class="s4">in </span><span class="s1">chunk </span><span class="s3">? </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">hashWithLength </span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">assetInfo</span><span class="s3">,</span>
+			<span class="s2">&quot;chunkhash&quot;</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">contenthashReplacer </span><span class="s3">= </span><span class="s1">hashLength</span><span class="s3">(</span>
+			<span class="s1">replacer</span><span class="s3">(</span>
+				<span class="s1">data</span><span class="s3">.</span><span class="s1">contentHash </span><span class="s3">||</span>
+					<span class="s3">(</span><span class="s1">contentHashType </span><span class="s3">&amp;&amp;</span>
+						<span class="s1">chunk</span><span class="s3">.</span><span class="s1">contentHash </span><span class="s3">&amp;&amp;</span>
+						<span class="s1">chunk</span><span class="s3">.</span><span class="s1">contentHash</span><span class="s3">[</span><span class="s1">contentHashType</span><span class="s3">])</span>
+			<span class="s3">),</span>
+			<span class="s1">data</span><span class="s3">.</span><span class="s1">contentHashWithLength </span><span class="s3">||</span>
+				<span class="s3">(</span><span class="s2">&quot;contentHashWithLength&quot; </span><span class="s4">in </span><span class="s1">chunk </span><span class="s3">&amp;&amp; </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">contentHashWithLength</span>
+					<span class="s3">? </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">contentHashWithLength</span><span class="s3">[</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">contentHashType</span><span class="s3">)]</span>
+					<span class="s3">: </span><span class="s1">undefined</span><span class="s3">),</span>
+			<span class="s1">assetInfo</span><span class="s3">,</span>
+			<span class="s2">&quot;contenthash&quot;</span>
+		<span class="s3">);</span>
+
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;id&quot;</span><span class="s3">, </span><span class="s1">idReplacer</span><span class="s3">);</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;name&quot;</span><span class="s3">, </span><span class="s1">nameReplacer</span><span class="s3">);</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;chunkhash&quot;</span><span class="s3">, </span><span class="s1">chunkhashReplacer</span><span class="s3">);</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;contenthash&quot;</span><span class="s3">, </span><span class="s1">contenthashReplacer</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// Module Context</span>
+	<span class="s0">//</span>
+	<span class="s0">// Placeholders</span>
+	<span class="s0">//</span>
+	<span class="s0">// [id] - module.id (2.png)</span>
+	<span class="s0">// [hash] - module.hash (6237543873.png)</span>
+	<span class="s0">//</span>
+	<span class="s0">// Legacy Placeholders</span>
+	<span class="s0">//</span>
+	<span class="s0">// [moduleid] - module.id (2.png)</span>
+	<span class="s0">// [modulehash] - module.hash (6237543873.png)</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">idReplacer </span><span class="s3">= </span><span class="s1">replacer</span><span class="s3">(() =&gt;</span>
+			<span class="s1">prepareId</span><span class="s3">(</span>
+				<span class="s1">module </span><span class="s4">instanceof </span><span class="s1">Module</span>
+					<span class="s3">? </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */</span>
+						<span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGraph} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">).</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">module</span><span class="s3">))</span>
+					<span class="s3">: </span><span class="s1">module</span><span class="s3">.</span><span class="s1">id</span>
+			<span class="s3">)</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">moduleHashReplacer </span><span class="s3">= </span><span class="s1">hashLength</span><span class="s3">(</span>
+			<span class="s1">replacer</span><span class="s3">(() =&gt;</span>
+				<span class="s1">module </span><span class="s4">instanceof </span><span class="s1">Module</span>
+					<span class="s3">? </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGraph} */</span>
+						<span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">).</span><span class="s1">getRenderedModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">data</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">)</span>
+					<span class="s3">: </span><span class="s1">module</span><span class="s3">.</span><span class="s1">hash</span>
+			<span class="s3">),</span>
+			<span class="s2">&quot;hashWithLength&quot; </span><span class="s4">in </span><span class="s1">module </span><span class="s3">? </span><span class="s1">module</span><span class="s3">.</span><span class="s1">hashWithLength </span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">assetInfo</span><span class="s3">,</span>
+			<span class="s2">&quot;modulehash&quot;</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">contentHashReplacer </span><span class="s3">= </span><span class="s1">hashLength</span><span class="s3">(</span>
+			<span class="s1">replacer</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">contentHash</span><span class="s3">)),</span>
+			<span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">assetInfo</span><span class="s3">,</span>
+			<span class="s2">&quot;contenthash&quot;</span>
+		<span class="s3">);</span>
+
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;id&quot;</span><span class="s3">, </span><span class="s1">idReplacer</span><span class="s3">);</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;modulehash&quot;</span><span class="s3">, </span><span class="s1">moduleHashReplacer</span><span class="s3">);</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;contenthash&quot;</span><span class="s3">, </span><span class="s1">contentHashReplacer</span><span class="s3">);</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+			<span class="s2">&quot;hash&quot;</span><span class="s3">,</span>
+			<span class="s1">data</span><span class="s3">.</span><span class="s1">contentHash </span><span class="s3">? </span><span class="s1">contentHashReplacer </span><span class="s3">: </span><span class="s1">moduleHashReplacer</span>
+		<span class="s3">);</span>
+		<span class="s0">// Legacy</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+			<span class="s2">&quot;moduleid&quot;</span><span class="s3">,</span>
+			<span class="s1">deprecated</span><span class="s3">(</span>
+				<span class="s1">idReplacer</span><span class="s3">,</span>
+				<span class="s2">&quot;[moduleid] is now [id]&quot;</span><span class="s3">,</span>
+				<span class="s2">&quot;DEP_WEBPACK_TEMPLATE_PATH_PLUGIN_REPLACE_PATH_VARIABLES_MODULE_ID&quot;</span>
+			<span class="s3">)</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// Other things</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">url</span><span class="s3">) {</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;url&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">url</span><span class="s3">));</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">data</span><span class="s3">.</span><span class="s1">runtime </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+			<span class="s2">&quot;runtime&quot;</span><span class="s3">,</span>
+			<span class="s1">replacer</span><span class="s3">(() =&gt; </span><span class="s1">prepareId</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">)))</span>
+		<span class="s3">);</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s1">replacements</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">&quot;runtime&quot;</span><span class="s3">, </span><span class="s1">replacer</span><span class="s3">(</span><span class="s2">&quot;_&quot;</span><span class="s3">));</span>
+	<span class="s3">}</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">path </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+		<span class="s1">path </span><span class="s3">= </span><span class="s1">path</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">assetInfo</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">path </span><span class="s3">= </span><span class="s1">path</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s1">REGEXP</span><span class="s3">, (</span><span class="s1">match</span><span class="s3">, </span><span class="s1">content</span><span class="s3">) =&gt; {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">content</span><span class="s3">.</span><span class="s1">length </span><span class="s3">+ </span><span class="s8">2 </span><span class="s3">=== </span><span class="s1">match</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">contentMatch </span><span class="s3">= </span><span class="s7">/^(\w+)(?::(\w+))?$/</span><span class="s3">.</span><span class="s1">exec</span><span class="s3">(</span><span class="s1">content</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">contentMatch</span><span class="s3">) </span><span class="s4">return </span><span class="s1">match</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s3">[, </span><span class="s1">kind</span><span class="s3">, </span><span class="s1">arg</span><span class="s3">] = </span><span class="s1">contentMatch</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">replacer </span><span class="s3">= </span><span class="s1">replacements</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">kind</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">replacer </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">return </span><span class="s1">replacer</span><span class="s3">(</span><span class="s1">match</span><span class="s3">, </span><span class="s1">arg</span><span class="s3">, </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">path</span><span class="s3">));</span>
+			<span class="s3">}</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">match</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">&quot;[</span><span class="s4">\\</span><span class="s2">&quot;</span><span class="s3">) &amp;&amp; </span><span class="s1">match</span><span class="s3">.</span><span class="s1">endsWith</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\\</span><span class="s2">]&quot;</span><span class="s3">)) {</span>
+			<span class="s4">return </span><span class="s2">`[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">match</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s8">2</span><span class="s3">, -</span><span class="s8">2</span><span class="s3">)}</span><span class="s2">]`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">match</span><span class="s3">;</span>
+	<span class="s3">});</span>
+
+	<span class="s4">return </span><span class="s1">path</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">plugin </span><span class="s3">= </span><span class="s2">&quot;TemplatedPathPlugin&quot;</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">TemplatedPathPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">assetPath</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, </span><span class="s1">replacePathVariables</span><span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">TemplatedPathPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,317 @@
+<html>
+<head>
+<title>no-unreachable.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-unreachable.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Checks for unreachable code due to return, throws, break, and continue.</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Joel Feenstra</span>
+ <span class="s0">*/</span>
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} ConstructorInfo</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ConstructorInfo | null} upper Info about the constructor that encloses this constructor.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} hasSuperCall The flag about having `super()` expressions.</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether or not a given variable declarator has the initializer.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A VariableDeclarator node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node has the initializer.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isInitialized</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">Boolean</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">init</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks all segments in a set and returns true if all are unreachable.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Set&lt;CodePathSegment&gt;} segments The segments to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if all segments are unreachable; false otherwise.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">areAllSegmentsUnreachable</span><span class="s4">(</span><span class="s2">segments</span><span class="s4">) {</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">segment of segments</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">reachable</span><span class="s4">) {</span>
+            <span class="s6">return false</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return true</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The class to distinguish consecutive unreachable statements.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">ConsecutiveRange </span><span class="s4">{</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">sourceCode</span><span class="s4">) {</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">;</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">startNode </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">endNode </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* The location object of this range.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{Object}</span>
+     <span class="s0">*/</span>
+    <span class="s2">get location</span><span class="s4">() {</span>
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">start</span><span class="s4">: </span><span class="s6">this</span><span class="s4">.</span><span class="s2">startNode</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">,</span>
+            <span class="s2">end</span><span class="s4">: </span><span class="s6">this</span><span class="s4">.</span><span class="s2">endNode</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">end</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* `true` if this range is empty.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{boolean}</span>
+     <span class="s0">*/</span>
+    <span class="s2">get isEmpty</span><span class="s4">() {</span>
+        <span class="s6">return </span><span class="s4">!(</span><span class="s6">this</span><span class="s4">.</span><span class="s2">startNode </span><span class="s4">&amp;&amp; </span><span class="s6">this</span><span class="s4">.</span><span class="s2">endNode</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Checks whether the given node is inside of this range.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode|Token} node The node to check.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is inside of this range.</span>
+     <span class="s0">*/</span>
+    <span class="s2">contains</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s4">(</span>
+            <span class="s2">node</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &gt;= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">startNode</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp;</span>
+            <span class="s2">node</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] &lt;= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">endNode</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">]</span>
+        <span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Checks whether the given node is consecutive to this range.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to check.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is consecutive to this range.</span>
+     <span class="s0">*/</span>
+    <span class="s2">isConsecutive</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+        <span class="s6">return this</span><span class="s4">.</span><span class="s2">contains</span><span class="s4">(</span><span class="s6">this</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">node</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Merges the given node to this range.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to merge.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">merge</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">endNode </span><span class="s4">= </span><span class="s2">node</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Resets this range by the given node or null.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode|null} node The node to reset, or null.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">reset</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">startNode </span><span class="s4">= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">endNode </span><span class="s4">= </span><span class="s2">node</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;problem&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow unreachable code after `return`, `throw`, `continue`, and `break` statements&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-unreachable&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">unreachableCode</span><span class="s4">: </span><span class="s3">&quot;Unreachable code.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+
+        <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ConstructorInfo | null} */</span>
+        <span class="s6">let </span><span class="s2">constructorInfo </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+
+        <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ConsecutiveRange} */</span>
+        <span class="s6">const </span><span class="s2">range </span><span class="s4">= </span><span class="s6">new </span><span class="s2">ConsecutiveRange</span><span class="s4">(</span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">);</span>
+
+        <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{Array&lt;Set&lt;CodePathSegment&gt;&gt;} */</span>
+        <span class="s6">const </span><span class="s2">codePathSegments </span><span class="s4">= [];</span>
+
+        <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{Set&lt;CodePathSegment&gt;} */</span>
+        <span class="s6">let </span><span class="s2">currentCodePathSegments </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">();</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Reports a given node if it's unreachable.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A statement node to report.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">reportIfUnreachable</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">let </span><span class="s2">nextNode </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">node </span><span class="s4">&amp;&amp; (</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;PropertyDefinition&quot; </span><span class="s4">|| </span><span class="s2">areAllSegmentsUnreachable</span><span class="s4">(</span><span class="s2">currentCodePathSegments</span><span class="s4">))) {</span>
+
+                <span class="s5">// Store this statement to distinguish consecutive statements.</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">range</span><span class="s4">.</span><span class="s2">isEmpty</span><span class="s4">) {</span>
+                    <span class="s2">range</span><span class="s4">.</span><span class="s2">reset</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s5">// Skip if this statement is inside of the current range.</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">range</span><span class="s4">.</span><span class="s2">contains</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s5">// Merge if this statement is consecutive to the current range.</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">range</span><span class="s4">.</span><span class="s2">isConsecutive</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+                    <span class="s2">range</span><span class="s4">.</span><span class="s2">merge</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s2">nextNode </span><span class="s4">= </span><span class="s2">node</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">/* 
+             * Report the current range since this statement is reachable or is 
+             * not consecutive to the current range. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">range</span><span class="s4">.</span><span class="s2">isEmpty</span><span class="s4">) {</span>
+                <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                    <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;unreachableCode&quot;</span><span class="s4">,</span>
+                    <span class="s2">loc</span><span class="s4">: </span><span class="s2">range</span><span class="s4">.</span><span class="s2">location</span><span class="s4">,</span>
+                    <span class="s2">node</span><span class="s4">: </span><span class="s2">range</span><span class="s4">.</span><span class="s2">startNode</span>
+                <span class="s4">});</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// Update the current range.</span>
+            <span class="s2">range</span><span class="s4">.</span><span class="s2">reset</span><span class="s4">(</span><span class="s2">nextNode</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+
+            <span class="s5">// Manages the current code path.</span>
+            <span class="s2">onCodePathStart</span><span class="s4">() {</span>
+                <span class="s2">codePathSegments</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">currentCodePathSegments</span><span class="s4">);</span>
+                <span class="s2">currentCodePathSegments </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">();</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onCodePathEnd</span><span class="s4">() {</span>
+                <span class="s2">currentCodePathSegments </span><span class="s4">= </span><span class="s2">codePathSegments</span><span class="s4">.</span><span class="s2">pop</span><span class="s4">();</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onUnreachableCodePathSegmentStart</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">currentCodePathSegments</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onUnreachableCodePathSegmentEnd</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">currentCodePathSegments</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onCodePathSegmentEnd</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">currentCodePathSegments</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onCodePathSegmentStart</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">currentCodePathSegments</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s5">// Registers for all statement nodes (excludes FunctionDeclaration).</span>
+            <span class="s2">BlockStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">BreakStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ClassDeclaration</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ContinueStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">DebuggerStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">DoWhileStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ExpressionStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ForInStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ForOfStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ForStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">IfStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ImportDeclaration</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">LabeledStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ReturnStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">SwitchStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ThrowStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">TryStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+
+            <span class="s2">VariableDeclaration</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">kind </span><span class="s4">!== </span><span class="s3">&quot;var&quot; </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">declarations</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">isInitialized</span><span class="s4">)) {</span>
+                    <span class="s2">reportIfUnreachable</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s2">WhileStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">WithStatement</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ExportNamedDeclaration</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ExportDefaultDeclaration</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+            <span class="s2">ExportAllDeclaration</span><span class="s4">: </span><span class="s2">reportIfUnreachable</span><span class="s4">,</span>
+
+            <span class="s3">&quot;Program:exit&quot;</span><span class="s4">() {</span>
+                <span class="s2">reportIfUnreachable</span><span class="s4">();</span>
+            <span class="s4">},</span>
+
+            <span class="s5">/* 
+             * Instance fields defined in a subclass are never created if the constructor of the subclass 
+             * doesn't call `super()`, so their definitions are unreachable code. 
+             */</span>
+            <span class="s3">&quot;MethodDefinition[kind='constructor']&quot;</span><span class="s4">() {</span>
+                <span class="s2">constructorInfo </span><span class="s4">= {</span>
+                    <span class="s2">upper</span><span class="s4">: </span><span class="s2">constructorInfo</span><span class="s4">,</span>
+                    <span class="s2">hasSuperCall</span><span class="s4">: </span><span class="s6">false</span>
+                <span class="s4">};</span>
+            <span class="s4">},</span>
+            <span class="s3">&quot;MethodDefinition[kind='constructor']:exit&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s4">{ </span><span class="s2">hasSuperCall </span><span class="s4">} = </span><span class="s2">constructorInfo</span><span class="s4">;</span>
+
+                <span class="s2">constructorInfo </span><span class="s4">= </span><span class="s2">constructorInfo</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">;</span>
+
+                <span class="s5">// skip typescript constructors without the body</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">node</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">body</span><span class="s4">) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">const </span><span class="s2">classDefinition </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">classDefinition</span><span class="s4">.</span><span class="s2">superClass </span><span class="s4">&amp;&amp; !</span><span class="s2">hasSuperCall</span><span class="s4">) {</span>
+                    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">element of classDefinition</span><span class="s4">.</span><span class="s2">body</span><span class="s4">.</span><span class="s2">body</span><span class="s4">) {</span>
+                        <span class="s6">if </span><span class="s4">(</span><span class="s2">element</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;PropertyDefinition&quot; </span><span class="s4">&amp;&amp; !</span><span class="s2">element</span><span class="s4">.</span><span class="s2">static</span><span class="s4">) {</span>
+                            <span class="s2">reportIfUnreachable</span><span class="s4">(</span><span class="s2">element</span><span class="s4">);</span>
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+            <span class="s3">&quot;CallExpression &gt; Super.callee&quot;</span><span class="s4">() {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">constructorInfo</span><span class="s4">) {</span>
+                    <span class="s2">constructorInfo</span><span class="s4">.</span><span class="s2">hasSuperCall </span><span class="s4">= </span><span class="s6">true</span><span class="s4">;</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

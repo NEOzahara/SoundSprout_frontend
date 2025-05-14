@@ -1,0 +1,471 @@
+<html>
+<head>
+<title>graceful-fs.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #7a7e85;}
+.s5 { color: #42c3d4;}
+.s6 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+graceful-fs.js</font>
+</center></td></tr></table>
+<pre><span class="s0">var </span><span class="s1">fs </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'fs'</span><span class="s2">)</span>
+<span class="s0">var </span><span class="s1">polyfills </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'./polyfills.js'</span><span class="s2">)</span>
+<span class="s0">var </span><span class="s1">legacy </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'./legacy-streams.js'</span><span class="s2">)</span>
+<span class="s0">var </span><span class="s1">clone </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'./clone.js'</span><span class="s2">)</span>
+
+<span class="s0">var </span><span class="s1">util </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'util'</span><span class="s2">)</span>
+
+<span class="s4">/* istanbul ignore next - node 0.x polyfill */</span>
+<span class="s0">var </span><span class="s1">gracefulQueue</span>
+<span class="s0">var </span><span class="s1">previousSymbol</span>
+
+<span class="s4">/* istanbul ignore else - node 0.x polyfill */</span>
+<span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">Symbol </span><span class="s2">=== </span><span class="s3">'function' </span><span class="s2">&amp;&amp; </span><span class="s0">typeof </span><span class="s1">Symbol</span><span class="s2">.</span><span class="s1">for </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">) {</span>
+  <span class="s1">gracefulQueue </span><span class="s2">= </span><span class="s1">Symbol</span><span class="s2">.</span><span class="s1">for</span><span class="s2">(</span><span class="s3">'graceful-fs.queue'</span><span class="s2">)</span>
+  <span class="s4">// This is used in testing by future versions</span>
+  <span class="s1">previousSymbol </span><span class="s2">= </span><span class="s1">Symbol</span><span class="s2">.</span><span class="s1">for</span><span class="s2">(</span><span class="s3">'graceful-fs.previous'</span><span class="s2">)</span>
+<span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+  <span class="s1">gracefulQueue </span><span class="s2">= </span><span class="s3">'___graceful-fs.queue'</span>
+  <span class="s1">previousSymbol </span><span class="s2">= </span><span class="s3">'___graceful-fs.previous'</span>
+<span class="s2">}</span>
+
+<span class="s0">function </span><span class="s1">noop </span><span class="s2">() {}</span>
+
+<span class="s0">function </span><span class="s1">publishQueue</span><span class="s2">(</span><span class="s1">context</span><span class="s2">, </span><span class="s1">queue</span><span class="s2">) {</span>
+  <span class="s1">Object</span><span class="s2">.</span><span class="s1">defineProperty</span><span class="s2">(</span><span class="s1">context</span><span class="s2">, </span><span class="s1">gracefulQueue</span><span class="s2">, {</span>
+    <span class="s1">get</span><span class="s2">: </span><span class="s0">function</span><span class="s2">() {</span>
+      <span class="s0">return </span><span class="s1">queue</span>
+    <span class="s2">}</span>
+  <span class="s2">})</span>
+<span class="s2">}</span>
+
+<span class="s0">var </span><span class="s1">debug </span><span class="s2">= </span><span class="s1">noop</span>
+<span class="s0">if </span><span class="s2">(</span><span class="s1">util</span><span class="s2">.</span><span class="s1">debuglog</span><span class="s2">)</span>
+  <span class="s1">debug </span><span class="s2">= </span><span class="s1">util</span><span class="s2">.</span><span class="s1">debuglog</span><span class="s2">(</span><span class="s3">'gfs4'</span><span class="s2">)</span>
+<span class="s0">else if </span><span class="s2">(</span><span class="s5">/\bgfs4\b/i</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">process</span><span class="s2">.</span><span class="s1">env</span><span class="s2">.</span><span class="s1">NODE_DEBUG </span><span class="s2">|| </span><span class="s3">''</span><span class="s2">))</span>
+  <span class="s1">debug </span><span class="s2">= </span><span class="s0">function</span><span class="s2">() {</span>
+    <span class="s0">var </span><span class="s1">m </span><span class="s2">= </span><span class="s1">util</span><span class="s2">.</span><span class="s1">format</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s1">util</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+    <span class="s1">m </span><span class="s2">= </span><span class="s3">'GFS4: ' </span><span class="s2">+ </span><span class="s1">m</span><span class="s2">.</span><span class="s1">split</span><span class="s2">(</span><span class="s5">/\n/</span><span class="s2">).</span><span class="s1">join</span><span class="s2">(</span><span class="s3">'</span><span class="s0">\n</span><span class="s3">GFS4: '</span><span class="s2">)</span>
+    <span class="s1">console</span><span class="s2">.</span><span class="s1">error</span><span class="s2">(</span><span class="s1">m</span><span class="s2">)</span>
+  <span class="s2">}</span>
+
+<span class="s4">// Once time initialization</span>
+<span class="s0">if </span><span class="s2">(!</span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">]) {</span>
+  <span class="s4">// This queue can be shared by multiple loaded instances</span>
+  <span class="s0">var </span><span class="s1">queue </span><span class="s2">= </span><span class="s1">global</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">] || []</span>
+  <span class="s1">publishQueue</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">, </span><span class="s1">queue</span><span class="s2">)</span>
+
+  <span class="s4">// Patch fs.close/closeSync to shared queue version, because we need</span>
+  <span class="s4">// to retry() whenever a close happens *anywhere* in the program.</span>
+  <span class="s4">// This is essential when multiple graceful-fs instances are</span>
+  <span class="s4">// in play at the same time.</span>
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">close </span><span class="s2">= (</span><span class="s0">function </span><span class="s2">(</span><span class="s1">fs$close</span><span class="s2">) {</span>
+    <span class="s0">function </span><span class="s1">close </span><span class="s2">(</span><span class="s1">fd</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">fs$close</span><span class="s2">.</span><span class="s1">call</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">, </span><span class="s1">fd</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">) {</span>
+        <span class="s4">// This function uses the graceful-fs shared queue</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s1">err</span><span class="s2">) {</span>
+          <span class="s1">resetQueue</span><span class="s2">()</span>
+        <span class="s2">}</span>
+
+        <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+          <span class="s1">cb</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+      <span class="s2">})</span>
+    <span class="s2">}</span>
+
+    <span class="s1">Object</span><span class="s2">.</span><span class="s1">defineProperty</span><span class="s2">(</span><span class="s1">close</span><span class="s2">, </span><span class="s1">previousSymbol</span><span class="s2">, {</span>
+      <span class="s1">value</span><span class="s2">: </span><span class="s1">fs$close</span>
+    <span class="s2">})</span>
+    <span class="s0">return </span><span class="s1">close</span>
+  <span class="s2">})(</span><span class="s1">fs</span><span class="s2">.</span><span class="s1">close</span><span class="s2">)</span>
+
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">closeSync </span><span class="s2">= (</span><span class="s0">function </span><span class="s2">(</span><span class="s1">fs$closeSync</span><span class="s2">) {</span>
+    <span class="s0">function </span><span class="s1">closeSync </span><span class="s2">(</span><span class="s1">fd</span><span class="s2">) {</span>
+      <span class="s4">// This function uses the graceful-fs shared queue</span>
+      <span class="s1">fs$closeSync</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+      <span class="s1">resetQueue</span><span class="s2">()</span>
+    <span class="s2">}</span>
+
+    <span class="s1">Object</span><span class="s2">.</span><span class="s1">defineProperty</span><span class="s2">(</span><span class="s1">closeSync</span><span class="s2">, </span><span class="s1">previousSymbol</span><span class="s2">, {</span>
+      <span class="s1">value</span><span class="s2">: </span><span class="s1">fs$closeSync</span>
+    <span class="s2">})</span>
+    <span class="s0">return </span><span class="s1">closeSync</span>
+  <span class="s2">})(</span><span class="s1">fs</span><span class="s2">.</span><span class="s1">closeSync</span><span class="s2">)</span>
+
+  <span class="s0">if </span><span class="s2">(</span><span class="s5">/\bgfs4\b/i</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">process</span><span class="s2">.</span><span class="s1">env</span><span class="s2">.</span><span class="s1">NODE_DEBUG </span><span class="s2">|| </span><span class="s3">''</span><span class="s2">)) {</span>
+    <span class="s1">process</span><span class="s2">.</span><span class="s1">on</span><span class="s2">(</span><span class="s3">'exit'</span><span class="s2">, </span><span class="s0">function</span><span class="s2">() {</span>
+      <span class="s1">debug</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">])</span>
+      <span class="s1">require</span><span class="s2">(</span><span class="s3">'assert'</span><span class="s2">).</span><span class="s1">equal</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">].</span><span class="s1">length</span><span class="s2">, </span><span class="s6">0</span><span class="s2">)</span>
+    <span class="s2">})</span>
+  <span class="s2">}</span>
+<span class="s2">}</span>
+
+<span class="s0">if </span><span class="s2">(!</span><span class="s1">global</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">]) {</span>
+  <span class="s1">publishQueue</span><span class="s2">(</span><span class="s1">global</span><span class="s2">, </span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">]);</span>
+<span class="s2">}</span>
+
+<span class="s1">module</span><span class="s2">.</span><span class="s1">exports </span><span class="s2">= </span><span class="s1">patch</span><span class="s2">(</span><span class="s1">clone</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">))</span>
+<span class="s0">if </span><span class="s2">(</span><span class="s1">process</span><span class="s2">.</span><span class="s1">env</span><span class="s2">.</span><span class="s1">TEST_GRACEFUL_FS_GLOBAL_PATCH </span><span class="s2">&amp;&amp; !</span><span class="s1">fs</span><span class="s2">.</span><span class="s1">__patched</span><span class="s2">) {</span>
+    <span class="s1">module</span><span class="s2">.</span><span class="s1">exports </span><span class="s2">= </span><span class="s1">patch</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">)</span>
+    <span class="s1">fs</span><span class="s2">.</span><span class="s1">__patched </span><span class="s2">= </span><span class="s0">true</span><span class="s2">;</span>
+<span class="s2">}</span>
+
+<span class="s0">function </span><span class="s1">patch </span><span class="s2">(</span><span class="s1">fs</span><span class="s2">) {</span>
+  <span class="s4">// Everything that references the open() function needs to be in here</span>
+  <span class="s1">polyfills</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">)</span>
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">gracefulify </span><span class="s2">= </span><span class="s1">patch</span>
+
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">createReadStream </span><span class="s2">= </span><span class="s1">createReadStream</span>
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">createWriteStream </span><span class="s2">= </span><span class="s1">createWriteStream</span>
+  <span class="s0">var </span><span class="s1">fs$readFile </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">readFile</span>
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">readFile </span><span class="s2">= </span><span class="s1">readFile</span>
+  <span class="s0">function </span><span class="s1">readFile </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">options </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+      <span class="s1">cb </span><span class="s2">= </span><span class="s1">options</span><span class="s2">, </span><span class="s1">options </span><span class="s2">= </span><span class="s0">null</span>
+
+    <span class="s0">return </span><span class="s1">go$readFile</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">)</span>
+
+    <span class="s0">function </span><span class="s1">go$readFile </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">fs$readFile</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">err </span><span class="s2">&amp;&amp; (</span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'EMFILE' </span><span class="s2">|| </span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'ENFILE'</span><span class="s2">))</span>
+          <span class="s1">enqueue</span><span class="s2">([</span><span class="s1">go$readFile</span><span class="s2">, [</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">], </span><span class="s1">err</span><span class="s2">, </span><span class="s1">startTime </span><span class="s2">|| </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">(), </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">()])</span>
+        <span class="s0">else </span><span class="s2">{</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+            <span class="s1">cb</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">})</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+
+  <span class="s0">var </span><span class="s1">fs$writeFile </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">writeFile</span>
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">writeFile </span><span class="s2">= </span><span class="s1">writeFile</span>
+  <span class="s0">function </span><span class="s1">writeFile </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">options </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+      <span class="s1">cb </span><span class="s2">= </span><span class="s1">options</span><span class="s2">, </span><span class="s1">options </span><span class="s2">= </span><span class="s0">null</span>
+
+    <span class="s0">return </span><span class="s1">go$writeFile</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">)</span>
+
+    <span class="s0">function </span><span class="s1">go$writeFile </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">fs$writeFile</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">err </span><span class="s2">&amp;&amp; (</span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'EMFILE' </span><span class="s2">|| </span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'ENFILE'</span><span class="s2">))</span>
+          <span class="s1">enqueue</span><span class="s2">([</span><span class="s1">go$writeFile</span><span class="s2">, [</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">], </span><span class="s1">err</span><span class="s2">, </span><span class="s1">startTime </span><span class="s2">|| </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">(), </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">()])</span>
+        <span class="s0">else </span><span class="s2">{</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+            <span class="s1">cb</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">})</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+
+  <span class="s0">var </span><span class="s1">fs$appendFile </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">appendFile</span>
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">fs$appendFile</span><span class="s2">)</span>
+    <span class="s1">fs</span><span class="s2">.</span><span class="s1">appendFile </span><span class="s2">= </span><span class="s1">appendFile</span>
+  <span class="s0">function </span><span class="s1">appendFile </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">options </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+      <span class="s1">cb </span><span class="s2">= </span><span class="s1">options</span><span class="s2">, </span><span class="s1">options </span><span class="s2">= </span><span class="s0">null</span>
+
+    <span class="s0">return </span><span class="s1">go$appendFile</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">)</span>
+
+    <span class="s0">function </span><span class="s1">go$appendFile </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">fs$appendFile</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">err </span><span class="s2">&amp;&amp; (</span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'EMFILE' </span><span class="s2">|| </span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'ENFILE'</span><span class="s2">))</span>
+          <span class="s1">enqueue</span><span class="s2">([</span><span class="s1">go$appendFile</span><span class="s2">, [</span><span class="s1">path</span><span class="s2">, </span><span class="s1">data</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">], </span><span class="s1">err</span><span class="s2">, </span><span class="s1">startTime </span><span class="s2">|| </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">(), </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">()])</span>
+        <span class="s0">else </span><span class="s2">{</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+            <span class="s1">cb</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">})</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+
+  <span class="s0">var </span><span class="s1">fs$copyFile </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">copyFile</span>
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">fs$copyFile</span><span class="s2">)</span>
+    <span class="s1">fs</span><span class="s2">.</span><span class="s1">copyFile </span><span class="s2">= </span><span class="s1">copyFile</span>
+  <span class="s0">function </span><span class="s1">copyFile </span><span class="s2">(</span><span class="s1">src</span><span class="s2">, </span><span class="s1">dest</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">flags </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">) {</span>
+      <span class="s1">cb </span><span class="s2">= </span><span class="s1">flags</span>
+      <span class="s1">flags </span><span class="s2">= </span><span class="s6">0</span>
+    <span class="s2">}</span>
+    <span class="s0">return </span><span class="s1">go$copyFile</span><span class="s2">(</span><span class="s1">src</span><span class="s2">, </span><span class="s1">dest</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">)</span>
+
+    <span class="s0">function </span><span class="s1">go$copyFile </span><span class="s2">(</span><span class="s1">src</span><span class="s2">, </span><span class="s1">dest</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">fs$copyFile</span><span class="s2">(</span><span class="s1">src</span><span class="s2">, </span><span class="s1">dest</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">err </span><span class="s2">&amp;&amp; (</span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'EMFILE' </span><span class="s2">|| </span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'ENFILE'</span><span class="s2">))</span>
+          <span class="s1">enqueue</span><span class="s2">([</span><span class="s1">go$copyFile</span><span class="s2">, [</span><span class="s1">src</span><span class="s2">, </span><span class="s1">dest</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">], </span><span class="s1">err</span><span class="s2">, </span><span class="s1">startTime </span><span class="s2">|| </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">(), </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">()])</span>
+        <span class="s0">else </span><span class="s2">{</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+            <span class="s1">cb</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">})</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+
+  <span class="s0">var </span><span class="s1">fs$readdir </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">readdir</span>
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">readdir </span><span class="s2">= </span><span class="s1">readdir</span>
+  <span class="s0">var </span><span class="s1">noReaddirOptionVersions </span><span class="s2">= </span><span class="s5">/^v[0-5]\./</span>
+  <span class="s0">function </span><span class="s1">readdir </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">options </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+      <span class="s1">cb </span><span class="s2">= </span><span class="s1">options</span><span class="s2">, </span><span class="s1">options </span><span class="s2">= </span><span class="s0">null</span>
+
+    <span class="s0">var </span><span class="s1">go$readdir </span><span class="s2">= </span><span class="s1">noReaddirOptionVersions</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">process</span><span class="s2">.</span><span class="s1">version</span><span class="s2">)</span>
+      <span class="s2">? </span><span class="s0">function </span><span class="s1">go$readdir </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+        <span class="s0">return </span><span class="s1">fs$readdir</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">fs$readdirCallback</span><span class="s2">(</span>
+          <span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span>
+        <span class="s2">))</span>
+      <span class="s2">}</span>
+      <span class="s2">: </span><span class="s0">function </span><span class="s1">go$readdir </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+        <span class="s0">return </span><span class="s1">fs$readdir</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">fs$readdirCallback</span><span class="s2">(</span>
+          <span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span>
+        <span class="s2">))</span>
+      <span class="s2">}</span>
+
+    <span class="s0">return </span><span class="s1">go$readdir</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">)</span>
+
+    <span class="s0">function </span><span class="s1">fs$readdirCallback </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+      <span class="s0">return function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">, </span><span class="s1">files</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">err </span><span class="s2">&amp;&amp; (</span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'EMFILE' </span><span class="s2">|| </span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'ENFILE'</span><span class="s2">))</span>
+          <span class="s1">enqueue</span><span class="s2">([</span>
+            <span class="s1">go$readdir</span><span class="s2">,</span>
+            <span class="s2">[</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">],</span>
+            <span class="s1">err</span><span class="s2">,</span>
+            <span class="s1">startTime </span><span class="s2">|| </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">(),</span>
+            <span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">()</span>
+          <span class="s2">])</span>
+        <span class="s0">else </span><span class="s2">{</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">files </span><span class="s2">&amp;&amp; </span><span class="s1">files</span><span class="s2">.</span><span class="s1">sort</span><span class="s2">)</span>
+            <span class="s1">files</span><span class="s2">.</span><span class="s1">sort</span><span class="s2">()</span>
+
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+            <span class="s1">cb</span><span class="s2">.</span><span class="s1">call</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">err</span><span class="s2">, </span><span class="s1">files</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">process</span><span class="s2">.</span><span class="s1">version</span><span class="s2">.</span><span class="s1">substr</span><span class="s2">(</span><span class="s6">0</span><span class="s2">, </span><span class="s6">4</span><span class="s2">) === </span><span class="s3">'v0.8'</span><span class="s2">) {</span>
+    <span class="s0">var </span><span class="s1">legStreams </span><span class="s2">= </span><span class="s1">legacy</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">)</span>
+    <span class="s1">ReadStream </span><span class="s2">= </span><span class="s1">legStreams</span><span class="s2">.</span><span class="s1">ReadStream</span>
+    <span class="s1">WriteStream </span><span class="s2">= </span><span class="s1">legStreams</span><span class="s2">.</span><span class="s1">WriteStream</span>
+  <span class="s2">}</span>
+
+  <span class="s0">var </span><span class="s1">fs$ReadStream </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">ReadStream</span>
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">fs$ReadStream</span><span class="s2">) {</span>
+    <span class="s1">ReadStream</span><span class="s2">.</span><span class="s1">prototype </span><span class="s2">= </span><span class="s1">Object</span><span class="s2">.</span><span class="s1">create</span><span class="s2">(</span><span class="s1">fs$ReadStream</span><span class="s2">.</span><span class="s1">prototype</span><span class="s2">)</span>
+    <span class="s1">ReadStream</span><span class="s2">.</span><span class="s1">prototype</span><span class="s2">.</span><span class="s1">open </span><span class="s2">= </span><span class="s1">ReadStream$open</span>
+  <span class="s2">}</span>
+
+  <span class="s0">var </span><span class="s1">fs$WriteStream </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">WriteStream</span>
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">fs$WriteStream</span><span class="s2">) {</span>
+    <span class="s1">WriteStream</span><span class="s2">.</span><span class="s1">prototype </span><span class="s2">= </span><span class="s1">Object</span><span class="s2">.</span><span class="s1">create</span><span class="s2">(</span><span class="s1">fs$WriteStream</span><span class="s2">.</span><span class="s1">prototype</span><span class="s2">)</span>
+    <span class="s1">WriteStream</span><span class="s2">.</span><span class="s1">prototype</span><span class="s2">.</span><span class="s1">open </span><span class="s2">= </span><span class="s1">WriteStream$open</span>
+  <span class="s2">}</span>
+
+  <span class="s1">Object</span><span class="s2">.</span><span class="s1">defineProperty</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">, </span><span class="s3">'ReadStream'</span><span class="s2">, {</span>
+    <span class="s1">get</span><span class="s2">: </span><span class="s0">function </span><span class="s2">() {</span>
+      <span class="s0">return </span><span class="s1">ReadStream</span>
+    <span class="s2">},</span>
+    <span class="s1">set</span><span class="s2">: </span><span class="s0">function </span><span class="s2">(</span><span class="s1">val</span><span class="s2">) {</span>
+      <span class="s1">ReadStream </span><span class="s2">= </span><span class="s1">val</span>
+    <span class="s2">},</span>
+    <span class="s1">enumerable</span><span class="s2">: </span><span class="s0">true</span><span class="s2">,</span>
+    <span class="s1">configurable</span><span class="s2">: </span><span class="s0">true</span>
+  <span class="s2">})</span>
+  <span class="s1">Object</span><span class="s2">.</span><span class="s1">defineProperty</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">, </span><span class="s3">'WriteStream'</span><span class="s2">, {</span>
+    <span class="s1">get</span><span class="s2">: </span><span class="s0">function </span><span class="s2">() {</span>
+      <span class="s0">return </span><span class="s1">WriteStream</span>
+    <span class="s2">},</span>
+    <span class="s1">set</span><span class="s2">: </span><span class="s0">function </span><span class="s2">(</span><span class="s1">val</span><span class="s2">) {</span>
+      <span class="s1">WriteStream </span><span class="s2">= </span><span class="s1">val</span>
+    <span class="s2">},</span>
+    <span class="s1">enumerable</span><span class="s2">: </span><span class="s0">true</span><span class="s2">,</span>
+    <span class="s1">configurable</span><span class="s2">: </span><span class="s0">true</span>
+  <span class="s2">})</span>
+
+  <span class="s4">// legacy names</span>
+  <span class="s0">var </span><span class="s1">FileReadStream </span><span class="s2">= </span><span class="s1">ReadStream</span>
+  <span class="s1">Object</span><span class="s2">.</span><span class="s1">defineProperty</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">, </span><span class="s3">'FileReadStream'</span><span class="s2">, {</span>
+    <span class="s1">get</span><span class="s2">: </span><span class="s0">function </span><span class="s2">() {</span>
+      <span class="s0">return </span><span class="s1">FileReadStream</span>
+    <span class="s2">},</span>
+    <span class="s1">set</span><span class="s2">: </span><span class="s0">function </span><span class="s2">(</span><span class="s1">val</span><span class="s2">) {</span>
+      <span class="s1">FileReadStream </span><span class="s2">= </span><span class="s1">val</span>
+    <span class="s2">},</span>
+    <span class="s1">enumerable</span><span class="s2">: </span><span class="s0">true</span><span class="s2">,</span>
+    <span class="s1">configurable</span><span class="s2">: </span><span class="s0">true</span>
+  <span class="s2">})</span>
+  <span class="s0">var </span><span class="s1">FileWriteStream </span><span class="s2">= </span><span class="s1">WriteStream</span>
+  <span class="s1">Object</span><span class="s2">.</span><span class="s1">defineProperty</span><span class="s2">(</span><span class="s1">fs</span><span class="s2">, </span><span class="s3">'FileWriteStream'</span><span class="s2">, {</span>
+    <span class="s1">get</span><span class="s2">: </span><span class="s0">function </span><span class="s2">() {</span>
+      <span class="s0">return </span><span class="s1">FileWriteStream</span>
+    <span class="s2">},</span>
+    <span class="s1">set</span><span class="s2">: </span><span class="s0">function </span><span class="s2">(</span><span class="s1">val</span><span class="s2">) {</span>
+      <span class="s1">FileWriteStream </span><span class="s2">= </span><span class="s1">val</span>
+    <span class="s2">},</span>
+    <span class="s1">enumerable</span><span class="s2">: </span><span class="s0">true</span><span class="s2">,</span>
+    <span class="s1">configurable</span><span class="s2">: </span><span class="s0">true</span>
+  <span class="s2">})</span>
+
+  <span class="s0">function </span><span class="s1">ReadStream </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">this instanceof </span><span class="s1">ReadStream</span><span class="s2">)</span>
+      <span class="s0">return </span><span class="s1">fs$ReadStream</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">), </span><span class="s0">this</span>
+    <span class="s0">else</span>
+      <span class="s0">return </span><span class="s1">ReadStream</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s1">Object</span><span class="s2">.</span><span class="s1">create</span><span class="s2">(</span><span class="s1">ReadStream</span><span class="s2">.</span><span class="s1">prototype</span><span class="s2">), </span><span class="s1">arguments</span><span class="s2">)</span>
+  <span class="s2">}</span>
+
+  <span class="s0">function </span><span class="s1">ReadStream$open </span><span class="s2">() {</span>
+    <span class="s0">var </span><span class="s1">that </span><span class="s2">= </span><span class="s0">this</span>
+    <span class="s1">open</span><span class="s2">(</span><span class="s1">that</span><span class="s2">.</span><span class="s1">path</span><span class="s2">, </span><span class="s1">that</span><span class="s2">.</span><span class="s1">flags</span><span class="s2">, </span><span class="s1">that</span><span class="s2">.</span><span class="s1">mode</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">, </span><span class="s1">fd</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">err</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">that</span><span class="s2">.</span><span class="s1">autoClose</span><span class="s2">)</span>
+          <span class="s1">that</span><span class="s2">.</span><span class="s1">destroy</span><span class="s2">()</span>
+
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">emit</span><span class="s2">(</span><span class="s3">'error'</span><span class="s2">, </span><span class="s1">err</span><span class="s2">)</span>
+      <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">fd </span><span class="s2">= </span><span class="s1">fd</span>
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">emit</span><span class="s2">(</span><span class="s3">'open'</span><span class="s2">, </span><span class="s1">fd</span><span class="s2">)</span>
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">read</span><span class="s2">()</span>
+      <span class="s2">}</span>
+    <span class="s2">})</span>
+  <span class="s2">}</span>
+
+  <span class="s0">function </span><span class="s1">WriteStream </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">this instanceof </span><span class="s1">WriteStream</span><span class="s2">)</span>
+      <span class="s0">return </span><span class="s1">fs$WriteStream</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">), </span><span class="s0">this</span>
+    <span class="s0">else</span>
+      <span class="s0">return </span><span class="s1">WriteStream</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s1">Object</span><span class="s2">.</span><span class="s1">create</span><span class="s2">(</span><span class="s1">WriteStream</span><span class="s2">.</span><span class="s1">prototype</span><span class="s2">), </span><span class="s1">arguments</span><span class="s2">)</span>
+  <span class="s2">}</span>
+
+  <span class="s0">function </span><span class="s1">WriteStream$open </span><span class="s2">() {</span>
+    <span class="s0">var </span><span class="s1">that </span><span class="s2">= </span><span class="s0">this</span>
+    <span class="s1">open</span><span class="s2">(</span><span class="s1">that</span><span class="s2">.</span><span class="s1">path</span><span class="s2">, </span><span class="s1">that</span><span class="s2">.</span><span class="s1">flags</span><span class="s2">, </span><span class="s1">that</span><span class="s2">.</span><span class="s1">mode</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">, </span><span class="s1">fd</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">err</span><span class="s2">) {</span>
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">destroy</span><span class="s2">()</span>
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">emit</span><span class="s2">(</span><span class="s3">'error'</span><span class="s2">, </span><span class="s1">err</span><span class="s2">)</span>
+      <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">fd </span><span class="s2">= </span><span class="s1">fd</span>
+        <span class="s1">that</span><span class="s2">.</span><span class="s1">emit</span><span class="s2">(</span><span class="s3">'open'</span><span class="s2">, </span><span class="s1">fd</span><span class="s2">)</span>
+      <span class="s2">}</span>
+    <span class="s2">})</span>
+  <span class="s2">}</span>
+
+  <span class="s0">function </span><span class="s1">createReadStream </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">) {</span>
+    <span class="s0">return new </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">ReadStream</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">)</span>
+  <span class="s2">}</span>
+
+  <span class="s0">function </span><span class="s1">createWriteStream </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">) {</span>
+    <span class="s0">return new </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">WriteStream</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">options</span><span class="s2">)</span>
+  <span class="s2">}</span>
+
+  <span class="s0">var </span><span class="s1">fs$open </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">.</span><span class="s1">open</span>
+  <span class="s1">fs</span><span class="s2">.</span><span class="s1">open </span><span class="s2">= </span><span class="s1">open</span>
+  <span class="s0">function </span><span class="s1">open </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">mode</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">mode </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+      <span class="s1">cb </span><span class="s2">= </span><span class="s1">mode</span><span class="s2">, </span><span class="s1">mode </span><span class="s2">= </span><span class="s0">null</span>
+
+    <span class="s0">return </span><span class="s1">go$open</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">mode</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">)</span>
+
+    <span class="s0">function </span><span class="s1">go$open </span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">mode</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">, </span><span class="s1">startTime</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">fs$open</span><span class="s2">(</span><span class="s1">path</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">mode</span><span class="s2">, </span><span class="s0">function </span><span class="s2">(</span><span class="s1">err</span><span class="s2">, </span><span class="s1">fd</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">err </span><span class="s2">&amp;&amp; (</span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'EMFILE' </span><span class="s2">|| </span><span class="s1">err</span><span class="s2">.</span><span class="s1">code </span><span class="s2">=== </span><span class="s3">'ENFILE'</span><span class="s2">))</span>
+          <span class="s1">enqueue</span><span class="s2">([</span><span class="s1">go$open</span><span class="s2">, [</span><span class="s1">path</span><span class="s2">, </span><span class="s1">flags</span><span class="s2">, </span><span class="s1">mode</span><span class="s2">, </span><span class="s1">cb</span><span class="s2">], </span><span class="s1">err</span><span class="s2">, </span><span class="s1">startTime </span><span class="s2">|| </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">(), </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">()])</span>
+        <span class="s0">else </span><span class="s2">{</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+            <span class="s1">cb</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">this</span><span class="s2">, </span><span class="s1">arguments</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">})</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+
+  <span class="s0">return </span><span class="s1">fs</span>
+<span class="s2">}</span>
+
+<span class="s0">function </span><span class="s1">enqueue </span><span class="s2">(</span><span class="s1">elem</span><span class="s2">) {</span>
+  <span class="s1">debug</span><span class="s2">(</span><span class="s3">'ENQUEUE'</span><span class="s2">, </span><span class="s1">elem</span><span class="s2">[</span><span class="s6">0</span><span class="s2">].</span><span class="s1">name</span><span class="s2">, </span><span class="s1">elem</span><span class="s2">[</span><span class="s6">1</span><span class="s2">])</span>
+  <span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">].</span><span class="s1">push</span><span class="s2">(</span><span class="s1">elem</span><span class="s2">)</span>
+  <span class="s1">retry</span><span class="s2">()</span>
+<span class="s2">}</span>
+
+<span class="s4">// keep track of the timeout between retry() calls</span>
+<span class="s0">var </span><span class="s1">retryTimer</span>
+
+<span class="s4">// reset the startTime and lastTime to now</span>
+<span class="s4">// this resets the start of the 60 second overall timeout as well as the</span>
+<span class="s4">// delay between attempts so that we'll retry these jobs sooner</span>
+<span class="s0">function </span><span class="s1">resetQueue </span><span class="s2">() {</span>
+  <span class="s0">var </span><span class="s1">now </span><span class="s2">= </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">()</span>
+  <span class="s0">for </span><span class="s2">(</span><span class="s0">var </span><span class="s1">i </span><span class="s2">= </span><span class="s6">0</span><span class="s2">; </span><span class="s1">i </span><span class="s2">&lt; </span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">].</span><span class="s1">length</span><span class="s2">; ++</span><span class="s1">i</span><span class="s2">) {</span>
+    <span class="s4">// entries that are only a length of 2 are from an older version, don't</span>
+    <span class="s4">// bother modifying those since they'll be retried anyway.</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">][</span><span class="s1">i</span><span class="s2">].</span><span class="s1">length </span><span class="s2">&gt; </span><span class="s6">2</span><span class="s2">) {</span>
+      <span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">][</span><span class="s1">i</span><span class="s2">][</span><span class="s6">3</span><span class="s2">] = </span><span class="s1">now </span><span class="s4">// startTime</span>
+      <span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">][</span><span class="s1">i</span><span class="s2">][</span><span class="s6">4</span><span class="s2">] = </span><span class="s1">now </span><span class="s4">// lastTime</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+  <span class="s4">// call retry to make sure we're actively processing the queue</span>
+  <span class="s1">retry</span><span class="s2">()</span>
+<span class="s2">}</span>
+
+<span class="s0">function </span><span class="s1">retry </span><span class="s2">() {</span>
+  <span class="s4">// clear the timer and remove it to help prevent unintended concurrency</span>
+  <span class="s1">clearTimeout</span><span class="s2">(</span><span class="s1">retryTimer</span><span class="s2">)</span>
+  <span class="s1">retryTimer </span><span class="s2">= </span><span class="s1">undefined</span>
+
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">].</span><span class="s1">length </span><span class="s2">=== </span><span class="s6">0</span><span class="s2">)</span>
+    <span class="s0">return</span>
+
+  <span class="s0">var </span><span class="s1">elem </span><span class="s2">= </span><span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">].</span><span class="s1">shift</span><span class="s2">()</span>
+  <span class="s0">var </span><span class="s1">fn </span><span class="s2">= </span><span class="s1">elem</span><span class="s2">[</span><span class="s6">0</span><span class="s2">]</span>
+  <span class="s0">var </span><span class="s1">args </span><span class="s2">= </span><span class="s1">elem</span><span class="s2">[</span><span class="s6">1</span><span class="s2">]</span>
+  <span class="s4">// these items may be unset if they were added by an older graceful-fs</span>
+  <span class="s0">var </span><span class="s1">err </span><span class="s2">= </span><span class="s1">elem</span><span class="s2">[</span><span class="s6">2</span><span class="s2">]</span>
+  <span class="s0">var </span><span class="s1">startTime </span><span class="s2">= </span><span class="s1">elem</span><span class="s2">[</span><span class="s6">3</span><span class="s2">]</span>
+  <span class="s0">var </span><span class="s1">lastTime </span><span class="s2">= </span><span class="s1">elem</span><span class="s2">[</span><span class="s6">4</span><span class="s2">]</span>
+
+  <span class="s4">// if we don't have a startTime we have no way of knowing if we've waited</span>
+  <span class="s4">// long enough, so go ahead and retry this item now</span>
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">startTime </span><span class="s2">=== </span><span class="s1">undefined</span><span class="s2">) {</span>
+    <span class="s1">debug</span><span class="s2">(</span><span class="s3">'RETRY'</span><span class="s2">, </span><span class="s1">fn</span><span class="s2">.</span><span class="s1">name</span><span class="s2">, </span><span class="s1">args</span><span class="s2">)</span>
+    <span class="s1">fn</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">null</span><span class="s2">, </span><span class="s1">args</span><span class="s2">)</span>
+  <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">() - </span><span class="s1">startTime </span><span class="s2">&gt;= </span><span class="s6">60000</span><span class="s2">) {</span>
+    <span class="s4">// it's been more than 60 seconds total, bail now</span>
+    <span class="s1">debug</span><span class="s2">(</span><span class="s3">'TIMEOUT'</span><span class="s2">, </span><span class="s1">fn</span><span class="s2">.</span><span class="s1">name</span><span class="s2">, </span><span class="s1">args</span><span class="s2">)</span>
+    <span class="s0">var </span><span class="s1">cb </span><span class="s2">= </span><span class="s1">args</span><span class="s2">.</span><span class="s1">pop</span><span class="s2">()</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">cb </span><span class="s2">=== </span><span class="s3">'function'</span><span class="s2">)</span>
+      <span class="s1">cb</span><span class="s2">.</span><span class="s1">call</span><span class="s2">(</span><span class="s0">null</span><span class="s2">, </span><span class="s1">err</span><span class="s2">)</span>
+  <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+    <span class="s4">// the amount of time between the last attempt and right now</span>
+    <span class="s0">var </span><span class="s1">sinceAttempt </span><span class="s2">= </span><span class="s1">Date</span><span class="s2">.</span><span class="s1">now</span><span class="s2">() - </span><span class="s1">lastTime</span>
+    <span class="s4">// the amount of time between when we first tried, and when we last tried</span>
+    <span class="s4">// rounded up to at least 1</span>
+    <span class="s0">var </span><span class="s1">sinceStart </span><span class="s2">= </span><span class="s1">Math</span><span class="s2">.</span><span class="s1">max</span><span class="s2">(</span><span class="s1">lastTime </span><span class="s2">- </span><span class="s1">startTime</span><span class="s2">, </span><span class="s6">1</span><span class="s2">)</span>
+    <span class="s4">// backoff. wait longer than the total time we've been retrying, but only</span>
+    <span class="s4">// up to a maximum of 100ms</span>
+    <span class="s0">var </span><span class="s1">desiredDelay </span><span class="s2">= </span><span class="s1">Math</span><span class="s2">.</span><span class="s1">min</span><span class="s2">(</span><span class="s1">sinceStart </span><span class="s2">* </span><span class="s6">1.2</span><span class="s2">, </span><span class="s6">100</span><span class="s2">)</span>
+    <span class="s4">// it's been long enough since the last retry, do it again</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">sinceAttempt </span><span class="s2">&gt;= </span><span class="s1">desiredDelay</span><span class="s2">) {</span>
+      <span class="s1">debug</span><span class="s2">(</span><span class="s3">'RETRY'</span><span class="s2">, </span><span class="s1">fn</span><span class="s2">.</span><span class="s1">name</span><span class="s2">, </span><span class="s1">args</span><span class="s2">)</span>
+      <span class="s1">fn</span><span class="s2">.</span><span class="s1">apply</span><span class="s2">(</span><span class="s0">null</span><span class="s2">, </span><span class="s1">args</span><span class="s2">.</span><span class="s1">concat</span><span class="s2">([</span><span class="s1">startTime</span><span class="s2">]))</span>
+    <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+      <span class="s4">// if we can't do this job yet, push it to the end of the queue</span>
+      <span class="s4">// and let the next iteration check again</span>
+      <span class="s1">fs</span><span class="s2">[</span><span class="s1">gracefulQueue</span><span class="s2">].</span><span class="s1">push</span><span class="s2">(</span><span class="s1">elem</span><span class="s2">)</span>
+    <span class="s2">}</span>
+  <span class="s2">}</span>
+
+  <span class="s4">// schedule our next run if one isn't already scheduled</span>
+  <span class="s0">if </span><span class="s2">(</span><span class="s1">retryTimer </span><span class="s2">=== </span><span class="s1">undefined</span><span class="s2">) {</span>
+    <span class="s1">retryTimer </span><span class="s2">= </span><span class="s1">setTimeout</span><span class="s2">(</span><span class="s1">retry</span><span class="s2">, </span><span class="s6">0</span><span class="s2">)</span>
+  <span class="s2">}</span>
+<span class="s2">}</span>
+</pre>
+</body>
+</html>

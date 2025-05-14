@@ -1,0 +1,533 @@
+<html>
+<head>
+<title>no-constant-binary-expression.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #cf8e6d;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-constant-binary-expression.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to flag constant comparisons and logical expressions that always/never short circuit</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Jordan Eldredge &lt;https://jordaneldredge.com&gt;</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">const </span><span class="s2">globals </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;globals&quot;</span><span class="s4">);</span>
+<span class="s5">const </span><span class="s4">{ </span><span class="s2">isNullLiteral</span><span class="s4">, </span><span class="s2">isConstant</span><span class="s4">, </span><span class="s2">isReferenceToGlobalVariable</span><span class="s4">, </span><span class="s2">isLogicalAssignmentOperator </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">const </span><span class="s2">NUMERIC_OR_STRING_BINARY_OPERATORS </span><span class="s4">= </span><span class="s5">new </span><span class="s2">Set</span><span class="s4">([</span><span class="s3">&quot;+&quot;</span><span class="s4">, </span><span class="s3">&quot;-&quot;</span><span class="s4">, </span><span class="s3">&quot;*&quot;</span><span class="s4">, </span><span class="s3">&quot;/&quot;</span><span class="s4">, </span><span class="s3">&quot;%&quot;</span><span class="s4">, </span><span class="s3">&quot;|&quot;</span><span class="s4">, </span><span class="s3">&quot;^&quot;</span><span class="s4">, </span><span class="s3">&quot;&amp;&quot;</span><span class="s4">, </span><span class="s3">&quot;**&quot;</span><span class="s4">, </span><span class="s3">&quot;&lt;&lt;&quot;</span><span class="s4">, </span><span class="s3">&quot;&gt;&gt;&quot;</span><span class="s4">, </span><span class="s3">&quot;&gt;&gt;&gt;&quot;</span><span class="s4">]);</span>
+
+<span class="s6">//------------------------------------------------------------------------------</span>
+<span class="s6">// Helpers</span>
+<span class="s6">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether or not a node is `null` or `undefined`. Similar to the one</span>
+ <span class="s0">* found in ast-utils.js, but this one correctly handles the edge case that</span>
+ <span class="s0">* `undefined` has been redefined.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope Scope in which the expression was found.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the node is a `null` or `undefined`.</span>
+ <span class="s0">* </span><span class="s1">@public</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">isNullOrUndefined</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s5">return </span><span class="s4">(</span>
+        <span class="s2">isNullLiteral</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) ||</span>
+        <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">)) ||</span>
+        <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;UnaryExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;void&quot;</span><span class="s4">)</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Test if an AST node has a statically knowable constant nullishness. Meaning,</span>
+ <span class="s0">* it will always resolve to a constant value of either: `null`, `undefined`</span>
+ <span class="s0">* or not `null` _or_ `undefined`. An expression that can vary between those</span>
+ <span class="s0">* three states at runtime would return `false`.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope The scope in which the node was found.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The AST node being tested.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} nonNullish if `true` then nullish values are not considered constant.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Does `node` have constant nullishness?</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">hasConstantNullishness</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">, </span><span class="s2">nonNullish</span><span class="s4">) {</span>
+    <span class="s5">if </span><span class="s4">(</span><span class="s2">nonNullish </span><span class="s4">&amp;&amp; </span><span class="s2">isNullOrUndefined</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">)) {</span>
+        <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s5">switch </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+        <span class="s5">case </span><span class="s3">&quot;ObjectExpression&quot;</span><span class="s4">: </span><span class="s6">// Objects are never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrayExpression&quot;</span><span class="s4">: </span><span class="s6">// Arrays are never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrowFunctionExpression&quot;</span><span class="s4">: </span><span class="s6">// Functions never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;FunctionExpression&quot;</span><span class="s4">: </span><span class="s6">// Functions are never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;ClassExpression&quot;</span><span class="s4">: </span><span class="s6">// Classes are never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;NewExpression&quot;</span><span class="s4">: </span><span class="s6">// Objects are never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;Literal&quot;</span><span class="s4">: </span><span class="s6">// Nullish, or non-nullish, literals never change</span>
+        <span class="s5">case </span><span class="s3">&quot;TemplateLiteral&quot;</span><span class="s4">: </span><span class="s6">// A string is never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;UpdateExpression&quot;</span><span class="s4">: </span><span class="s6">// Numbers are never nullish</span>
+        <span class="s5">case </span><span class="s3">&quot;BinaryExpression&quot;</span><span class="s4">: </span><span class="s6">// Numbers, strings, or booleans are never nullish</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;CallExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Identifier&quot;</span><span class="s4">) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s5">const </span><span class="s2">functionName </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+
+            <span class="s5">return </span><span class="s4">(</span><span class="s2">functionName </span><span class="s4">=== </span><span class="s3">&quot;Boolean&quot; </span><span class="s4">|| </span><span class="s2">functionName </span><span class="s4">=== </span><span class="s3">&quot;String&quot; </span><span class="s4">|| </span><span class="s2">functionName </span><span class="s4">=== </span><span class="s3">&quot;Number&quot;</span><span class="s4">) &amp;&amp;</span>
+                <span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;LogicalExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;??&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">hasConstantNullishness</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">, </span><span class="s5">true</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;AssignmentExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;=&quot;</span><span class="s4">) {</span>
+                <span class="s5">return </span><span class="s2">hasConstantNullishness</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">, </span><span class="s2">nonNullish</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * Handling short-circuiting assignment operators would require 
+             * walking the scope. We won't attempt that (for now...) / 
+             */</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">isLogicalAssignmentOperator</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator</span><span class="s4">)) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * The remaining assignment expressions all result in a numeric or 
+             * string (non-nullish) value: 
+             *   &quot;+=&quot;, &quot;-=&quot;, &quot;*=&quot;, &quot;/=&quot;, &quot;%=&quot;, &quot;&lt;&lt;=&quot;, &quot;&gt;&gt;=&quot;, &quot;&gt;&gt;&gt;=&quot;, &quot;|=&quot;, &quot;^=&quot;, &quot;&amp;=&quot; 
+             */</span>
+
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;UnaryExpression&quot;</span><span class="s4">:</span>
+
+            <span class="s6">/* 
+             * &quot;void&quot; Always returns `undefined` 
+             * &quot;typeof&quot; All types are strings, and thus non-nullish 
+             * &quot;!&quot; Boolean is never nullish 
+             * &quot;delete&quot; Returns a boolean, which is never nullish 
+             * Math operators always return numbers or strings, neither of which 
+             * are non-nullish &quot;+&quot;, &quot;-&quot;, &quot;~&quot; 
+             */</span>
+
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;SequenceExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">const </span><span class="s2">last </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">[</span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+
+            <span class="s5">return </span><span class="s2">hasConstantNullishness</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">last</span><span class="s4">, </span><span class="s2">nonNullish</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;Identifier&quot;</span><span class="s4">:</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">);</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXElement&quot;</span><span class="s4">: </span><span class="s6">// ESLint has a policy of not assuming any specific JSX behavior.</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXFragment&quot;</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">default</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Test if an AST node is a boolean value that never changes. Specifically we</span>
+ <span class="s0">* test for:</span>
+ <span class="s0">* 1. Literal booleans (`true` or `false`)</span>
+ <span class="s0">* 2. Unary `!` expressions with a constant value</span>
+ <span class="s0">* 3. Constant booleans created via the `Boolean` global function</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope The scope in which the node was found.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to test</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Is `node` guaranteed to be a boolean?</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">isStaticBoolean</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s5">switch </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+        <span class="s5">case </span><span class="s3">&quot;Literal&quot;</span><span class="s4">:</span>
+            <span class="s5">return typeof </span><span class="s2">node</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;CallExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;Boolean&quot; </span><span class="s4">&amp;&amp;</span>
+              <span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">) &amp;&amp;</span>
+              <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0 </span><span class="s4">|| </span><span class="s2">isConstant</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">0</span><span class="s4">], </span><span class="s5">true</span><span class="s4">));</span>
+        <span class="s5">case </span><span class="s3">&quot;UnaryExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isConstant</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">argument</span><span class="s4">, </span><span class="s5">true</span><span class="s4">);</span>
+        <span class="s5">default</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+
+<span class="s0">/**</span>
+ <span class="s0">* Test if an AST node will always give the same result when compared to a</span>
+ <span class="s0">* boolean value. Note that comparison to boolean values is different than</span>
+ <span class="s0">* truthiness.</span>
+ <span class="s0">* https://262.ecma-international.org/5.1/#sec-11.9.3</span>
+ <span class="s0">*</span>
+ <span class="s0">* Javascript `==` operator works by converting the boolean to `1` (true) or</span>
+ <span class="s0">* `+0` (false) and then checks the values `==` equality to that number.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope The scope in which node was found.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to test.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Will `node` always coerce to the same boolean value?</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">hasConstantLooseBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s5">switch </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+        <span class="s5">case </span><span class="s3">&quot;ObjectExpression&quot;</span><span class="s4">:</span>
+        <span class="s5">case </span><span class="s3">&quot;ClassExpression&quot;</span><span class="s4">:</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* In theory objects like:</span>
+             <span class="s0">*</span>
+             <span class="s0">* `{toString: () =&gt; a}`</span>
+             <span class="s0">* `{valueOf: () =&gt; a}`</span>
+             <span class="s0">*</span>
+             <span class="s0">* Or a classes like:</span>
+             <span class="s0">*</span>
+             <span class="s0">* `class { static toString() { return a } }`</span>
+             <span class="s0">* `class { static valueOf() { return a } }`</span>
+             <span class="s0">*</span>
+             <span class="s0">* Are not constant verifiably when `inBooleanPosition` is</span>
+             <span class="s0">* false, but it's an edge case we've opted not to handle.</span>
+             <span class="s0">*/</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrayExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">const </span><span class="s2">nonSpreadElements </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">elements</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">e </span><span class="s4">=&gt;</span>
+
+                <span class="s6">// Elements can be `null` in sparse arrays: `[,,]`;</span>
+                <span class="s2">e </span><span class="s4">!== </span><span class="s5">null </span><span class="s4">&amp;&amp; </span><span class="s2">e</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;SpreadElement&quot;</span><span class="s4">);</span>
+
+
+            <span class="s6">/* 
+             * Possible future direction if needed: We could check if the 
+             * single value would result in variable boolean comparison. 
+             * For now we will err on the side of caution since `[x]` could 
+             * evaluate to `[0]` or `[1]`. 
+             */</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">elements</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0 </span><span class="s4">|| </span><span class="s2">nonSpreadElements</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">1</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrowFunctionExpression&quot;</span><span class="s4">:</span>
+        <span class="s5">case </span><span class="s3">&quot;FunctionExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;UnaryExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;void&quot; </span><span class="s4">|| </span><span class="s6">// Always returns `undefined`</span>
+                <span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;typeof&quot; </span><span class="s6">// All `typeof` strings, when coerced to number, are not 0 or 1.</span>
+            <span class="s4">) {</span>
+                <span class="s5">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!&quot;</span><span class="s4">) {</span>
+                <span class="s5">return </span><span class="s2">isConstant</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">argument</span><span class="s4">, </span><span class="s5">true</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * We won't try to reason about +, -, ~, or delete 
+             * In theory, for the mathematical operators, we could look at the 
+             * argument and try to determine if it coerces to a constant numeric 
+             * value. 
+             */</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;NewExpression&quot;</span><span class="s4">: </span><span class="s6">// Objects might have custom `.valueOf` or `.toString`.</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;CallExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp;</span>
+                <span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;Boolean&quot; </span><span class="s4">&amp;&amp;</span>
+                <span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">)</span>
+            <span class="s4">) {</span>
+                <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0 </span><span class="s4">|| </span><span class="s2">isConstant</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">0</span><span class="s4">], </span><span class="s5">true</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;Literal&quot;</span><span class="s4">: </span><span class="s6">// True or false, literals never change</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;Identifier&quot;</span><span class="s4">:</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">);</span>
+        <span class="s5">case </span><span class="s3">&quot;TemplateLiteral&quot;</span><span class="s4">:</span>
+
+            <span class="s6">/* 
+             * In theory we could try to check if the quasi are sufficient to 
+             * prove that the expression will always be true, but it would be 
+             * tricky to get right. For example: `000.${foo}000` 
+             */</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;AssignmentExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;=&quot;</span><span class="s4">) {</span>
+                <span class="s5">return </span><span class="s2">hasConstantLooseBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * Handling short-circuiting assignment operators would require 
+             * walking the scope. We won't attempt that (for now...) 
+             * 
+             * The remaining assignment expressions all result in a numeric or 
+             * string (non-nullish) values which could be truthy or falsy: 
+             *   &quot;+=&quot;, &quot;-=&quot;, &quot;*=&quot;, &quot;/=&quot;, &quot;%=&quot;, &quot;&lt;&lt;=&quot;, &quot;&gt;&gt;=&quot;, &quot;&gt;&gt;&gt;=&quot;, &quot;|=&quot;, &quot;^=&quot;, &quot;&amp;=&quot; 
+             */</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;SequenceExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">const </span><span class="s2">last </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">[</span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+
+            <span class="s5">return </span><span class="s2">hasConstantLooseBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">last</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXElement&quot;</span><span class="s4">: </span><span class="s6">// ESLint has a policy of not assuming any specific JSX behavior.</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXFragment&quot;</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">default</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+
+<span class="s0">/**</span>
+ <span class="s0">* Test if an AST node will always give the same result when _strictly_ compared</span>
+ <span class="s0">* to a boolean value. This can happen if the expression can never be boolean, or</span>
+ <span class="s0">* if it is always the same boolean value.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope The scope in which the node was found.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to test</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Will `node` always give the same result when compared to a</span>
+ <span class="s0">* static boolean value?</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">hasConstantStrictBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s5">switch </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+        <span class="s5">case </span><span class="s3">&quot;ObjectExpression&quot;</span><span class="s4">: </span><span class="s6">// Objects are not booleans</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrayExpression&quot;</span><span class="s4">: </span><span class="s6">// Arrays are not booleans</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrowFunctionExpression&quot;</span><span class="s4">: </span><span class="s6">// Functions are not booleans</span>
+        <span class="s5">case </span><span class="s3">&quot;FunctionExpression&quot;</span><span class="s4">:</span>
+        <span class="s5">case </span><span class="s3">&quot;ClassExpression&quot;</span><span class="s4">: </span><span class="s6">// Classes are not booleans</span>
+        <span class="s5">case </span><span class="s3">&quot;NewExpression&quot;</span><span class="s4">: </span><span class="s6">// Objects are not booleans</span>
+        <span class="s5">case </span><span class="s3">&quot;TemplateLiteral&quot;</span><span class="s4">: </span><span class="s6">// Strings are not booleans</span>
+        <span class="s5">case </span><span class="s3">&quot;Literal&quot;</span><span class="s4">: </span><span class="s6">// True, false, or not boolean, literals never change.</span>
+        <span class="s5">case </span><span class="s3">&quot;UpdateExpression&quot;</span><span class="s4">: </span><span class="s6">// Numbers are not booleans</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;BinaryExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">return </span><span class="s2">NUMERIC_OR_STRING_BINARY_OPERATORS</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator</span><span class="s4">);</span>
+        <span class="s5">case </span><span class="s3">&quot;UnaryExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;delete&quot;</span><span class="s4">) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!&quot;</span><span class="s4">) {</span>
+                <span class="s5">return </span><span class="s2">isConstant</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">argument</span><span class="s4">, </span><span class="s5">true</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * The remaining operators return either strings or numbers, neither 
+             * of which are boolean. 
+             */</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;SequenceExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">const </span><span class="s2">last </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">[</span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+
+            <span class="s5">return </span><span class="s2">hasConstantStrictBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">last</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;Identifier&quot;</span><span class="s4">:</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">);</span>
+        <span class="s5">case </span><span class="s3">&quot;AssignmentExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;=&quot;</span><span class="s4">) {</span>
+                <span class="s5">return </span><span class="s2">hasConstantStrictBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * Handling short-circuiting assignment operators would require 
+             * walking the scope. We won't attempt that (for now...) 
+             */</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">isLogicalAssignmentOperator</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator</span><span class="s4">)) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * The remaining assignment expressions all result in either a number 
+             * or a string, neither of which can ever be boolean. 
+             */</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;CallExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Identifier&quot;</span><span class="s4">) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s5">const </span><span class="s2">functionName </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+
+            <span class="s5">if </span><span class="s4">(</span>
+                <span class="s4">(</span><span class="s2">functionName </span><span class="s4">=== </span><span class="s3">&quot;String&quot; </span><span class="s4">|| </span><span class="s2">functionName </span><span class="s4">=== </span><span class="s3">&quot;Number&quot;</span><span class="s4">) &amp;&amp;</span>
+                <span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">)</span>
+            <span class="s4">) {</span>
+                <span class="s5">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">functionName </span><span class="s4">=== </span><span class="s3">&quot;Boolean&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">)) {</span>
+                <span class="s5">return </span><span class="s4">(</span>
+                    <span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0 </span><span class="s4">|| </span><span class="s2">isConstant</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">0</span><span class="s4">], </span><span class="s5">true</span><span class="s4">));</span>
+            <span class="s4">}</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXElement&quot;</span><span class="s4">: </span><span class="s6">// ESLint has a policy of not assuming any specific JSX behavior.</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXFragment&quot;</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">default</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Test if an AST node will always result in a newly constructed object</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope The scope in which the node was found.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to test</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Will `node` always be new?</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s5">switch </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+        <span class="s5">case </span><span class="s3">&quot;ObjectExpression&quot;</span><span class="s4">:</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrayExpression&quot;</span><span class="s4">:</span>
+        <span class="s5">case </span><span class="s3">&quot;ArrowFunctionExpression&quot;</span><span class="s4">:</span>
+        <span class="s5">case </span><span class="s3">&quot;FunctionExpression&quot;</span><span class="s4">:</span>
+        <span class="s5">case </span><span class="s3">&quot;ClassExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">return true</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;NewExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Identifier&quot;</span><span class="s4">) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * All the built-in constructors are always new, but 
+             * user-defined constructors could return a sentinel 
+             * object. 
+             * 
+             * Catching these is especially useful for primitive constructors 
+             * which return boxed values, a surprising gotcha' in JavaScript. 
+             */</span>
+            <span class="s5">return </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">hasOwnProperty</span><span class="s4">.</span><span class="s2">call</span><span class="s4">(</span><span class="s2">globals</span><span class="s4">.</span><span class="s2">builtin</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">name</span><span class="s4">) &amp;&amp;</span>
+              <span class="s2">isReferenceToGlobalVariable</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;Literal&quot;</span><span class="s4">:</span>
+
+            <span class="s6">// Regular expressions are objects, and thus always new</span>
+            <span class="s5">return typeof </span><span class="s2">node</span><span class="s4">.</span><span class="s2">regex </span><span class="s4">=== </span><span class="s3">&quot;object&quot;</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;SequenceExpression&quot;</span><span class="s4">: {</span>
+            <span class="s5">const </span><span class="s2">last </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">[</span><span class="s2">node</span><span class="s4">.</span><span class="s2">expressions</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+
+            <span class="s5">return </span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">last</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s5">case </span><span class="s3">&quot;AssignmentExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;=&quot;</span><span class="s4">) {</span>
+                <span class="s5">return </span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">case </span><span class="s3">&quot;ConditionalExpression&quot;</span><span class="s4">:</span>
+            <span class="s5">return </span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">consequent</span><span class="s4">) &amp;&amp; </span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">alternate</span><span class="s4">);</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXElement&quot;</span><span class="s4">: </span><span class="s6">// ESLint has a policy of not assuming any specific JSX behavior.</span>
+        <span class="s5">case </span><span class="s3">&quot;JSXFragment&quot;</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+        <span class="s5">default</span><span class="s4">:</span>
+            <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks if one operand will cause the result to be constant.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope Scope in which the expression was found.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} a One side of the expression</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} b The other side of the expression</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} operator The binary expression operator</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ASTNode | null} The node which will cause the expression to have a constant result.</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">findBinaryExpressionConstantOperand</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">a</span><span class="s4">, </span><span class="s2">b</span><span class="s4">, </span><span class="s2">operator</span><span class="s4">) {</span>
+    <span class="s5">if </span><span class="s4">(</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;==&quot; </span><span class="s4">|| </span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!=&quot;</span><span class="s4">) {</span>
+        <span class="s5">if </span><span class="s4">(</span>
+            <span class="s4">(</span><span class="s2">isNullOrUndefined</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">a</span><span class="s4">) &amp;&amp; </span><span class="s2">hasConstantNullishness</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">b</span><span class="s4">, </span><span class="s5">false</span><span class="s4">)) ||</span>
+            <span class="s4">(</span><span class="s2">isStaticBoolean</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">a</span><span class="s4">) &amp;&amp; </span><span class="s2">hasConstantLooseBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">b</span><span class="s4">))</span>
+        <span class="s4">) {</span>
+            <span class="s5">return </span><span class="s2">b</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">} </span><span class="s5">else if </span><span class="s4">(</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;===&quot; </span><span class="s4">|| </span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!==&quot;</span><span class="s4">) {</span>
+        <span class="s5">if </span><span class="s4">(</span>
+            <span class="s4">(</span><span class="s2">isNullOrUndefined</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">a</span><span class="s4">) &amp;&amp; </span><span class="s2">hasConstantNullishness</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">b</span><span class="s4">, </span><span class="s5">false</span><span class="s4">)) ||</span>
+            <span class="s4">(</span><span class="s2">isStaticBoolean</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">a</span><span class="s4">) &amp;&amp; </span><span class="s2">hasConstantStrictBooleanComparison</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">b</span><span class="s4">))</span>
+        <span class="s4">) {</span>
+            <span class="s5">return </span><span class="s2">b</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s5">return null</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s6">//------------------------------------------------------------------------------</span>
+<span class="s6">// Rule Definition</span>
+<span class="s6">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;problem&quot;</span><span class="s4">,</span>
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow expressions where the operation doesn't affect the value&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s5">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-constant-binary-expression&quot;</span>
+        <span class="s4">},</span>
+        <span class="s2">schema</span><span class="s4">: [],</span>
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">constantBinaryOperand</span><span class="s4">: </span><span class="s3">&quot;Unexpected constant binary expression. Compares constantly with the {{otherSide}}-hand side of the `{{operator}}`.&quot;</span><span class="s4">,</span>
+            <span class="s2">constantShortCircuit</span><span class="s4">: </span><span class="s3">&quot;Unexpected constant {{property}} on the left-hand side of a `{{operator}}` expression.&quot;</span><span class="s4">,</span>
+            <span class="s2">alwaysNew</span><span class="s4">: </span><span class="s3">&quot;Unexpected comparison to newly constructed object. These two values can never be equal.&quot;</span><span class="s4">,</span>
+            <span class="s2">bothAlwaysNew</span><span class="s4">: </span><span class="s3">&quot;Unexpected comparison of two newly constructed objects. These two values can never be equal.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s5">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s5">return </span><span class="s4">{</span>
+            <span class="s2">LogicalExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s5">const </span><span class="s4">{ </span><span class="s2">operator</span><span class="s4">, </span><span class="s2">left </span><span class="s4">} = </span><span class="s2">node</span><span class="s4">;</span>
+                <span class="s5">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+
+                <span class="s5">if </span><span class="s4">((</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;&amp;&amp;&quot; </span><span class="s4">|| </span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;||&quot;</span><span class="s4">) &amp;&amp; </span><span class="s2">isConstant</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">left</span><span class="s4">, </span><span class="s5">true</span><span class="s4">)) {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">left</span><span class="s4">, </span><span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;constantShortCircuit&quot;</span><span class="s4">, </span><span class="s2">data</span><span class="s4">: { </span><span class="s2">property</span><span class="s4">: </span><span class="s3">&quot;truthiness&quot;</span><span class="s4">, </span><span class="s2">operator </span><span class="s4">} });</span>
+                <span class="s4">} </span><span class="s5">else if </span><span class="s4">(</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;??&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">hasConstantNullishness</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">left</span><span class="s4">, </span><span class="s5">false</span><span class="s4">)) {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">left</span><span class="s4">, </span><span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;constantShortCircuit&quot;</span><span class="s4">, </span><span class="s2">data</span><span class="s4">: { </span><span class="s2">property</span><span class="s4">: </span><span class="s3">&quot;nullishness&quot;</span><span class="s4">, </span><span class="s2">operator </span><span class="s4">} });</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+            <span class="s2">BinaryExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s5">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s5">const </span><span class="s4">{ </span><span class="s2">right</span><span class="s4">, </span><span class="s2">left</span><span class="s4">, </span><span class="s2">operator </span><span class="s4">} = </span><span class="s2">node</span><span class="s4">;</span>
+                <span class="s5">const </span><span class="s2">rightConstantOperand </span><span class="s4">= </span><span class="s2">findBinaryExpressionConstantOperand</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">left</span><span class="s4">, </span><span class="s2">right</span><span class="s4">, </span><span class="s2">operator</span><span class="s4">);</span>
+                <span class="s5">const </span><span class="s2">leftConstantOperand </span><span class="s4">= </span><span class="s2">findBinaryExpressionConstantOperand</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">right</span><span class="s4">, </span><span class="s2">left</span><span class="s4">, </span><span class="s2">operator</span><span class="s4">);</span>
+
+                <span class="s5">if </span><span class="s4">(</span><span class="s2">rightConstantOperand</span><span class="s4">) {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">rightConstantOperand</span><span class="s4">, </span><span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;constantBinaryOperand&quot;</span><span class="s4">, </span><span class="s2">data</span><span class="s4">: { </span><span class="s2">operator</span><span class="s4">, </span><span class="s2">otherSide</span><span class="s4">: </span><span class="s3">&quot;left&quot; </span><span class="s4">} });</span>
+                <span class="s4">} </span><span class="s5">else if </span><span class="s4">(</span><span class="s2">leftConstantOperand</span><span class="s4">) {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">leftConstantOperand</span><span class="s4">, </span><span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;constantBinaryOperand&quot;</span><span class="s4">, </span><span class="s2">data</span><span class="s4">: { </span><span class="s2">operator</span><span class="s4">, </span><span class="s2">otherSide</span><span class="s4">: </span><span class="s3">&quot;right&quot; </span><span class="s4">} });</span>
+                <span class="s4">} </span><span class="s5">else if </span><span class="s4">(</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;===&quot; </span><span class="s4">|| </span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!==&quot;</span><span class="s4">) {</span>
+                    <span class="s5">if </span><span class="s4">(</span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">left</span><span class="s4">)) {</span>
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">left</span><span class="s4">, </span><span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;alwaysNew&quot; </span><span class="s4">});</span>
+                    <span class="s4">} </span><span class="s5">else if </span><span class="s4">(</span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">right</span><span class="s4">)) {</span>
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">right</span><span class="s4">, </span><span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;alwaysNew&quot; </span><span class="s4">});</span>
+                    <span class="s4">}</span>
+                <span class="s4">} </span><span class="s5">else if </span><span class="s4">(</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;==&quot; </span><span class="s4">|| </span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!=&quot;</span><span class="s4">) {</span>
+
+                    <span class="s6">/* 
+                     * If both sides are &quot;new&quot;, then both sides are objects and 
+                     * therefore they will be compared by reference even with `==` 
+                     * equality. 
+                     */</span>
+                    <span class="s5">if </span><span class="s4">(</span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">left</span><span class="s4">) &amp;&amp; </span><span class="s2">isAlwaysNew</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">right</span><span class="s4">)) {</span>
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">left</span><span class="s4">, </span><span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;bothAlwaysNew&quot; </span><span class="s4">});</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+
+            <span class="s4">}</span>
+
+            <span class="s6">/* 
+             * In theory we could handle short-circuiting assignment operators, 
+             * for some constant values, but that would require walking the 
+             * scope to find the value of the variable being assigned. This is 
+             * dependant on https://github.com/eslint/eslint/issues/13776 
+             * 
+             * AssignmentExpression() {}, 
+             */</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

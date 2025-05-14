@@ -1,0 +1,371 @@
+<html>
+<head>
+<title>FlagDependencyUsagePlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+FlagDependencyUsagePlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">Dependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Dependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">UsageState </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ExportsInfo&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleGraphConnection </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleGraphConnection&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">STAGE_DEFAULT </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./OptimizationStages&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ArrayQueue </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/ArrayQueue&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">TupleQueue </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/TupleQueue&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">getEntryRuntime</span><span class="s3">, </span><span class="s1">mergeRuntimeOwned </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/runtime&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGroup&quot;)} ChunkGroup */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./DependenciesBlock&quot;)} DependenciesBlock */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;).ReferencedExport} ReferencedExport */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ExportsInfo&quot;)} ExportsInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">NO_EXPORTS_REFERENCED</span><span class="s3">, </span><span class="s1">EXPORTS_OBJECT_REFERENCED </span><span class="s3">} = </span><span class="s1">Dependency</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;FlagDependencyUsagePlugin&quot;</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">PLUGIN_LOGGER_NAME </span><span class="s3">= </span><span class="s2">`webpack.</span><span class="s1">$</span><span class="s3">{</span><span class="s1">PLUGIN_NAME</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">FlagDependencyUsagePlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} global do a global analysis instead of per runtime</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">global</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">global </span><span class="s3">= </span><span class="s1">global</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">optimizeDependencies</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+				<span class="s3">{ </span><span class="s1">name</span><span class="s3">: </span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">stage</span><span class="s3">: </span><span class="s1">STAGE_DEFAULT </span><span class="s3">},</span>
+				<span class="s1">modules </span><span class="s3">=&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleMemCaches</span><span class="s3">) {</span>
+						<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+							<span class="s2">&quot;optimization.usedExports can't be used with cacheUnaffected as export usage is a global effect&quot;</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+
+					<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s1">PLUGIN_LOGGER_NAME</span><span class="s3">);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;ExportsInfo, Module&gt;} */</span>
+					<span class="s4">const </span><span class="s1">exportInfoToModuleMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TupleQueue&lt;Module, RuntimeSpec&gt;} */</span>
+					<span class="s4">const </span><span class="s1">queue </span><span class="s3">= </span><span class="s4">new </span><span class="s1">TupleQueue</span><span class="s3">();</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module module to process</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(string[] | ReferencedExport)[]} usedExports list of used exports</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime part of which runtime</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} forceSideEffects always apply side effects</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">processReferencedModule </span><span class="s3">= (</span>
+						<span class="s1">module</span><span class="s3">,</span>
+						<span class="s1">usedExports</span><span class="s3">,</span>
+						<span class="s1">runtime</span><span class="s3">,</span>
+						<span class="s1">forceSideEffects</span>
+					<span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">usedExports</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildMeta </span><span class="s3">|| !</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildMeta</span><span class="s3">.</span><span class="s1">exportsType</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setUsedWithoutInfo</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)) {</span>
+									<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s4">return</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">usedExportInfo of usedExports</span><span class="s3">) {</span>
+								<span class="s4">let </span><span class="s1">usedExport</span><span class="s3">;</span>
+								<span class="s4">let </span><span class="s1">canMangle </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">usedExportInfo</span><span class="s3">)) {</span>
+									<span class="s1">usedExport </span><span class="s3">= </span><span class="s1">usedExportInfo</span><span class="s3">;</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">usedExport </span><span class="s3">= </span><span class="s1">usedExportInfo</span><span class="s3">.</span><span class="s1">name</span><span class="s3">;</span>
+									<span class="s1">canMangle </span><span class="s3">= </span><span class="s1">usedExportInfo</span><span class="s3">.</span><span class="s1">canMangle </span><span class="s3">!== </span><span class="s4">false</span><span class="s3">;</span>
+								<span class="s3">}</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">usedExport</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setUsedInUnknownWay</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)) {</span>
+										<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s4">let </span><span class="s1">currentExportsInfo </span><span class="s3">= </span><span class="s1">exportsInfo</span><span class="s3">;</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">usedExport</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+										<span class="s4">const </span><span class="s1">exportInfo </span><span class="s3">= </span><span class="s1">currentExportsInfo</span><span class="s3">.</span><span class="s1">getExportInfo</span><span class="s3">(</span>
+											<span class="s1">usedExport</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]</span>
+										<span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">canMangle </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+											<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">canMangleUse </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+										<span class="s3">}</span>
+										<span class="s4">const </span><span class="s1">lastOne </span><span class="s3">= </span><span class="s1">i </span><span class="s3">=== </span><span class="s1">usedExport</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s7">1</span><span class="s3">;</span>
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">lastOne</span><span class="s3">) {</span>
+											<span class="s4">const </span><span class="s1">nestedInfo </span><span class="s3">= </span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">getNestedExportsInfo</span><span class="s3">();</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">nestedInfo</span><span class="s3">) {</span>
+												<span class="s4">if </span><span class="s3">(</span>
+													<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">setUsedConditionally</span><span class="s3">(</span>
+														<span class="s1">used </span><span class="s3">=&gt; </span><span class="s1">used </span><span class="s3">=== </span><span class="s1">UsageState</span><span class="s3">.</span><span class="s1">Unused</span><span class="s3">,</span>
+														<span class="s1">UsageState</span><span class="s3">.</span><span class="s1">OnlyPropertiesUsed</span><span class="s3">,</span>
+														<span class="s1">runtime</span>
+													<span class="s3">)</span>
+												<span class="s3">) {</span>
+													<span class="s4">const </span><span class="s1">currentModule </span><span class="s3">=</span>
+														<span class="s1">currentExportsInfo </span><span class="s3">=== </span><span class="s1">exportsInfo</span>
+															<span class="s3">? </span><span class="s1">module</span>
+															<span class="s3">: </span><span class="s1">exportInfoToModuleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">currentExportsInfo</span><span class="s3">);</span>
+													<span class="s4">if </span><span class="s3">(</span><span class="s1">currentModule</span><span class="s3">) {</span>
+														<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">currentModule</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+													<span class="s3">}</span>
+												<span class="s3">}</span>
+												<span class="s1">currentExportsInfo </span><span class="s3">= </span><span class="s1">nestedInfo</span><span class="s3">;</span>
+												<span class="s4">continue</span><span class="s3">;</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+										<span class="s4">if </span><span class="s3">(</span>
+											<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">setUsedConditionally</span><span class="s3">(</span>
+												<span class="s1">v </span><span class="s3">=&gt; </span><span class="s1">v </span><span class="s3">!== </span><span class="s1">UsageState</span><span class="s3">.</span><span class="s1">Used</span><span class="s3">,</span>
+												<span class="s1">UsageState</span><span class="s3">.</span><span class="s1">Used</span><span class="s3">,</span>
+												<span class="s1">runtime</span>
+											<span class="s3">)</span>
+										<span class="s3">) {</span>
+											<span class="s4">const </span><span class="s1">currentModule </span><span class="s3">=</span>
+												<span class="s1">currentExportsInfo </span><span class="s3">=== </span><span class="s1">exportsInfo</span>
+													<span class="s3">? </span><span class="s1">module</span>
+													<span class="s3">: </span><span class="s1">exportInfoToModuleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">currentExportsInfo</span><span class="s3">);</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">currentModule</span><span class="s3">) {</span>
+												<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">currentModule</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+										<span class="s4">break</span><span class="s3">;</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s0">// for a module without side effects we stop tracking usage here when no export is used</span>
+							<span class="s0">// This module won't be evaluated in this case</span>
+							<span class="s0">// TODO webpack 6 remove this check</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s3">!</span><span class="s1">forceSideEffects </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">module</span><span class="s3">.</span><span class="s1">factoryMeta </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">module</span><span class="s3">.</span><span class="s1">factoryMeta</span><span class="s3">.</span><span class="s1">sideEffectFree</span>
+							<span class="s3">) {</span>
+								<span class="s4">return</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setUsedForSideEffectsOnly</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)) {</span>
+								<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">};</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependenciesBlock} module the module</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime part of which runtime</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} forceSideEffects always apply side effects</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">processModule </span><span class="s3">= (</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">forceSideEffects</span><span class="s3">) =&gt; {</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, (string[] | ReferencedExport)[] | Map&lt;string, string[] | ReferencedExport&gt;&gt;} */</span>
+						<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ArrayQueue&lt;DependenciesBlock&gt;} */</span>
+						<span class="s4">const </span><span class="s1">queue </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ArrayQueue</span><span class="s3">();</span>
+						<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s4">for </span><span class="s3">(;;) {</span>
+							<span class="s4">const </span><span class="s1">block </span><span class="s3">= </span><span class="s1">queue</span><span class="s3">.</span><span class="s1">dequeue</span><span class="s3">();</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">block </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">break</span><span class="s3">;</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">b of block</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s3">!</span><span class="s4">this</span><span class="s3">.</span><span class="s1">global </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">.</span><span class="s1">entryOptions</span>
+								<span class="s3">) {</span>
+									<span class="s1">processModule</span><span class="s3">(</span>
+										<span class="s1">b</span><span class="s3">,</span>
+										<span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">.</span><span class="s1">entryOptions</span><span class="s3">.</span><span class="s1">runtime </span><span class="s3">|| </span><span class="s1">undefined</span><span class="s3">,</span>
+										<span class="s4">true</span>
+									<span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of block</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">connection </span><span class="s3">|| !</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module</span><span class="s3">) {</span>
+									<span class="s4">continue</span><span class="s3">;</span>
+								<span class="s3">}</span>
+								<span class="s4">const </span><span class="s1">activeState </span><span class="s3">= </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">getActiveState</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">activeState </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s3">{ </span><span class="s1">module </span><span class="s3">} = </span><span class="s1">connection</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">activeState </span><span class="s3">=== </span><span class="s1">ModuleGraphConnection</span><span class="s3">.</span><span class="s1">TRANSITIVE_ONLY</span><span class="s3">) {</span>
+									<span class="s1">processModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">, </span><span class="s4">false</span><span class="s3">);</span>
+									<span class="s4">continue</span><span class="s3">;</span>
+								<span class="s3">}</span>
+								<span class="s4">const </span><span class="s1">oldReferencedExports </span><span class="s3">= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">oldReferencedExports </span><span class="s3">=== </span><span class="s1">EXPORTS_OBJECT_REFERENCED</span><span class="s3">) {</span>
+									<span class="s4">continue</span><span class="s3">;</span>
+								<span class="s3">}</span>
+								<span class="s4">const </span><span class="s1">referencedExports </span><span class="s3">=</span>
+									<span class="s1">compilation</span><span class="s3">.</span><span class="s1">getDependencyReferencedExports</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s1">oldReferencedExports </span><span class="s3">=== </span><span class="s1">undefined </span><span class="s3">||</span>
+									<span class="s1">oldReferencedExports </span><span class="s3">=== </span><span class="s1">NO_EXPORTS_REFERENCED </span><span class="s3">||</span>
+									<span class="s1">referencedExports </span><span class="s3">=== </span><span class="s1">EXPORTS_OBJECT_REFERENCED</span>
+								<span class="s3">) {</span>
+									<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">referencedExports</span><span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+									<span class="s1">oldReferencedExports </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">referencedExports </span><span class="s3">=== </span><span class="s1">NO_EXPORTS_REFERENCED</span>
+								<span class="s3">) {</span>
+									<span class="s4">continue</span><span class="s3">;</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s4">let </span><span class="s1">exportsMap</span><span class="s3">;</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">oldReferencedExports</span><span class="s3">)) {</span>
+										<span class="s1">exportsMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+										<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of oldReferencedExports</span><span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">item</span><span class="s3">)) {</span>
+												<span class="s1">exportsMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">item</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">), </span><span class="s1">item</span><span class="s3">);</span>
+											<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+												<span class="s1">exportsMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">item</span><span class="s3">.</span><span class="s1">name</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">), </span><span class="s1">item</span><span class="s3">);</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+										<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">exportsMap</span><span class="s3">);</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s1">exportsMap </span><span class="s3">= </span><span class="s1">oldReferencedExports</span><span class="s3">;</span>
+									<span class="s3">}</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of referencedExports</span><span class="s3">) {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">item</span><span class="s3">)) {</span>
+											<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s1">item</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">);</span>
+											<span class="s4">const </span><span class="s1">oldItem </span><span class="s3">= </span><span class="s1">exportsMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">oldItem </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+												<span class="s1">exportsMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">item</span><span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s0">// if oldItem is already an array we have to do nothing</span>
+											<span class="s0">// if oldItem is an ReferencedExport object, we don't have to do anything</span>
+											<span class="s0">// as canMangle defaults to true for arrays</span>
+										<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+											<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s1">item</span><span class="s3">.</span><span class="s1">name</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">);</span>
+											<span class="s4">const </span><span class="s1">oldItem </span><span class="s3">= </span><span class="s1">exportsMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">oldItem </span><span class="s3">=== </span><span class="s1">undefined </span><span class="s3">|| </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">oldItem</span><span class="s3">)) {</span>
+												<span class="s1">exportsMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">item</span><span class="s3">);</span>
+											<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+												<span class="s1">exportsMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, {</span>
+													<span class="s1">name</span><span class="s3">: </span><span class="s1">item</span><span class="s3">.</span><span class="s1">name</span><span class="s3">,</span>
+													<span class="s1">canMangle</span><span class="s3">: </span><span class="s1">item</span><span class="s3">.</span><span class="s1">canMangle </span><span class="s3">&amp;&amp; </span><span class="s1">oldItem</span><span class="s3">.</span><span class="s1">canMangle</span>
+												<span class="s3">});</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">module</span><span class="s3">, </span><span class="s1">referencedExports</span><span class="s3">] </span><span class="s1">of map</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">referencedExports</span><span class="s3">)) {</span>
+								<span class="s1">processReferencedModule</span><span class="s3">(</span>
+									<span class="s1">module</span><span class="s3">,</span>
+									<span class="s1">referencedExports</span><span class="s3">,</span>
+									<span class="s1">runtime</span><span class="s3">,</span>
+									<span class="s1">forceSideEffects</span>
+								<span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s1">processReferencedModule</span><span class="s3">(</span>
+									<span class="s1">module</span><span class="s3">,</span>
+									<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">referencedExports</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()),</span>
+									<span class="s1">runtime</span><span class="s3">,</span>
+									<span class="s1">forceSideEffects</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">};</span>
+
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;initialize exports usage&quot;</span><span class="s3">);</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s1">exportInfoToModuleMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">exportsInfo</span><span class="s3">, </span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setHasUseInfo</span><span class="s3">();</span>
+					<span class="s3">}</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;initialize exports usage&quot;</span><span class="s3">);</span>
+
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;trace exports usage in graph&quot;</span><span class="s3">);</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dep dependency</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime runtime</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">processEntryDependency </span><span class="s3">= (</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+							<span class="s1">processReferencedModule</span><span class="s3">(</span>
+								<span class="s1">module</span><span class="s3">,</span>
+								<span class="s1">NO_EXPORTS_REFERENCED</span><span class="s3">,</span>
+								<span class="s1">runtime</span><span class="s3">,</span>
+								<span class="s4">true</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">};</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{RuntimeSpec} */</span>
+					<span class="s4">let </span><span class="s1">globalRuntime</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span>
+						<span class="s1">entryName</span><span class="s3">,</span>
+						<span class="s3">{ </span><span class="s1">dependencies</span><span class="s3">: </span><span class="s1">deps</span><span class="s3">, </span><span class="s1">includeDependencies</span><span class="s3">: </span><span class="s1">includeDeps</span><span class="s3">, </span><span class="s1">options </span><span class="s3">}</span>
+					<span class="s3">] </span><span class="s1">of compilation</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">runtime </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">global</span>
+							<span class="s3">? </span><span class="s1">undefined</span>
+							<span class="s3">: </span><span class="s1">getEntryRuntime</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">entryName</span><span class="s3">, </span><span class="s1">options</span><span class="s3">);</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of deps</span><span class="s3">) {</span>
+							<span class="s1">processEntryDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of includeDeps</span><span class="s3">) {</span>
+							<span class="s1">processEntryDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s1">globalRuntime </span><span class="s3">= </span><span class="s1">mergeRuntimeOwned</span><span class="s3">(</span><span class="s1">globalRuntime</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of compilation</span><span class="s3">.</span><span class="s1">globalEntry</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">) {</span>
+						<span class="s1">processEntryDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">globalRuntime</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of compilation</span><span class="s3">.</span><span class="s1">globalEntry</span><span class="s3">.</span><span class="s1">includeDependencies</span><span class="s3">) {</span>
+						<span class="s1">processEntryDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">globalRuntime</span><span class="s3">);</span>
+					<span class="s3">}</span>
+
+					<span class="s4">while </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s3">[</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">] = </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{[Module, RuntimeSpec]} */ </span><span class="s3">(</span>
+							<span class="s1">queue</span><span class="s3">.</span><span class="s1">dequeue</span><span class="s3">()</span>
+						<span class="s3">);</span>
+						<span class="s1">processModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">, </span><span class="s4">false</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;trace exports usage in graph&quot;</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">FlagDependencyUsagePlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,684 @@
+<html>
+<head>
+<title>MultiCompiler.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+MultiCompiler.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">SyncHook</span><span class="s3">, </span><span class="s1">MultiHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">ConcurrentCompilationError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ConcurrentCompilationError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">MultiStats </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./MultiStats&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">MultiWatching </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./MultiWatching&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WebpackError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./WebpackError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ArrayQueue </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/ArrayQueue&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@template </span><span class="s5">T @typedef {import(&quot;tapable&quot;).AsyncSeriesHook&lt;T&gt;} AsyncSeriesHook&lt;T&gt; */</span>
+<span class="s5">/** </span><span class="s6">@template </span><span class="s5">T @template R @typedef {import(&quot;tapable&quot;).SyncBailHook&lt;T, R&gt;} SyncBailHook&lt;T, R&gt; */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../declarations/WebpackOptions&quot;).WatchOptions} WatchOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Stats&quot;)} Stats */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Watching&quot;)} Watching */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./logging/Logger&quot;).Logger} Logger */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).InputFileSystem} InputFileSystem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).IntermediateFileSystem} IntermediateFileSystem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).OutputFileSystem} OutputFileSystem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).WatchFileSystem} WatchFileSystem */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">Callback</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Error | null} err</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T=} result</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">RunWithDependenciesHandler</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;MultiStats&gt;} callback</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} MultiCompilerOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number=} parallelism how many Compilers are allows to run at the same time in parallel</span>
+ <span class="s5">*/</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s4">class </span><span class="s1">MultiCompiler </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler[] | Record&lt;string, Compiler&gt;} compilers child compilers</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{MultiCompilerOptions} options options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">, </span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">)) {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Compiler[]} */</span>
+			<span class="s1">compilers </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">).</span><span class="s1">map</span><span class="s3">(</span><span class="s1">name </span><span class="s3">=&gt; {</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, Compiler&gt;} */</span>
+				<span class="s3">(</span><span class="s1">compilers</span><span class="s3">)[</span><span class="s1">name</span><span class="s3">].</span><span class="s1">name </span><span class="s3">= </span><span class="s1">name</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, Compiler&gt;} */ </span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">)[</span><span class="s1">name</span><span class="s3">];</span>
+			<span class="s3">});</span>
+		<span class="s3">}</span>
+
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">freeze</span><span class="s3">({</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SyncHook&lt;[MultiStats]&gt;} */</span>
+			<span class="s1">done</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncHook</span><span class="s3">([</span><span class="s2">&quot;stats&quot;</span><span class="s3">]),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{MultiHook&lt;SyncHook&lt;[string | null, number]&gt;&gt;} */</span>
+			<span class="s1">invalid</span><span class="s3">: </span><span class="s4">new </span><span class="s1">MultiHook</span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">invalid</span><span class="s3">)),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{MultiHook&lt;AsyncSeriesHook&lt;[Compiler]&gt;&gt;} */</span>
+			<span class="s1">run</span><span class="s3">: </span><span class="s4">new </span><span class="s1">MultiHook</span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">run</span><span class="s3">)),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SyncHook&lt;[]&gt;} */</span>
+			<span class="s1">watchClose</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncHook</span><span class="s3">([]),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{MultiHook&lt;AsyncSeriesHook&lt;[Compiler]&gt;&gt;} */</span>
+			<span class="s1">watchRun</span><span class="s3">: </span><span class="s4">new </span><span class="s1">MultiHook</span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">watchRun</span><span class="s3">)),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{MultiHook&lt;SyncBailHook&lt;[string, string, EXPECTED_ANY[] | undefined], true | void&gt;&gt;} */</span>
+			<span class="s1">infrastructureLog</span><span class="s3">: </span><span class="s4">new </span><span class="s1">MultiHook</span><span class="s3">(</span>
+				<span class="s1">compilers</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">infrastructureLog</span><span class="s3">)</span>
+			<span class="s3">)</span>
+		<span class="s3">});</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">compilers </span><span class="s3">= </span><span class="s1">compilers</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{MultiCompilerOptions} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_options </span><span class="s3">= {</span>
+			<span class="s1">parallelism</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">parallelism </span><span class="s3">|| </span><span class="s1">Infinity</span>
+		<span class="s3">};</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Compiler, string[]&gt;} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">running </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{(Stats | null)[]} */</span>
+		<span class="s4">const </span><span class="s1">compilerStats </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(() =&gt; </span><span class="s4">null</span><span class="s3">);</span>
+		<span class="s4">let </span><span class="s1">doneCompilers </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">index </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">index </span><span class="s3">&lt; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">index</span><span class="s3">++) {</span>
+			<span class="s4">const </span><span class="s1">compiler </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">[</span><span class="s1">index</span><span class="s3">];</span>
+			<span class="s4">const </span><span class="s1">compilerIndex </span><span class="s3">= </span><span class="s1">index</span><span class="s3">;</span>
+			<span class="s4">let </span><span class="s1">compilerDone </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+			<span class="s0">// eslint-disable-next-line no-loop-func</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">done</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;MultiCompiler&quot;</span><span class="s3">, </span><span class="s1">stats </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">compilerDone</span><span class="s3">) {</span>
+					<span class="s1">compilerDone </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s1">doneCompilers</span><span class="s3">++;</span>
+				<span class="s3">}</span>
+				<span class="s1">compilerStats</span><span class="s3">[</span><span class="s1">compilerIndex</span><span class="s3">] = </span><span class="s1">stats</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">doneCompilers </span><span class="s3">=== </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) {</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">done</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span>
+						<span class="s4">new </span><span class="s1">MultiStats</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Stats[]} */ </span><span class="s3">(</span><span class="s1">compilerStats</span><span class="s3">))</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+			<span class="s0">// eslint-disable-next-line no-loop-func</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">invalid</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;MultiCompiler&quot;</span><span class="s3">, () =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">compilerDone</span><span class="s3">) {</span>
+					<span class="s1">compilerDone </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+					<span class="s1">doneCompilers</span><span class="s3">--;</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_validateCompilersOptions</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s1">_validateCompilersOptions</span><span class="s3">() {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&lt; </span><span class="s7">2</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler compiler</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{WebpackError} warning warning</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">addWarning </span><span class="s3">= (</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">warning</span><span class="s3">) =&gt; {</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">thisCompilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;MultiCompiler&quot;</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">warnings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">warning</span><span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s3">};</span>
+		<span class="s4">const </span><span class="s1">cacheNames </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">compiler of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">cache </span><span class="s3">&amp;&amp; </span><span class="s2">&quot;name&quot; </span><span class="s4">in </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">cache</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">cache</span><span class="s3">.</span><span class="s1">name</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheNames</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">name</span><span class="s3">)) {</span>
+					<span class="s1">addWarning</span><span class="s3">(</span>
+						<span class="s1">compiler</span><span class="s3">,</span>
+						<span class="s4">new </span><span class="s1">WebpackError</span><span class="s3">(</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+								<span class="s1">compiler</span><span class="s3">.</span><span class="s1">name</span>
+									<span class="s3">? </span><span class="s2">`Compiler with name &quot;</span><span class="s1">$</span><span class="s3">{</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">name</span><span class="s3">}</span><span class="s2">&quot; doesn't use unique cache name. `</span>
+									<span class="s3">: </span><span class="s2">&quot;&quot;</span>
+							<span class="s3">}</span><span class="s2">Please set unique &quot;cache.name&quot; option. Name &quot;</span><span class="s1">$</span><span class="s3">{</span><span class="s1">name</span><span class="s3">}</span><span class="s2">&quot; already used.`</span>
+						<span class="s3">)</span>
+					<span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">cacheNames</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get options</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">assign</span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">options</span><span class="s3">),</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_options</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get outputPath</span><span class="s3">() {</span>
+		<span class="s4">let </span><span class="s1">commonPath </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">outputPath</span><span class="s3">;</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">compiler of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s4">while </span><span class="s3">(</span>
+				<span class="s1">compiler</span><span class="s3">.</span><span class="s1">outputPath</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">commonPath</span><span class="s3">) !== </span><span class="s7">0 </span><span class="s3">&amp;&amp;</span>
+				<span class="s8">/[/\\]/</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">commonPath</span><span class="s3">)</span>
+			<span class="s3">) {</span>
+				<span class="s1">commonPath </span><span class="s3">= </span><span class="s1">commonPath</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/[/\\][^/\\]*$/</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">commonPath </span><span class="s3">&amp;&amp; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">outputPath</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] === </span><span class="s2">&quot;/&quot;</span><span class="s3">) </span><span class="s4">return </span><span class="s2">&quot;/&quot;</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">commonPath</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get inputFileSystem</span><span class="s3">() {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;Cannot read inputFileSystem of a MultiCompiler&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{InputFileSystem} value the new input file system</span>
+	 <span class="s5">*/</span>
+	<span class="s1">set inputFileSystem</span><span class="s3">(</span><span class="s1">value</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">compiler of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">inputFileSystem </span><span class="s3">= </span><span class="s1">value</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get outputFileSystem</span><span class="s3">() {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;Cannot read outputFileSystem of a MultiCompiler&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{OutputFileSystem} value the new output file system</span>
+	 <span class="s5">*/</span>
+	<span class="s1">set outputFileSystem</span><span class="s3">(</span><span class="s1">value</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">compiler of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">outputFileSystem </span><span class="s3">= </span><span class="s1">value</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get watchFileSystem</span><span class="s3">() {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;Cannot read watchFileSystem of a MultiCompiler&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{WatchFileSystem} value the new watch file system</span>
+	 <span class="s5">*/</span>
+	<span class="s1">set watchFileSystem</span><span class="s3">(</span><span class="s1">value</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">compiler of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">watchFileSystem </span><span class="s3">= </span><span class="s1">value</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{IntermediateFileSystem} value the new intermediate file system</span>
+	 <span class="s5">*/</span>
+	<span class="s1">set intermediateFileSystem</span><span class="s3">(</span><span class="s1">value</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">compiler of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">intermediateFileSystem </span><span class="s3">= </span><span class="s1">value</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get intermediateFileSystem</span><span class="s3">() {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;Cannot read outputFileSystem of a MultiCompiler&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | (() =&gt; string)} name name of the logger, or function called once to get the logger name</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Logger} a logger with that name</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getInfrastructureLogger</span><span class="s3">(</span><span class="s1">name</span><span class="s3">) {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">getInfrastructureLogger</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the child compiler</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} dependencies its dependencies</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setDependencies</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">dependencies</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">dependencies</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;MultiStats&gt;} callback signals when the validation is complete</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true if the dependencies are valid</span>
+	 <span class="s5">*/</span>
+	<span class="s1">validateDependencies</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;{source: Compiler, target: Compiler}&gt;} */</span>
+		<span class="s4">const </span><span class="s1">edges </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */</span>
+		<span class="s4">const </span><span class="s1">missing </span><span class="s3">= [];</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler compiler</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} target was found</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">targetFound </span><span class="s3">= </span><span class="s1">compiler </span><span class="s3">=&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">edge of edges</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">edge</span><span class="s3">.</span><span class="s1">target </span><span class="s3">=== </span><span class="s1">compiler</span><span class="s3">) {</span>
+					<span class="s4">return true</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">return false</span><span class="s3">;</span>
+		<span class="s3">};</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{{source: Compiler, target: Compiler}} e1 edge 1</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{{source: Compiler, target: Compiler}} e2 edge 2</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} result</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">sortEdges </span><span class="s3">= (</span><span class="s1">e1</span><span class="s3">, </span><span class="s1">e2</span><span class="s3">) =&gt;</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+			<span class="s3">(</span><span class="s1">e1</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">name</span><span class="s3">).</span><span class="s1">localeCompare</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">e2</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">name</span><span class="s3">)) ||</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+			<span class="s3">(</span><span class="s1">e1</span><span class="s3">.</span><span class="s1">target</span><span class="s3">.</span><span class="s1">name</span><span class="s3">).</span><span class="s1">localeCompare</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">e2</span><span class="s3">.</span><span class="s1">target</span><span class="s3">.</span><span class="s1">name</span><span class="s3">));</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">source of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">dependencies </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of dependencies</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">target </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">find</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">name </span><span class="s3">=== </span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">target</span><span class="s3">) {</span>
+						<span class="s1">missing</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+						<span class="s1">edges</span><span class="s3">.</span><span class="s1">add</span><span class="s3">({</span>
+							<span class="s1">source</span><span class="s3">,</span>
+							<span class="s1">target</span>
+						<span class="s3">});</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */</span>
+		<span class="s4">const </span><span class="s1">errors </span><span class="s3">= </span><span class="s1">missing</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">m </span><span class="s3">=&gt; </span><span class="s2">`Compiler dependency </span><span class="s4">\`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">m</span><span class="s3">}</span><span class="s4">\` </span><span class="s2">not found.`</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">stack </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; !</span><span class="s1">targetFound</span><span class="s3">(</span><span class="s1">c</span><span class="s3">));</span>
+		<span class="s4">while </span><span class="s3">(</span><span class="s1">stack</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">current </span><span class="s3">= </span><span class="s1">stack</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">();</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">edge of edges</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">edge</span><span class="s3">.</span><span class="s1">source </span><span class="s3">=== </span><span class="s1">current</span><span class="s3">) {</span>
+					<span class="s1">edges</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">edge</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">target </span><span class="s3">= </span><span class="s1">edge</span><span class="s3">.</span><span class="s1">target</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">targetFound</span><span class="s3">(</span><span class="s1">target</span><span class="s3">)) {</span>
+						<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">target</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">edges</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */</span>
+			<span class="s4">const </span><span class="s1">lines </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">edges</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span><span class="s1">sortEdges</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">edge </span><span class="s3">=&gt; </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">edge</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">name</span><span class="s3">} </span><span class="s2">-&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">edge</span><span class="s3">.</span><span class="s1">target</span><span class="s3">.</span><span class="s1">name</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+			<span class="s1">lines</span><span class="s3">.</span><span class="s1">unshift</span><span class="s3">(</span><span class="s2">&quot;Circular dependency found in compiler dependencies.&quot;</span><span class="s3">);</span>
+			<span class="s1">errors</span><span class="s3">.</span><span class="s1">unshift</span><span class="s3">(</span><span class="s1">lines</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">));</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">errors</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">message </span><span class="s3">= </span><span class="s1">errors</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">);</span>
+			<span class="s1">callback</span><span class="s3">(</span><span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span><span class="s1">message</span><span class="s3">));</span>
+			<span class="s4">return false</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return true</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// TODO webpack 6 remove</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@deprecated </span><span class="s5">This method should have been private</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler[]} compilers the child compilers</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RunWithDependenciesHandler} fn a handler to run for each compiler</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;MultiStats&gt;} callback the compiler's handler</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">runWithDependencies</span><span class="s3">(</span><span class="s1">compilers</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">fulfilledNames </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">let </span><span class="s1">remainingCompilers </span><span class="s3">= </span><span class="s1">compilers</span><span class="s3">;</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} d dependency</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} when dependency was fulfilled</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">isDependencyFulfilled </span><span class="s3">= </span><span class="s1">d </span><span class="s3">=&gt; </span><span class="s1">fulfilledNames</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">d</span><span class="s3">);</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Compiler[]} compilers</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">getReadyCompilers </span><span class="s3">= () =&gt; {</span>
+			<span class="s4">const </span><span class="s1">readyCompilers </span><span class="s3">= [];</span>
+			<span class="s4">const </span><span class="s1">list </span><span class="s3">= </span><span class="s1">remainingCompilers</span><span class="s3">;</span>
+			<span class="s1">remainingCompilers </span><span class="s3">= [];</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">c of list</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">dependencies </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">c</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">ready </span><span class="s3">=</span>
+					<span class="s3">!</span><span class="s1">dependencies </span><span class="s3">|| </span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(</span><span class="s1">isDependencyFulfilled</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">ready</span><span class="s3">) {</span>
+					<span class="s1">readyCompilers</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">c</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">remainingCompilers</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">c</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">return </span><span class="s1">readyCompilers</span><span class="s3">;</span>
+		<span class="s3">};</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;MultiStats&gt;} callback callback</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">runCompilers </span><span class="s3">= </span><span class="s1">callback </span><span class="s3">=&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">remainingCompilers</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+			<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span>
+				<span class="s1">getReadyCompilers</span><span class="s3">(),</span>
+				<span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+					<span class="s1">fn</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+						<span class="s1">fulfilledNames</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">name</span><span class="s3">);</span>
+						<span class="s1">runCompilers</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+					<span class="s3">});</span>
+				<span class="s3">},</span>
+				<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">results</span><span class="s3">) =&gt; {</span>
+					<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */ </span><span class="s3">(</span><span class="s1">results</span><span class="s3">));</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">};</span>
+		<span class="s1">runCompilers</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">SetupResult</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(compiler: Compiler, index: number, doneCallback: Callback&lt;Stats&gt;, isBlocked: () =&gt; boolean, setChanged: () =&gt; void, setInvalid: () =&gt; void) =&gt; SetupResult} setup setup a single compiler</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(compiler: Compiler, setupResult: SetupResult, callback: Callback&lt;Stats&gt;) =&gt; void} run run/continue a single compiler</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;MultiStats&gt;} callback callback when all compilers are done, result includes Stats of all changed compilers</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{SetupResult[]} result of setup</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_runGraph</span><span class="s3">(</span><span class="s1">setup</span><span class="s3">, </span><span class="s1">run</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{ compiler: Compiler, setupResult: undefined | SetupResult, result: undefined | Stats, state: &quot;pending&quot; | &quot;blocked&quot; | &quot;queued&quot; | &quot;starting&quot; | &quot;running&quot; | &quot;running-outdated&quot; | &quot;done&quot;, children: Node[], parents: Node[] }} Node */</span>
+
+		<span class="s0">// State transitions for nodes:</span>
+		<span class="s0">// -&gt; blocked (initial)</span>
+		<span class="s0">// blocked -&gt; starting [running++] (when all parents done)</span>
+		<span class="s0">// queued -&gt; starting [running++] (when processing the queue)</span>
+		<span class="s0">// starting -&gt; running (when run has been called)</span>
+		<span class="s0">// running -&gt; done [running--] (when compilation is done)</span>
+		<span class="s0">// done -&gt; pending (when invalidated from file change)</span>
+		<span class="s0">// pending -&gt; blocked [add to queue] (when invalidated from aggregated changes)</span>
+		<span class="s0">// done -&gt; blocked [add to queue] (when invalidated, from parent invalidation)</span>
+		<span class="s0">// running -&gt; running-outdated (when invalidated, either from change or parent invalidation)</span>
+		<span class="s0">// running-outdated -&gt; blocked [running--] (when compilation is done)</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Node[]} */</span>
+		<span class="s4">const </span><span class="s1">nodes </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">compiler </span><span class="s3">=&gt; ({</span>
+			<span class="s1">compiler</span><span class="s3">,</span>
+			<span class="s1">setupResult</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">result</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">state</span><span class="s3">: </span><span class="s2">&quot;blocked&quot;</span><span class="s3">,</span>
+			<span class="s1">children</span><span class="s3">: [],</span>
+			<span class="s1">parents</span><span class="s3">: []</span>
+		<span class="s3">}));</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, Node&gt;} */</span>
+		<span class="s4">const </span><span class="s1">compilerToNode </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">node of nodes</span><span class="s3">) {</span>
+			<span class="s1">compilerToNode</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">name</span><span class="s3">), </span><span class="s1">node</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">node of nodes</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">dependencies </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">dependencies</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of dependencies</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">parent </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Node} */ </span><span class="s3">(</span><span class="s1">compilerToNode</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">));</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">parents</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">parent</span><span class="s3">);</span>
+				<span class="s1">parent</span><span class="s3">.</span><span class="s1">children</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ArrayQueue&lt;Node&gt;} */</span>
+		<span class="s4">const </span><span class="s1">queue </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ArrayQueue</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">node of nodes</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">parents</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;queued&quot;</span><span class="s3">;</span>
+				<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">node</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">errored </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">running </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">parallelism </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_options</span><span class="s3">.</span><span class="s1">parallelism</span><span class="s3">);</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Node} node node</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(Error | null)=} err error</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Stats=} stats result</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">nodeDone </span><span class="s3">= (</span><span class="s1">node</span><span class="s3">, </span><span class="s1">err</span><span class="s3">, </span><span class="s1">stats</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">errored</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+				<span class="s1">errored </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+					<span class="s1">nodes</span><span class="s3">,</span>
+					<span class="s3">(</span><span class="s1">node</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">watching</span><span class="s3">) {</span>
+							<span class="s1">node</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">watching</span><span class="s3">.</span><span class="s1">close</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s1">callback</span><span class="s3">();</span>
+						<span class="s3">}</span>
+					<span class="s3">},</span>
+					<span class="s3">() =&gt; </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s1">node</span><span class="s3">.</span><span class="s1">result </span><span class="s3">= </span><span class="s1">stats</span><span class="s3">;</span>
+			<span class="s1">running</span><span class="s3">--;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;running&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;done&quot;</span><span class="s3">;</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">child of node</span><span class="s3">.</span><span class="s1">children</span><span class="s3">) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">child</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;blocked&quot;</span><span class="s3">) </span><span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">child</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;running-outdated&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;blocked&quot;</span><span class="s3">;</span>
+				<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">node</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s1">processQueue</span><span class="s3">();</span>
+		<span class="s3">};</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Node} node node</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">nodeInvalidFromParent </span><span class="s3">= </span><span class="s1">node </span><span class="s3">=&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;done&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;blocked&quot;</span><span class="s3">;</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;running&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;running-outdated&quot;</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">child of node</span><span class="s3">.</span><span class="s1">children</span><span class="s3">) {</span>
+				<span class="s1">nodeInvalidFromParent</span><span class="s3">(</span><span class="s1">child</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">};</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Node} node node</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">nodeInvalid </span><span class="s3">= </span><span class="s1">node </span><span class="s3">=&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;done&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;pending&quot;</span><span class="s3">;</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;running&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;running-outdated&quot;</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">child of node</span><span class="s3">.</span><span class="s1">children</span><span class="s3">) {</span>
+				<span class="s1">nodeInvalidFromParent</span><span class="s3">(</span><span class="s1">child</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">};</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Node} node node</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">nodeChange </span><span class="s3">= </span><span class="s1">node </span><span class="s3">=&gt; {</span>
+			<span class="s1">nodeInvalid</span><span class="s3">(</span><span class="s1">node</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;pending&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;blocked&quot;</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;blocked&quot;</span><span class="s3">) {</span>
+				<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">node</span><span class="s3">);</span>
+				<span class="s1">processQueue</span><span class="s3">();</span>
+			<span class="s3">}</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SetupResult[]} */</span>
+		<span class="s4">const </span><span class="s1">setupResults </span><span class="s3">= [];</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">i</span><span class="s3">, </span><span class="s1">node</span><span class="s3">] </span><span class="s1">of nodes</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">()) {</span>
+			<span class="s1">setupResults</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+				<span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">setupResult </span><span class="s3">= </span><span class="s1">setup</span><span class="s3">(</span>
+					<span class="s1">node</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">,</span>
+					<span class="s1">i</span><span class="s3">,</span>
+					<span class="s1">nodeDone</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">node</span><span class="s3">),</span>
+					<span class="s3">() =&gt; </span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">!== </span><span class="s2">&quot;starting&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">!== </span><span class="s2">&quot;running&quot;</span><span class="s3">,</span>
+					<span class="s3">() =&gt; </span><span class="s1">nodeChange</span><span class="s3">(</span><span class="s1">node</span><span class="s3">),</span>
+					<span class="s3">() =&gt; </span><span class="s1">nodeInvalid</span><span class="s3">(</span><span class="s1">node</span><span class="s3">)</span>
+				<span class="s3">))</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">processing </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">processQueue </span><span class="s3">= () =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">processing</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s1">processing </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+			<span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(</span><span class="s1">processQueueWorker</span><span class="s3">);</span>
+		<span class="s3">};</span>
+		<span class="s4">const </span><span class="s1">processQueueWorker </span><span class="s3">= () =&gt; {</span>
+			<span class="s0">// eslint-disable-next-line no-unmodified-loop-condition</span>
+			<span class="s4">while </span><span class="s3">(</span><span class="s1">running </span><span class="s3">&lt; </span><span class="s1">parallelism </span><span class="s3">&amp;&amp; </span><span class="s1">queue</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">&amp;&amp; !</span><span class="s1">errored</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">node </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Node} */ </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">dequeue</span><span class="s3">());</span>
+				<span class="s4">if </span><span class="s3">(</span>
+					<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;queued&quot; </span><span class="s3">||</span>
+					<span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;blocked&quot; </span><span class="s3">&amp;&amp;</span>
+						<span class="s1">node</span><span class="s3">.</span><span class="s1">parents</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(</span><span class="s1">p </span><span class="s3">=&gt; </span><span class="s1">p</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;done&quot;</span><span class="s3">))</span>
+				<span class="s3">) {</span>
+					<span class="s1">running</span><span class="s3">++;</span>
+					<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;starting&quot;</span><span class="s3">;</span>
+					<span class="s1">run</span><span class="s3">(</span>
+						<span class="s1">node</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SetupResult} */ </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">setupResult</span><span class="s3">),</span>
+						<span class="s1">nodeDone</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">node</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">= </span><span class="s2">&quot;running&quot;</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s1">processing </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span>
+				<span class="s3">!</span><span class="s1">errored </span><span class="s3">&amp;&amp;</span>
+				<span class="s1">running </span><span class="s3">=== </span><span class="s7">0 </span><span class="s3">&amp;&amp;</span>
+				<span class="s1">nodes</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(</span><span class="s1">node </span><span class="s3">=&gt; </span><span class="s1">node</span><span class="s3">.</span><span class="s1">state </span><span class="s3">=== </span><span class="s2">&quot;done&quot;</span><span class="s3">)</span>
+			<span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">stats </span><span class="s3">= [];</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">node of nodes</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">node</span><span class="s3">.</span><span class="s1">result</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">result</span><span class="s3">) {</span>
+						<span class="s1">node</span><span class="s3">.</span><span class="s1">result </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+						<span class="s1">stats</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+					<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s4">new </span><span class="s1">MultiStats</span><span class="s3">(</span><span class="s1">stats</span><span class="s3">));</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">};</span>
+		<span class="s1">processQueueWorker</span><span class="s3">();</span>
+		<span class="s4">return </span><span class="s1">setupResults</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{WatchOptions|WatchOptions[]} watchOptions the watcher's options</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;MultiStats&gt;} handler signals when the call finishes</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{MultiWatching} a compiler watcher</span>
+	 <span class="s5">*/</span>
+	<span class="s1">watch</span><span class="s3">(</span><span class="s1">watchOptions</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">running</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s1">handler</span><span class="s3">(</span><span class="s4">new </span><span class="s1">ConcurrentCompilationError</span><span class="s3">());</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">running </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">validateDependencies</span><span class="s3">(</span><span class="s1">handler</span><span class="s3">)) {</span>
+			<span class="s4">const </span><span class="s1">watchings </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_runGraph</span><span class="s3">(</span>
+				<span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">, </span><span class="s1">isBlocked</span><span class="s3">, </span><span class="s1">setChanged</span><span class="s3">, </span><span class="s1">setInvalid</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s1">watching </span><span class="s3">= </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">watch</span><span class="s3">(</span>
+						<span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">watchOptions</span><span class="s3">) ? </span><span class="s1">watchOptions</span><span class="s3">[</span><span class="s1">idx</span><span class="s3">] : </span><span class="s1">watchOptions</span><span class="s3">,</span>
+						<span class="s1">callback</span>
+					<span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">watching</span><span class="s3">) {</span>
+						<span class="s1">watching</span><span class="s3">.</span><span class="s1">_onInvalid </span><span class="s3">= </span><span class="s1">setInvalid</span><span class="s3">;</span>
+						<span class="s1">watching</span><span class="s3">.</span><span class="s1">_onChange </span><span class="s3">= </span><span class="s1">setChanged</span><span class="s3">;</span>
+						<span class="s1">watching</span><span class="s3">.</span><span class="s1">_isBlocked </span><span class="s3">= </span><span class="s1">isBlocked</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s4">return </span><span class="s1">watching</span><span class="s3">;</span>
+				<span class="s3">},</span>
+				<span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">watching</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">watching </span><span class="s3">!== </span><span class="s1">watching</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">watching</span><span class="s3">.</span><span class="s1">running</span><span class="s3">) </span><span class="s1">watching</span><span class="s3">.</span><span class="s1">invalidate</span><span class="s3">();</span>
+				<span class="s3">},</span>
+				<span class="s1">handler</span>
+			<span class="s3">);</span>
+			<span class="s4">return new </span><span class="s1">MultiWatching</span><span class="s3">(</span><span class="s1">watchings</span><span class="s3">, </span><span class="s4">this</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return new </span><span class="s1">MultiWatching</span><span class="s3">([], </span><span class="s4">this</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;MultiStats&gt;} callback signals when the call finishes</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">run</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">running</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">new </span><span class="s1">ConcurrentCompilationError</span><span class="s3">());</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">running </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">validateDependencies</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">)) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_runGraph</span><span class="s3">(</span>
+				<span class="s3">() =&gt; {},</span>
+				<span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">setupResult</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">run</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">),</span>
+				<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">stats</span><span class="s3">) =&gt; {</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">running </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">callback </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+						<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">stats</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">purgeInputFileSystem</span><span class="s3">() {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">compiler of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">inputFileSystem </span><span class="s3">&amp;&amp; </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">inputFileSystem</span><span class="s3">.</span><span class="s1">purge</span><span class="s3">) {</span>
+				<span class="s1">compiler</span><span class="s3">.</span><span class="s1">inputFileSystem</span><span class="s3">.</span><span class="s1">purge</span><span class="s3">();</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback&lt;void&gt;} callback signals when the compiler closes</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">close</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">compilers</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compiler</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+				<span class="s1">compiler</span><span class="s3">.</span><span class="s1">close</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+			<span class="s3">},</span>
+			<span class="s1">error </span><span class="s3">=&gt; {</span>
+				<span class="s1">callback</span><span class="s3">(</span><span class="s1">error</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+</pre>
+</body>
+</html>

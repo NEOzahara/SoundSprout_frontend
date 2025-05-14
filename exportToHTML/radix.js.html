@@ -1,0 +1,222 @@
+<html>
+<head>
+<title>radix.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+radix.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to flag use of parseInt without a radix argument</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">James Allardice</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">MODE_ALWAYS </span><span class="s4">= </span><span class="s3">&quot;always&quot;</span><span class="s4">,</span>
+    <span class="s2">MODE_AS_NEEDED </span><span class="s4">= </span><span class="s3">&quot;as-needed&quot;</span><span class="s4">;</span>
+
+<span class="s6">const </span><span class="s2">validRadixValues </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">(</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">from</span><span class="s4">({ </span><span class="s2">length</span><span class="s4">: </span><span class="s7">37 </span><span class="s4">- </span><span class="s7">2 </span><span class="s4">}, (</span><span class="s2">_</span><span class="s4">, </span><span class="s2">index</span><span class="s4">) =&gt; </span><span class="s2">index </span><span class="s4">+ </span><span class="s7">2</span><span class="s4">));</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a given variable is shadowed or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Variable} variable A variable to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the variable is shadowed.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isShadowed</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt;= </span><span class="s7">1</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a given node is a MemberExpression of `parseInt` method or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is a MemberExpression of `parseInt`</span>
+ <span class="s0">*      method.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isParseIntMethod</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s4">(</span>
+        <span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;MemberExpression&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s4">!</span><span class="s2">node</span><span class="s4">.</span><span class="s2">computed </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">node</span><span class="s4">.</span><span class="s2">property</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">node</span><span class="s4">.</span><span class="s2">property</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;parseInt&quot;</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a given node is a valid value of radix or not.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The following values are invalid.</span>
+ <span class="s0">*</span>
+ <span class="s0">* - A literal except integers between 2 and 36.</span>
+ <span class="s0">* - undefined.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} radix A node of radix to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is valid.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isValidRadix</span><span class="s4">(</span><span class="s2">radix</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s4">!(</span>
+        <span class="s4">(</span><span class="s2">radix</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Literal&quot; </span><span class="s4">&amp;&amp; !</span><span class="s2">validRadixValues</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">radix</span><span class="s4">.</span><span class="s2">value</span><span class="s4">)) ||</span>
+        <span class="s4">(</span><span class="s2">radix</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">radix</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot;</span><span class="s4">)</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a given node is a default value of radix or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} radix A node of radix to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is the literal node of `10`.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isDefaultRadix</span><span class="s4">(</span><span class="s2">radix</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">radix</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Literal&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">radix</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s7">10</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Enforce the consistent use of the radix argument when using `parseInt()`&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/radix&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">hasSuggestions</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+
+        <span class="s2">schema</span><span class="s4">: [</span>
+            <span class="s4">{</span>
+                <span class="s6">enum</span><span class="s4">: [</span><span class="s3">&quot;always&quot;</span><span class="s4">, </span><span class="s3">&quot;as-needed&quot;</span><span class="s4">]</span>
+            <span class="s4">}</span>
+        <span class="s4">],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">missingParameters</span><span class="s4">: </span><span class="s3">&quot;Missing parameters.&quot;</span><span class="s4">,</span>
+            <span class="s2">redundantRadix</span><span class="s4">: </span><span class="s3">&quot;Redundant radix parameter.&quot;</span><span class="s4">,</span>
+            <span class="s2">missingRadix</span><span class="s4">: </span><span class="s3">&quot;Missing radix parameter.&quot;</span><span class="s4">,</span>
+            <span class="s2">invalidRadix</span><span class="s4">: </span><span class="s3">&quot;Invalid radix parameter, must be an integer between 2 and 36.&quot;</span><span class="s4">,</span>
+            <span class="s2">addRadixParameter10</span><span class="s4">: </span><span class="s3">&quot;Add radix parameter `10` for parsing decimal numbers.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">mode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] || </span><span class="s2">MODE_ALWAYS</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks the arguments of a given CallExpression node and reports it if it</span>
+         <span class="s0">* offends this rule.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A CallExpression node to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkArguments</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">args </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">;</span>
+
+            <span class="s6">switch </span><span class="s4">(</span><span class="s2">args</span><span class="s4">.</span><span class="s2">length</span><span class="s4">) {</span>
+                <span class="s6">case </span><span class="s7">0</span><span class="s4">:</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                        <span class="s2">node</span><span class="s4">,</span>
+                        <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;missingParameters&quot;</span>
+                    <span class="s4">});</span>
+                    <span class="s6">break</span><span class="s4">;</span>
+
+                <span class="s6">case </span><span class="s7">1</span><span class="s4">:</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">mode </span><span class="s4">=== </span><span class="s2">MODE_ALWAYS</span><span class="s4">) {</span>
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                            <span class="s2">node</span><span class="s4">,</span>
+                            <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;missingRadix&quot;</span><span class="s4">,</span>
+                            <span class="s2">suggest</span><span class="s4">: [</span>
+                                <span class="s4">{</span>
+                                    <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;addRadixParameter10&quot;</span><span class="s4">,</span>
+                                    <span class="s2">fix</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">) {</span>
+                                        <span class="s6">const </span><span class="s2">tokens </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokens</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                                        <span class="s6">const </span><span class="s2">lastToken </span><span class="s4">= </span><span class="s2">tokens</span><span class="s4">[</span><span class="s2">tokens</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">]; </span><span class="s5">// Parenthesis.</span>
+                                        <span class="s6">const </span><span class="s2">secondToLastToken </span><span class="s4">= </span><span class="s2">tokens</span><span class="s4">[</span><span class="s2">tokens</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">2</span><span class="s4">]; </span><span class="s5">// May or may not be a comma.</span>
+                                        <span class="s6">const </span><span class="s2">hasTrailingComma </span><span class="s4">= </span><span class="s2">secondToLastToken</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Punctuator&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">secondToLastToken</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;,&quot;</span><span class="s4">;</span>
+
+                                        <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">insertTextBefore</span><span class="s4">(</span><span class="s2">lastToken</span><span class="s4">, </span><span class="s2">hasTrailingComma </span><span class="s4">? </span><span class="s3">&quot; 10,&quot; </span><span class="s4">: </span><span class="s3">&quot;, 10&quot;</span><span class="s4">);</span>
+                                    <span class="s4">}</span>
+                                <span class="s4">}</span>
+                            <span class="s4">]</span>
+                        <span class="s4">});</span>
+                    <span class="s4">}</span>
+                    <span class="s6">break</span><span class="s4">;</span>
+
+                <span class="s6">default</span><span class="s4">:</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">mode </span><span class="s4">=== </span><span class="s2">MODE_AS_NEEDED </span><span class="s4">&amp;&amp; </span><span class="s2">isDefaultRadix</span><span class="s4">(</span><span class="s2">args</span><span class="s4">[</span><span class="s7">1</span><span class="s4">])) {</span>
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                            <span class="s2">node</span><span class="s4">,</span>
+                            <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;redundantRadix&quot;</span>
+                        <span class="s4">});</span>
+                    <span class="s4">} </span><span class="s6">else if </span><span class="s4">(!</span><span class="s2">isValidRadix</span><span class="s4">(</span><span class="s2">args</span><span class="s4">[</span><span class="s7">1</span><span class="s4">])) {</span>
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                            <span class="s2">node</span><span class="s4">,</span>
+                            <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;invalidRadix&quot;</span>
+                        <span class="s4">});</span>
+                    <span class="s4">}</span>
+                    <span class="s6">break</span><span class="s4">;</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s3">&quot;Program:exit&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s6">let </span><span class="s2">variable</span><span class="s4">;</span>
+
+                <span class="s5">// Check `parseInt()`</span>
+                <span class="s2">variable </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getVariableByName</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s3">&quot;parseInt&quot;</span><span class="s4">);</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">variable </span><span class="s4">&amp;&amp; !</span><span class="s2">isShadowed</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">)) {</span>
+                    <span class="s2">variable</span><span class="s4">.</span><span class="s2">references</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">reference </span><span class="s4">=&gt; {</span>
+                        <span class="s6">const </span><span class="s2">idNode </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">;</span>
+
+                        <span class="s6">if </span><span class="s4">(</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isCallee</span><span class="s4">(</span><span class="s2">idNode</span><span class="s4">)) {</span>
+                            <span class="s2">checkArguments</span><span class="s4">(</span><span class="s2">idNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">);</span>
+                        <span class="s4">}</span>
+                    <span class="s4">});</span>
+                <span class="s4">}</span>
+
+                <span class="s5">// Check `Number.parseInt()`</span>
+                <span class="s2">variable </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getVariableByName</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s3">&quot;Number&quot;</span><span class="s4">);</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">variable </span><span class="s4">&amp;&amp; !</span><span class="s2">isShadowed</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">)) {</span>
+                    <span class="s2">variable</span><span class="s4">.</span><span class="s2">references</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">reference </span><span class="s4">=&gt; {</span>
+                        <span class="s6">const </span><span class="s2">parentNode </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+                        <span class="s6">const </span><span class="s2">maybeCallee </span><span class="s4">= </span><span class="s2">parentNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ChainExpression&quot;</span>
+                            <span class="s4">? </span><span class="s2">parentNode</span><span class="s4">.</span><span class="s2">parent</span>
+                            <span class="s4">: </span><span class="s2">parentNode</span><span class="s4">;</span>
+
+                        <span class="s6">if </span><span class="s4">(</span><span class="s2">isParseIntMethod</span><span class="s4">(</span><span class="s2">parentNode</span><span class="s4">) &amp;&amp; </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isCallee</span><span class="s4">(</span><span class="s2">maybeCallee</span><span class="s4">)) {</span>
+                            <span class="s2">checkArguments</span><span class="s4">(</span><span class="s2">maybeCallee</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">);</span>
+                        <span class="s4">}</span>
+                    <span class="s4">});</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

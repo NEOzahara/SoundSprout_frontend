@@ -1,0 +1,745 @@
+<html>
+<head>
+<title>DefinePlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+DefinePlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleTypeConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">RuntimeGlobals </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./RuntimeGlobals&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WebpackError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./WebpackError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ConstDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ConstDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">BasicEvaluatedExpression </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./javascript/BasicEvaluatedExpression&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">VariableInfo </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./javascript/JavascriptParser&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">evaluateToString</span><span class="s3">,</span>
+	<span class="s1">toConstantDependency</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./javascript/JavascriptParserHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createHash </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/createHash&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Expression} Expression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).BuildInfo} BuildInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).ValueCacheVersions} ValueCacheVersions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./NormalModule&quot;)} NormalModule */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./RuntimeTemplate&quot;)} RuntimeTemplate */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/JavascriptParser&quot;)} JavascriptParser */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/JavascriptParser&quot;).DestructuringAssignmentProperty} DestructuringAssignmentProperty */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/JavascriptParser&quot;).Range} Range */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./logging/Logger&quot;).Logger} Logger */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/createHash&quot;).Algorithm} Algorithm */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{null | undefined | RegExp | EXPECTED_FUNCTION | string | number | boolean | bigint | undefined} CodeValuePrimitive */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{RecursiveArrayOrRecord&lt;CodeValuePrimitive | RuntimeValue&gt;} CodeValue */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} RuntimeValueOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[]=} fileDependencies</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[]=} contextDependencies</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[]=} missingDependencies</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[]=} buildDependencies</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string| (() =&gt; string)=} version</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{string | Set&lt;string&gt;} ValueCacheVersion */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(value: { module: NormalModule, key: string, readonly version: ValueCacheVersion }) =&gt; CodeValuePrimitive} GeneratorFn */</span>
+
+<span class="s4">class </span><span class="s1">RuntimeValue </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{GeneratorFn} fn generator function</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{true | string[] | RuntimeValueOptions=} options options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">fn</span><span class="s3">, </span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">fn </span><span class="s3">= </span><span class="s1">fn</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">options</span><span class="s3">)) {</span>
+			<span class="s1">options </span><span class="s3">= {</span>
+				<span class="s1">fileDependencies</span><span class="s3">: </span><span class="s1">options</span>
+			<span class="s3">};</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options </span><span class="s3">|| {};</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get fileDependencies</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">? </span><span class="s4">true </span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ValueCacheVersions} valueCacheVersions valueCacheVersions</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key the defined key</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CodeValuePrimitive} code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">exec</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">valueCacheVersions</span><span class="s3">, </span><span class="s1">key</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">buildInfo </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */ </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+			<span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">cacheable </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">) {</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;BuildInfo[&quot;fileDependencies&quot;]&gt;} */</span>
+					<span class="s3">(</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">).</span><span class="s1">add</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">contextDependencies</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">contextDependencies</span><span class="s3">) {</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;BuildInfo[&quot;contextDependencies&quot;]&gt;} */</span>
+					<span class="s3">(</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">contextDependencies</span><span class="s3">).</span><span class="s1">add</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">missingDependencies</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">missingDependencies</span><span class="s3">) {</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;BuildInfo[&quot;missingDependencies&quot;]&gt;} */</span>
+					<span class="s3">(</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">missingDependencies</span><span class="s3">).</span><span class="s1">add</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">buildDependencies</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">buildDependencies</span><span class="s3">) {</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;BuildInfo[&quot;buildDependencies&quot;]&gt;} */</span>
+					<span class="s3">(</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">buildDependencies</span><span class="s3">).</span><span class="s1">add</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">fn</span><span class="s3">({</span>
+			<span class="s1">module</span><span class="s3">: </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">,</span>
+			<span class="s1">key</span><span class="s3">,</span>
+			<span class="s1">get version</span><span class="s3">() {</span>
+				<span class="s4">return </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ValueCacheVersion} */ </span><span class="s3">(</span>
+					<span class="s1">valueCacheVersions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">VALUE_DEP_PREFIX </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s1">getCacheVersion</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">=== </span><span class="s4">true</span>
+			<span class="s3">? </span><span class="s1">undefined</span>
+			<span class="s3">: (</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">version </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span>
+					<span class="s3">? </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">version</span><span class="s3">()</span>
+					<span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">version</span><span class="s3">) || </span><span class="s2">&quot;unset&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;DestructuringAssignmentProperty&gt; | undefined} properties properties</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Set&lt;string&gt; | undefined} used keys</span>
+ <span class="s5">*/</span>
+<span class="s4">function </span><span class="s1">getObjKeys</span><span class="s3">(</span><span class="s1">properties</span><span class="s3">) {</span>
+	<span class="s4">if </span><span class="s3">(!</span><span class="s1">properties</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+	<span class="s4">return new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">...properties</span><span class="s3">].</span><span class="s1">map</span><span class="s3">(</span><span class="s1">p </span><span class="s3">=&gt; </span><span class="s1">p</span><span class="s3">.</span><span class="s1">id</span><span class="s3">));</span>
+<span class="s3">}</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Set&lt;string&gt; | null} ObjKeys */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{boolean | undefined | null} AsiSafe */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{EXPECTED_ANY[] | {[k: string]: EXPECTED_ANY}} obj obj</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser Parser</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ValueCacheVersions} valueCacheVersions valueCacheVersions</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key the defined key</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} runtimeTemplate the runtime template</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Logger} logger the logger object</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AsiSafe=} asiSafe asi safe (undefined: unknown, null: unneeded)</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjKeys=} objKeys used keys</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} code converted to string that evaluates</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">stringifyObj </span><span class="s3">= (</span>
+	<span class="s1">obj</span><span class="s3">,</span>
+	<span class="s1">parser</span><span class="s3">,</span>
+	<span class="s1">valueCacheVersions</span><span class="s3">,</span>
+	<span class="s1">key</span><span class="s3">,</span>
+	<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+	<span class="s1">logger</span><span class="s3">,</span>
+	<span class="s1">asiSafe</span><span class="s3">,</span>
+	<span class="s1">objKeys</span>
+<span class="s3">) =&gt; {</span>
+	<span class="s4">let </span><span class="s1">code</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">arr </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">obj</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">arr</span><span class="s3">) {</span>
+		<span class="s1">code </span><span class="s3">= </span><span class="s2">`[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">obj</span>
+			<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">code </span><span class="s3">=&gt;</span>
+				<span class="s1">toCode</span><span class="s3">(</span>
+					<span class="s1">code</span><span class="s3">,</span>
+					<span class="s1">parser</span><span class="s3">,</span>
+					<span class="s1">valueCacheVersions</span><span class="s3">,</span>
+					<span class="s1">key</span><span class="s3">,</span>
+					<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+					<span class="s1">logger</span><span class="s3">,</span>
+					<span class="s4">null</span>
+				<span class="s3">)</span>
+			<span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;,&quot;</span><span class="s3">)}</span><span class="s2">]`</span><span class="s3">;</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s4">let </span><span class="s1">keys </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">obj</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">objKeys</span><span class="s3">) {</span>
+			<span class="s1">keys </span><span class="s3">= </span><span class="s1">objKeys</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">0 </span><span class="s3">? [] : </span><span class="s1">keys</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">k </span><span class="s3">=&gt; </span><span class="s1">objKeys</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">k</span><span class="s3">));</span>
+		<span class="s3">}</span>
+		<span class="s1">code </span><span class="s3">= </span><span class="s2">`{</span><span class="s1">$</span><span class="s3">{</span><span class="s1">keys</span>
+			<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">key </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">code </span><span class="s3">= </span><span class="s1">obj</span><span class="s3">[</span><span class="s1">key</span><span class="s3">];</span>
+				<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">key</span><span class="s3">)}</span><span class="s2">:</span><span class="s1">$</span><span class="s3">{</span><span class="s1">toCode</span><span class="s3">(</span>
+					<span class="s1">code</span><span class="s3">,</span>
+					<span class="s1">parser</span><span class="s3">,</span>
+					<span class="s1">valueCacheVersions</span><span class="s3">,</span>
+					<span class="s1">key</span><span class="s3">,</span>
+					<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+					<span class="s1">logger</span><span class="s3">,</span>
+					<span class="s4">null</span>
+				<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+			<span class="s3">})</span>
+			<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;,&quot;</span><span class="s3">)}</span><span class="s2">}`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s4">switch </span><span class="s3">(</span><span class="s1">asiSafe</span><span class="s3">) {</span>
+		<span class="s4">case null</span><span class="s3">:</span>
+			<span class="s4">return </span><span class="s1">code</span><span class="s3">;</span>
+		<span class="s4">case true</span><span class="s3">:</span>
+			<span class="s4">return </span><span class="s1">arr </span><span class="s3">? </span><span class="s1">code </span><span class="s3">: </span><span class="s2">`(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+		<span class="s4">case false</span><span class="s3">:</span>
+			<span class="s4">return </span><span class="s1">arr </span><span class="s3">? </span><span class="s2">`;</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s2">`;(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+		<span class="s4">default</span><span class="s3">:</span>
+			<span class="s4">return </span><span class="s2">`/*#__PURE__*/Object(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Convert code to a string that evaluates</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CodeValue} code Code to evaluate</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser Parser</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ValueCacheVersions} valueCacheVersions valueCacheVersions</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key the defined key</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} runtimeTemplate the runtime template</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Logger} logger the logger object</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean | undefined | null=} asiSafe asi safe (undefined: unknown, null: unneeded)</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjKeys=} objKeys used keys</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} code converted to string that evaluates</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">toCode </span><span class="s3">= (</span>
+	<span class="s1">code</span><span class="s3">,</span>
+	<span class="s1">parser</span><span class="s3">,</span>
+	<span class="s1">valueCacheVersions</span><span class="s3">,</span>
+	<span class="s1">key</span><span class="s3">,</span>
+	<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+	<span class="s1">logger</span><span class="s3">,</span>
+	<span class="s1">asiSafe</span><span class="s3">,</span>
+	<span class="s1">objKeys</span>
+<span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">transformToCode </span><span class="s3">= () =&gt; {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s3">=== </span><span class="s4">null</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s2">&quot;null&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s2">&quot;undefined&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">Object</span><span class="s3">.</span><span class="s1">is</span><span class="s3">(</span><span class="s1">code</span><span class="s3">, -</span><span class="s7">0</span><span class="s3">)) {</span>
+			<span class="s4">return </span><span class="s2">&quot;-0&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RuntimeValue</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s1">toCode</span><span class="s3">(</span>
+				<span class="s1">code</span><span class="s3">.</span><span class="s1">exec</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">valueCacheVersions</span><span class="s3">, </span><span class="s1">key</span><span class="s3">),</span>
+				<span class="s1">parser</span><span class="s3">,</span>
+				<span class="s1">valueCacheVersions</span><span class="s3">,</span>
+				<span class="s1">key</span><span class="s3">,</span>
+				<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+				<span class="s1">logger</span><span class="s3">,</span>
+				<span class="s1">asiSafe</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RegExp </span><span class="s3">&amp;&amp; </span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">();</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;function&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s2">`(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">()}</span><span class="s2">)`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s1">stringifyObj</span><span class="s3">(</span>
+				<span class="s1">code</span><span class="s3">,</span>
+				<span class="s1">parser</span><span class="s3">,</span>
+				<span class="s1">valueCacheVersions</span><span class="s3">,</span>
+				<span class="s1">key</span><span class="s3">,</span>
+				<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+				<span class="s1">logger</span><span class="s3">,</span>
+				<span class="s1">asiSafe</span><span class="s3">,</span>
+				<span class="s1">objKeys</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;bigint&quot;</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">supportsBigIntLiteral</span><span class="s3">()</span>
+				<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">n`</span>
+				<span class="s3">: </span><span class="s2">`BigInt(&quot;</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">&quot;)`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+	<span class="s3">};</span>
+
+	<span class="s4">const </span><span class="s1">strCode </span><span class="s3">= </span><span class="s1">transformToCode</span><span class="s3">();</span>
+
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span><span class="s2">`Replaced &quot;</span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">}</span><span class="s2">&quot; with &quot;</span><span class="s1">$</span><span class="s3">{</span><span class="s1">strCode</span><span class="s3">}</span><span class="s2">&quot;`</span><span class="s3">);</span>
+
+	<span class="s4">return </span><span class="s1">strCode</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CodeValue} code code</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | undefined} result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">toCacheVersion </span><span class="s3">= </span><span class="s1">code </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s3">=== </span><span class="s4">null</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s2">&quot;null&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s2">&quot;undefined&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">Object</span><span class="s3">.</span><span class="s1">is</span><span class="s3">(</span><span class="s1">code</span><span class="s3">, -</span><span class="s7">0</span><span class="s3">)) {</span>
+		<span class="s4">return </span><span class="s2">&quot;-0&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RuntimeValue</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">code</span><span class="s3">.</span><span class="s1">getCacheVersion</span><span class="s3">();</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RegExp </span><span class="s3">&amp;&amp; </span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">();</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;function&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s2">`(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">()}</span><span class="s2">)`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">items </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">code</span><span class="s3">).</span><span class="s1">map</span><span class="s3">(</span><span class="s1">key </span><span class="s3">=&gt; ({</span>
+			<span class="s1">key</span><span class="s3">,</span>
+			<span class="s1">value</span><span class="s3">: </span><span class="s1">toCacheVersion</span><span class="s3">(</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, EXPECTED_ANY&gt;} */</span>
+				<span class="s3">(</span><span class="s1">code</span><span class="s3">)[</span><span class="s1">key</span><span class="s3">]</span>
+			<span class="s3">)</span>
+		<span class="s3">}));</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">items</span><span class="s3">.</span><span class="s1">some</span><span class="s3">(({ </span><span class="s1">value </span><span class="s3">}) =&gt; </span><span class="s1">value </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s2">`{</span><span class="s1">$</span><span class="s3">{</span><span class="s1">items</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(({ </span><span class="s1">key</span><span class="s3">, </span><span class="s1">value </span><span class="s3">}) =&gt; </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">}</span><span class="s2">: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">value</span><span class="s3">}</span><span class="s2">`</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">}`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;bigint&quot;</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">n`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;DefinePlugin&quot;</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">VALUE_DEP_PREFIX </span><span class="s3">= </span><span class="s2">`webpack/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">PLUGIN_NAME</span><span class="s3">} </span><span class="s2">`</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">VALUE_DEP_MAIN </span><span class="s3">= </span><span class="s2">`webpack/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">PLUGIN_NAME</span><span class="s3">}</span><span class="s2">_hash`</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">TYPEOF_OPERATOR_REGEXP </span><span class="s3">= </span><span class="s8">/^typeof\s+/</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">WEBPACK_REQUIRE_FUNCTION_REGEXP </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RegExp</span><span class="s3">(</span>
+	<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span><span class="s3">}</span><span class="s4">\\</span><span class="s2">s*(!?</span><span class="s4">\\</span><span class="s2">.)`</span>
+<span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WEBPACK_REQUIRE_IDENTIFIER_REGEXP </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RegExp</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span><span class="s3">);</span>
+
+<span class="s4">class </span><span class="s1">DefinePlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Create a new define plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Record&lt;string, CodeValue&gt;} definitions A map of global object definitions</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">definitions</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">definitions </span><span class="s3">= </span><span class="s1">definitions</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{GeneratorFn} fn generator function</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{true | string[] | RuntimeValueOptions=} options options</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuntimeValue} runtime value</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">runtimeValue</span><span class="s3">(</span><span class="s1">fn</span><span class="s3">, </span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">return new </span><span class="s1">RuntimeValue</span><span class="s3">(</span><span class="s1">fn</span><span class="s3">, </span><span class="s1">options</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">definitions </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">definitions</span><span class="s3">;</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s2">&quot;webpack.DefinePlugin&quot;</span><span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ConstDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+				<span class="s4">const </span><span class="s3">{ </span><span class="s1">runtimeTemplate </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+
+				<span class="s4">const </span><span class="s1">mainHash </span><span class="s3">= </span><span class="s1">createHash</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Algorithm} */</span>
+					<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashFunction</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s1">mainHash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+					<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">VALUE_DEP_MAIN</span><span class="s3">)) || </span><span class="s2">&quot;&quot;</span>
+				<span class="s3">);</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* Handler</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser Parser</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">handler </span><span class="s3">= </span><span class="s1">parser </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">mainValue </span><span class="s3">=</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ValueCacheVersion} */</span>
+						<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">VALUE_DEP_MAIN</span><span class="s3">));</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">program</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+						<span class="s4">const </span><span class="s1">buildInfo </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */ </span><span class="s3">(</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span>
+						<span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">valueDependencies</span><span class="s3">)</span>
+							<span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">valueDependencies </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+						<span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">valueDependencies</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">VALUE_DEP_MAIN</span><span class="s3">, </span><span class="s1">mainValue</span><span class="s3">);</span>
+					<span class="s3">});</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key key</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">addValueDependency </span><span class="s3">= </span><span class="s1">key </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">buildInfo </span><span class="s3">=</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+							<span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">);</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;BuildInfo[&quot;valueDependencies&quot;]&gt;} */</span>
+						<span class="s3">(</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">valueDependencies</span><span class="s3">).</span><span class="s1">set</span><span class="s3">(</span>
+							<span class="s1">VALUE_DEP_PREFIX </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">,</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ValueCacheVersion} */</span>
+							<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">VALUE_DEP_PREFIX </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">))</span>
+						<span class="s3">);</span>
+					<span class="s3">};</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key key</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(expression: Expression) =&gt; T} fn fn</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(expression: Expression) =&gt; T} result</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">withValueDependency </span><span class="s3">=</span>
+						<span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">) =&gt;</span>
+						<span class="s3">(</span><span class="s1">...args</span><span class="s3">) =&gt; {</span>
+							<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+							<span class="s4">return </span><span class="s1">fn</span><span class="s3">(</span><span class="s1">...args</span><span class="s3">);</span>
+						<span class="s3">};</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* Walk definitions</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Record&lt;string, CodeValue&gt;} definitions Definitions map</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} prefix Prefix string</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">walkDefinitions </span><span class="s3">= (</span><span class="s1">definitions</span><span class="s3">, </span><span class="s1">prefix</span><span class="s3">) =&gt; {</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">definitions</span><span class="s3">)) {</span>
+							<span class="s4">const </span><span class="s1">code </span><span class="s3">= </span><span class="s1">definitions</span><span class="s3">[</span><span class="s1">key</span><span class="s3">];</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">code </span><span class="s3">&amp;&amp;</span>
+								<span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;object&quot; </span><span class="s3">&amp;&amp;</span>
+								<span class="s3">!(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RuntimeValue</span><span class="s3">) &amp;&amp;</span>
+								<span class="s3">!(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RegExp</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s1">walkDefinitions</span><span class="s3">(</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, CodeValue&gt;} */ </span><span class="s3">(</span><span class="s1">code</span><span class="s3">),</span>
+									<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">prefix </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">}</span><span class="s2">.`</span>
+								<span class="s3">);</span>
+								<span class="s1">applyObjectDefine</span><span class="s3">(</span><span class="s1">prefix </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">, </span><span class="s1">code</span><span class="s3">);</span>
+								<span class="s4">continue</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s1">applyDefineKey</span><span class="s3">(</span><span class="s1">prefix</span><span class="s3">, </span><span class="s1">key</span><span class="s3">);</span>
+							<span class="s1">applyDefine</span><span class="s3">(</span><span class="s1">prefix </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">, </span><span class="s1">code</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">};</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* Apply define key</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} prefix Prefix</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key Key</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">applyDefineKey </span><span class="s3">= (</span><span class="s1">prefix</span><span class="s3">, </span><span class="s1">key</span><span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s1">splittedKey </span><span class="s3">= </span><span class="s1">key</span><span class="s3">.</span><span class="s1">split</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">firstKey </span><span class="s3">= </span><span class="s1">splittedKey</span><span class="s3">[</span><span class="s7">0</span><span class="s3">];</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">i</span><span class="s3">, </span><span class="s1">_</span><span class="s3">] </span><span class="s1">of splittedKey</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">1</span><span class="s3">).</span><span class="s1">entries</span><span class="s3">()) {</span>
+							<span class="s4">const </span><span class="s1">fullKey </span><span class="s3">= </span><span class="s1">prefix </span><span class="s3">+ </span><span class="s1">splittedKey</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">);</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">canRename</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">fullKey</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+								<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">definitions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">firstKey</span><span class="s3">) </span><span class="s4">instanceof </span><span class="s1">VariableInfo</span>
+								<span class="s3">) {</span>
+									<span class="s4">return false</span><span class="s3">;</span>
+								<span class="s3">}</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">});</span>
+						<span class="s3">}</span>
+					<span class="s3">};</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* Apply Code</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key Key</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CodeValue} code Code</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">applyDefine </span><span class="s3">= (</span><span class="s1">key</span><span class="s3">, </span><span class="s1">code</span><span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s1">originalKey </span><span class="s3">= </span><span class="s1">key</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">isTypeof </span><span class="s3">= </span><span class="s1">TYPEOF_OPERATOR_REGEXP</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">isTypeof</span><span class="s3">) </span><span class="s1">key </span><span class="s3">= </span><span class="s1">key</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s1">TYPEOF_OPERATOR_REGEXP</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">);</span>
+						<span class="s4">let </span><span class="s1">recurse </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+						<span class="s4">let </span><span class="s1">recurseTypeof </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">isTypeof</span><span class="s3">) {</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">canRename</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+								<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">originalKey</span><span class="s3">);</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">});</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span>
+								<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">)</span>
+								<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+									<span class="s5">/**</span>
+									 <span class="s5">* this is needed in case there is a recursion in the DefinePlugin</span>
+									 <span class="s5">* to prevent an endless recursion</span>
+									 <span class="s5">* e.g.: new DefinePlugin({</span>
+									 <span class="s5">* &quot;a&quot;: &quot;b&quot;,</span>
+									 <span class="s5">* &quot;b&quot;: &quot;a&quot;</span>
+									 <span class="s5">* });</span>
+									 <span class="s5">*/</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">recurse</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+									<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">originalKey</span><span class="s3">);</span>
+									<span class="s1">recurse </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">res </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluate</span><span class="s3">(</span>
+										<span class="s1">toCode</span><span class="s3">(</span>
+											<span class="s1">code</span><span class="s3">,</span>
+											<span class="s1">parser</span><span class="s3">,</span>
+											<span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">,</span>
+											<span class="s1">key</span><span class="s3">,</span>
+											<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+											<span class="s1">logger</span><span class="s3">,</span>
+											<span class="s4">null</span>
+										<span class="s3">)</span>
+									<span class="s3">);</span>
+									<span class="s1">recurse </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+									<span class="s1">res</span><span class="s3">.</span><span class="s1">setRange</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">));</span>
+									<span class="s4">return </span><span class="s1">res</span><span class="s3">;</span>
+								<span class="s3">});</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+								<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">originalKey</span><span class="s3">);</span>
+								<span class="s4">let </span><span class="s1">strCode </span><span class="s3">= </span><span class="s1">toCode</span><span class="s3">(</span>
+									<span class="s1">code</span><span class="s3">,</span>
+									<span class="s1">parser</span><span class="s3">,</span>
+									<span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">,</span>
+									<span class="s1">originalKey</span><span class="s3">,</span>
+									<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+									<span class="s1">logger</span><span class="s3">,</span>
+									<span class="s3">!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]),</span>
+									<span class="s4">null</span>
+								<span class="s3">);</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">inShorthand</span><span class="s3">) {</span>
+									<span class="s1">strCode </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">inShorthand</span><span class="s3">}</span><span class="s2">:</span><span class="s1">$</span><span class="s3">{</span><span class="s1">strCode</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+								<span class="s3">}</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">WEBPACK_REQUIRE_FUNCTION_REGEXP</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">strCode</span><span class="s3">)) {</span>
+									<span class="s4">return </span><span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">strCode</span><span class="s3">, [</span>
+										<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span>
+									<span class="s3">])(</span><span class="s1">expr</span><span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">WEBPACK_REQUIRE_IDENTIFIER_REGEXP</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">strCode</span><span class="s3">)) {</span>
+									<span class="s4">return </span><span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">strCode</span><span class="s3">, [</span>
+										<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">requireScope</span>
+									<span class="s3">])(</span><span class="s1">expr</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s4">return </span><span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">strCode</span><span class="s3">)(</span><span class="s1">expr</span><span class="s3">);</span>
+							<span class="s3">});</span>
+						<span class="s3">}</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateTypeof</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s5">/**</span>
+							 <span class="s5">* this is needed in case there is a recursion in the DefinePlugin</span>
+							 <span class="s5">* to prevent an endless recursion</span>
+							 <span class="s5">* e.g.: new DefinePlugin({</span>
+							 <span class="s5">* &quot;typeof a&quot;: &quot;typeof b&quot;,</span>
+							 <span class="s5">* &quot;typeof b&quot;: &quot;typeof a&quot;</span>
+							 <span class="s5">* });</span>
+							 <span class="s5">*/</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">recurseTypeof</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s1">recurseTypeof </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+							<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">originalKey</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">codeCode </span><span class="s3">= </span><span class="s1">toCode</span><span class="s3">(</span>
+								<span class="s1">code</span><span class="s3">,</span>
+								<span class="s1">parser</span><span class="s3">,</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">,</span>
+								<span class="s1">originalKey</span><span class="s3">,</span>
+								<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+								<span class="s1">logger</span><span class="s3">,</span>
+								<span class="s4">null</span>
+							<span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">typeofCode </span><span class="s3">= </span><span class="s1">isTypeof </span><span class="s3">? </span><span class="s1">codeCode </span><span class="s3">: </span><span class="s2">`typeof (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">codeCode</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">res </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluate</span><span class="s3">(</span><span class="s1">typeofCode</span><span class="s3">);</span>
+							<span class="s1">recurseTypeof </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+							<span class="s1">res</span><span class="s3">.</span><span class="s1">setRange</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">));</span>
+							<span class="s4">return </span><span class="s1">res</span><span class="s3">;</span>
+						<span class="s3">});</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">typeof</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">originalKey</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">codeCode </span><span class="s3">= </span><span class="s1">toCode</span><span class="s3">(</span>
+								<span class="s1">code</span><span class="s3">,</span>
+								<span class="s1">parser</span><span class="s3">,</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">,</span>
+								<span class="s1">originalKey</span><span class="s3">,</span>
+								<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+								<span class="s1">logger</span><span class="s3">,</span>
+								<span class="s4">null</span>
+							<span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">typeofCode </span><span class="s3">= </span><span class="s1">isTypeof </span><span class="s3">? </span><span class="s1">codeCode </span><span class="s3">: </span><span class="s2">`typeof (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">codeCode</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">res </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluate</span><span class="s3">(</span><span class="s1">typeofCode</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">res</span><span class="s3">.</span><span class="s1">isString</span><span class="s3">()) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">return </span><span class="s1">toConstantDependency</span><span class="s3">(</span>
+								<span class="s1">parser</span><span class="s3">,</span>
+								<span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">res</span><span class="s3">.</span><span class="s1">string</span><span class="s3">)</span>
+							<span class="s3">).</span><span class="s1">bind</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">)(</span><span class="s1">expr</span><span class="s3">);</span>
+						<span class="s3">});</span>
+					<span class="s3">};</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* Apply Object</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} key Key</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} obj Object</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">applyObjectDefine </span><span class="s3">= (</span><span class="s1">key</span><span class="s3">, </span><span class="s1">obj</span><span class="s3">) =&gt; {</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">canRename</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+							<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">});</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+							<span class="s4">return new </span><span class="s1">BasicEvaluatedExpression</span><span class="s3">()</span>
+								<span class="s3">.</span><span class="s1">setTruthy</span><span class="s3">()</span>
+								<span class="s3">.</span><span class="s1">setSideEffects</span><span class="s3">(</span><span class="s4">false</span><span class="s3">)</span>
+								<span class="s3">.</span><span class="s1">setRange</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">));</span>
+						<span class="s3">});</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateTypeof</span>
+							<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">)</span>
+							<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+								<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+								<span class="s1">withValueDependency</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">evaluateToString</span><span class="s3">(</span><span class="s2">&quot;object&quot;</span><span class="s3">))</span>
+							<span class="s3">);</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s1">addValueDependency</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+							<span class="s4">let </span><span class="s1">strCode </span><span class="s3">= </span><span class="s1">stringifyObj</span><span class="s3">(</span>
+								<span class="s1">obj</span><span class="s3">,</span>
+								<span class="s1">parser</span><span class="s3">,</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">,</span>
+								<span class="s1">key</span><span class="s3">,</span>
+								<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+								<span class="s1">logger</span><span class="s3">,</span>
+								<span class="s3">!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isAsiPosition</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]),</span>
+								<span class="s1">getObjKeys</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">destructuringAssignmentPropertiesFor</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">))</span>
+							<span class="s3">);</span>
+
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">inShorthand</span><span class="s3">) {</span>
+								<span class="s1">strCode </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">inShorthand</span><span class="s3">}</span><span class="s2">:</span><span class="s1">$</span><span class="s3">{</span><span class="s1">strCode</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+							<span class="s3">}</span>
+
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">WEBPACK_REQUIRE_FUNCTION_REGEXP</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">strCode</span><span class="s3">)) {</span>
+								<span class="s4">return </span><span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">strCode</span><span class="s3">, [</span>
+									<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span>
+								<span class="s3">])(</span><span class="s1">expr</span><span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">WEBPACK_REQUIRE_IDENTIFIER_REGEXP</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">strCode</span><span class="s3">)) {</span>
+								<span class="s4">return </span><span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">strCode</span><span class="s3">, [</span>
+									<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">requireScope</span>
+								<span class="s3">])(</span><span class="s1">expr</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">return </span><span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">strCode</span><span class="s3">)(</span><span class="s1">expr</span><span class="s3">);</span>
+						<span class="s3">});</span>
+						<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">typeof</span>
+							<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">key</span><span class="s3">)</span>
+							<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+								<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+								<span class="s1">withValueDependency</span><span class="s3">(</span>
+									<span class="s1">key</span><span class="s3">,</span>
+									<span class="s1">toConstantDependency</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s2">&quot;object&quot;</span><span class="s3">))</span>
+								<span class="s3">)</span>
+							<span class="s3">);</span>
+					<span class="s3">};</span>
+
+					<span class="s1">walkDefinitions</span><span class="s3">(</span><span class="s1">definitions</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">);</span>
+				<span class="s3">};</span>
+
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* Walk definitions</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Record&lt;string, CodeValue&gt;} definitions Definitions map</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} prefix Prefix string</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">walkDefinitionsForValues </span><span class="s3">= (</span><span class="s1">definitions</span><span class="s3">, </span><span class="s1">prefix</span><span class="s3">) =&gt; {</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">definitions</span><span class="s3">)) {</span>
+						<span class="s4">const </span><span class="s1">code </span><span class="s3">= </span><span class="s1">definitions</span><span class="s3">[</span><span class="s1">key</span><span class="s3">];</span>
+						<span class="s4">const </span><span class="s1">version </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">toCacheVersion</span><span class="s3">(</span><span class="s1">code</span><span class="s3">));</span>
+						<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">VALUE_DEP_PREFIX </span><span class="s3">+ </span><span class="s1">prefix </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">;</span>
+						<span class="s1">mainHash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">prefix</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">oldVersion </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">oldVersion </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">name</span><span class="s3">, </span><span class="s1">version</span><span class="s3">);</span>
+						<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">oldVersion </span><span class="s3">!== </span><span class="s1">version</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">warning </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WebpackError</span><span class="s3">(</span>
+								<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">PLUGIN_NAME</span><span class="s3">}</span><span class="s4">\n</span><span class="s2">Conflicting values for '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">prefix </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">}</span><span class="s2">'`</span>
+							<span class="s3">);</span>
+							<span class="s1">warning</span><span class="s3">.</span><span class="s1">details </span><span class="s3">= </span><span class="s2">`'</span><span class="s1">$</span><span class="s3">{</span><span class="s1">oldVersion</span><span class="s3">}</span><span class="s2">' !== '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">version</span><span class="s3">}</span><span class="s2">'`</span><span class="s3">;</span>
+							<span class="s1">warning</span><span class="s3">.</span><span class="s1">hideStack </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+							<span class="s1">compilation</span><span class="s3">.</span><span class="s1">warnings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">warning</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s4">if </span><span class="s3">(</span>
+							<span class="s1">code </span><span class="s3">&amp;&amp;</span>
+							<span class="s4">typeof </span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;object&quot; </span><span class="s3">&amp;&amp;</span>
+							<span class="s3">!(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RuntimeValue</span><span class="s3">) &amp;&amp;</span>
+							<span class="s3">!(</span><span class="s1">code </span><span class="s4">instanceof </span><span class="s1">RegExp</span><span class="s3">)</span>
+						<span class="s3">) {</span>
+							<span class="s1">walkDefinitionsForValues</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, CodeValue&gt;} */ </span><span class="s3">(</span><span class="s1">code</span><span class="s3">),</span>
+								<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">prefix </span><span class="s3">+ </span><span class="s1">key</span><span class="s3">}</span><span class="s2">.`</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">};</span>
+
+				<span class="s1">walkDefinitionsForValues</span><span class="s3">(</span><span class="s1">definitions</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">);</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">valueCacheVersions</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">VALUE_DEP_MAIN</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">mainHash</span><span class="s3">.</span><span class="s1">digest</span><span class="s3">(</span><span class="s2">&quot;hex&quot;</span><span class="s3">).</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s7">8</span><span class="s3">))</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">DefinePlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

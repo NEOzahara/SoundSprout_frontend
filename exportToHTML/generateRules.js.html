@@ -1,0 +1,976 @@
+<html>
+<head>
+<title>generateRules.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #7a7e85;}
+.s5 { color: #2aacb8;}
+.s6 { color: #5f826b; font-style: italic;}
+.s7 { color: #67a37c; font-style: italic;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+generateRules.js</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">postcss from </span><span class="s2">'postcss'</span>
+<span class="s0">import </span><span class="s1">selectorParser from </span><span class="s2">'postcss-selector-parser'</span>
+<span class="s0">import </span><span class="s1">parseObjectStyles from </span><span class="s2">'../util/parseObjectStyles'</span>
+<span class="s0">import </span><span class="s1">isPlainObject from </span><span class="s2">'../util/isPlainObject'</span>
+<span class="s0">import </span><span class="s1">prefixSelector from </span><span class="s2">'../util/prefixSelector'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">updateAllClasses</span><span class="s3">, </span><span class="s1">getMatchingTypes </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'../util/pluginUtils'</span>
+<span class="s0">import </span><span class="s1">log from </span><span class="s2">'../util/log'</span>
+<span class="s0">import </span><span class="s3">* as </span><span class="s1">sharedState from </span><span class="s2">'./sharedState'</span>
+<span class="s0">import </span><span class="s3">{</span>
+  <span class="s1">formatVariantSelector</span><span class="s3">,</span>
+  <span class="s1">finalizeSelector</span><span class="s3">,</span>
+  <span class="s1">eliminateIrrelevantSelectors</span><span class="s3">,</span>
+<span class="s3">} </span><span class="s1">from </span><span class="s2">'../util/formatVariantSelector'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">asClass </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'../util/nameClass'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">normalize </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'../util/dataTypes'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">isValidVariantFormatString</span><span class="s3">, </span><span class="s1">parseVariant</span><span class="s3">, </span><span class="s1">INTERNAL_FEATURES </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'./setupContextUtils'</span>
+<span class="s0">import </span><span class="s1">isValidArbitraryValue from </span><span class="s2">'../util/isSyntacticallyValidPropertyValue'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">splitAtTopLevelOnly </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'../util/splitAtTopLevelOnly.js'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">flagEnabled </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'../featureFlags'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">applyImportantSelector </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'../util/applyImportantSelector'</span>
+
+<span class="s0">let </span><span class="s1">classNameParser </span><span class="s3">= </span><span class="s1">selectorParser</span><span class="s3">((</span><span class="s1">selectors</span><span class="s3">) =&gt; {</span>
+  <span class="s0">return </span><span class="s1">selectors</span><span class="s3">.</span><span class="s1">first</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(({ </span><span class="s1">type </span><span class="s3">}) =&gt; </span><span class="s1">type </span><span class="s3">=== </span><span class="s2">'class'</span><span class="s3">).</span><span class="s1">pop</span><span class="s3">().</span><span class="s1">value</span>
+<span class="s3">})</span>
+
+<span class="s0">export function </span><span class="s1">getClassNameFromSelector</span><span class="s3">(</span><span class="s1">selector</span><span class="s3">) {</span>
+  <span class="s0">return </span><span class="s1">classNameParser</span><span class="s3">.</span><span class="s1">transformSync</span><span class="s3">(</span><span class="s1">selector</span><span class="s3">)</span>
+<span class="s3">}</span>
+
+<span class="s4">// Generate match permutations for a class candidate, like:</span>
+<span class="s4">// ['ring-offset-blue', '100']</span>
+<span class="s4">// ['ring-offset', 'blue-100']</span>
+<span class="s4">// ['ring', 'offset-blue-100']</span>
+<span class="s4">// Example with dynamic classes:</span>
+<span class="s4">// ['grid-cols', '[[linename],1fr,auto]']</span>
+<span class="s4">// ['grid', 'cols-[[linename],1fr,auto]']</span>
+<span class="s0">function</span><span class="s3">* </span><span class="s1">candidatePermutations</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s1">lastIndex </span><span class="s3">= </span><span class="s1">Infinity</span>
+
+  <span class="s0">while </span><span class="s3">(</span><span class="s1">lastIndex </span><span class="s3">&gt;= </span><span class="s5">0</span><span class="s3">) {</span>
+    <span class="s0">let </span><span class="s1">dashIdx</span>
+    <span class="s0">let </span><span class="s1">wasSlash </span><span class="s3">= </span><span class="s0">false</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">lastIndex </span><span class="s3">=== </span><span class="s1">Infinity </span><span class="s3">&amp;&amp; </span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">endsWith</span><span class="s3">(</span><span class="s2">']'</span><span class="s3">)) {</span>
+      <span class="s0">let </span><span class="s1">bracketIdx </span><span class="s3">= </span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s2">'['</span><span class="s3">)</span>
+
+      <span class="s4">// If character before `[` isn't a dash or a slash, this isn't a dynamic class</span>
+      <span class="s4">// eg. string[]</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">[</span><span class="s1">bracketIdx </span><span class="s3">- </span><span class="s5">1</span><span class="s3">] === </span><span class="s2">'-'</span><span class="s3">) {</span>
+        <span class="s1">dashIdx </span><span class="s3">= </span><span class="s1">bracketIdx </span><span class="s3">- </span><span class="s5">1</span>
+      <span class="s3">} </span><span class="s0">else if </span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">[</span><span class="s1">bracketIdx </span><span class="s3">- </span><span class="s5">1</span><span class="s3">] === </span><span class="s2">'/'</span><span class="s3">) {</span>
+        <span class="s1">dashIdx </span><span class="s3">= </span><span class="s1">bracketIdx </span><span class="s3">- </span><span class="s5">1</span>
+        <span class="s1">wasSlash </span><span class="s3">= </span><span class="s0">true</span>
+      <span class="s3">} </span><span class="s0">else </span><span class="s3">{</span>
+        <span class="s1">dashIdx </span><span class="s3">= -</span><span class="s5">1</span>
+      <span class="s3">}</span>
+    <span class="s3">} </span><span class="s0">else if </span><span class="s3">(</span><span class="s1">lastIndex </span><span class="s3">=== </span><span class="s1">Infinity </span><span class="s3">&amp;&amp; </span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">includes</span><span class="s3">(</span><span class="s2">'/'</span><span class="s3">)) {</span>
+      <span class="s1">dashIdx </span><span class="s3">= </span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">lastIndexOf</span><span class="s3">(</span><span class="s2">'/'</span><span class="s3">)</span>
+      <span class="s1">wasSlash </span><span class="s3">= </span><span class="s0">true</span>
+    <span class="s3">} </span><span class="s0">else </span><span class="s3">{</span>
+      <span class="s1">dashIdx </span><span class="s3">= </span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">lastIndexOf</span><span class="s3">(</span><span class="s2">'-'</span><span class="s3">, </span><span class="s1">lastIndex</span><span class="s3">)</span>
+    <span class="s3">}</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">dashIdx </span><span class="s3">&lt; </span><span class="s5">0</span><span class="s3">) {</span>
+      <span class="s0">break</span>
+    <span class="s3">}</span>
+
+    <span class="s0">let </span><span class="s1">prefix </span><span class="s3">= </span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s5">0</span><span class="s3">, </span><span class="s1">dashIdx</span><span class="s3">)</span>
+    <span class="s0">let </span><span class="s1">modifier </span><span class="s3">= </span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">wasSlash </span><span class="s3">? </span><span class="s1">dashIdx </span><span class="s3">: </span><span class="s1">dashIdx </span><span class="s3">+ </span><span class="s5">1</span><span class="s3">)</span>
+
+    <span class="s1">lastIndex </span><span class="s3">= </span><span class="s1">dashIdx </span><span class="s3">- </span><span class="s5">1</span>
+
+    <span class="s4">// TODO: This feels a bit hacky</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">prefix </span><span class="s3">=== </span><span class="s2">'' </span><span class="s3">|| </span><span class="s1">modifier </span><span class="s3">=== </span><span class="s2">'/'</span><span class="s3">) {</span>
+      <span class="s0">continue</span>
+    <span class="s3">}</span>
+
+    <span class="s0">yield </span><span class="s3">[</span><span class="s1">prefix</span><span class="s3">, </span><span class="s1">modifier</span><span class="s3">]</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">applyPrefix</span><span class="s3">(</span><span class="s1">matches</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">matches</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">0 </span><span class="s3">|| </span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">prefix </span><span class="s3">=== </span><span class="s2">''</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s1">matches</span>
+  <span class="s3">}</span>
+
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">match of matches</span><span class="s3">) {</span>
+    <span class="s0">let </span><span class="s3">[</span><span class="s1">meta</span><span class="s3">] = </span><span class="s1">match</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">meta</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">respectPrefix</span><span class="s3">) {</span>
+      <span class="s0">let </span><span class="s1">container </span><span class="s3">= </span><span class="s1">postcss</span><span class="s3">.</span><span class="s1">root</span><span class="s3">({ </span><span class="s1">nodes</span><span class="s3">: [</span><span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">clone</span><span class="s3">()] })</span>
+      <span class="s0">let </span><span class="s1">classCandidate </span><span class="s3">= </span><span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind</span><span class="s3">.</span><span class="s1">classCandidate</span>
+
+      <span class="s1">container</span><span class="s3">.</span><span class="s1">walkRules</span><span class="s3">((</span><span class="s1">r</span><span class="s3">) =&gt; {</span>
+        <span class="s4">// If this is a negative utility with a dash *before* the prefix we</span>
+        <span class="s4">// have to ensure that the generated selector matches the candidate</span>
+
+        <span class="s4">// Not doing this will cause `-tw-top-1` to generate the class `.tw--top-1`</span>
+        <span class="s4">// The disconnect between candidate &lt;-&gt; class can cause @apply to hard crash.</span>
+        <span class="s0">let </span><span class="s1">shouldPrependNegative </span><span class="s3">= </span><span class="s1">classCandidate</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">'-'</span><span class="s3">)</span>
+
+        <span class="s1">r</span><span class="s3">.</span><span class="s1">selector </span><span class="s3">= </span><span class="s1">prefixSelector</span><span class="s3">(</span>
+          <span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">prefix</span><span class="s3">,</span>
+          <span class="s1">r</span><span class="s3">.</span><span class="s1">selector</span><span class="s3">,</span>
+          <span class="s1">shouldPrependNegative</span>
+        <span class="s3">)</span>
+      <span class="s3">})</span>
+
+      <span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">] = </span><span class="s1">container</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">[</span><span class="s5">0</span><span class="s3">]</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s0">return </span><span class="s1">matches</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">applyImportant</span><span class="s3">(</span><span class="s1">matches</span><span class="s3">, </span><span class="s1">classCandidate</span><span class="s3">) {</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">matches</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s1">matches</span>
+  <span class="s3">}</span>
+
+  <span class="s0">let </span><span class="s1">result </span><span class="s3">= []</span>
+
+  <span class="s0">function </span><span class="s1">isInKeyframes</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">parent </span><span class="s3">&amp;&amp; </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">parent</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">'atrule' </span><span class="s3">&amp;&amp; </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">parent</span><span class="s3">.</span><span class="s1">name </span><span class="s3">=== </span><span class="s2">'keyframes'</span>
+  <span class="s3">}</span>
+
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">meta</span><span class="s3">, </span><span class="s1">rule</span><span class="s3">] </span><span class="s1">of matches</span><span class="s3">) {</span>
+    <span class="s0">let </span><span class="s1">container </span><span class="s3">= </span><span class="s1">postcss</span><span class="s3">.</span><span class="s1">root</span><span class="s3">({ </span><span class="s1">nodes</span><span class="s3">: [</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">clone</span><span class="s3">()] })</span>
+
+    <span class="s1">container</span><span class="s3">.</span><span class="s1">walkRules</span><span class="s3">((</span><span class="s1">r</span><span class="s3">) =&gt; {</span>
+      <span class="s4">// Declarations inside keyframes cannot be marked as important</span>
+      <span class="s4">// They will be ignored by the browser</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">isInKeyframes</span><span class="s3">(</span><span class="s1">r</span><span class="s3">)) {</span>
+        <span class="s0">return</span>
+      <span class="s3">}</span>
+
+      <span class="s0">let </span><span class="s1">ast </span><span class="s3">= </span><span class="s1">selectorParser</span><span class="s3">().</span><span class="s1">astSync</span><span class="s3">(</span><span class="s1">r</span><span class="s3">.</span><span class="s1">selector</span><span class="s3">)</span>
+
+      <span class="s4">// Remove extraneous selectors that do not include the base candidate</span>
+      <span class="s1">ast</span><span class="s3">.</span><span class="s1">each</span><span class="s3">((</span><span class="s1">sel</span><span class="s3">) =&gt; </span><span class="s1">eliminateIrrelevantSelectors</span><span class="s3">(</span><span class="s1">sel</span><span class="s3">, </span><span class="s1">classCandidate</span><span class="s3">))</span>
+
+      <span class="s4">// Update all instances of the base candidate to include the important marker</span>
+      <span class="s1">updateAllClasses</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, (</span><span class="s1">className</span><span class="s3">) =&gt;</span>
+        <span class="s1">className </span><span class="s3">=== </span><span class="s1">classCandidate </span><span class="s3">? </span><span class="s2">`!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">className</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s1">className</span>
+      <span class="s3">)</span>
+
+      <span class="s1">r</span><span class="s3">.</span><span class="s1">selector </span><span class="s3">= </span><span class="s1">ast</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">()</span>
+
+      <span class="s1">r</span><span class="s3">.</span><span class="s1">walkDecls</span><span class="s3">((</span><span class="s1">d</span><span class="s3">) =&gt; (</span><span class="s1">d</span><span class="s3">.</span><span class="s1">important </span><span class="s3">= </span><span class="s0">true</span><span class="s3">))</span>
+    <span class="s3">})</span>
+
+    <span class="s1">result</span><span class="s3">.</span><span class="s1">push</span><span class="s3">([{ </span><span class="s1">...meta</span><span class="s3">, </span><span class="s1">important</span><span class="s3">: </span><span class="s0">true </span><span class="s3">}, </span><span class="s1">container</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">[</span><span class="s5">0</span><span class="s3">]])</span>
+  <span class="s3">}</span>
+
+  <span class="s0">return </span><span class="s1">result</span>
+<span class="s3">}</span>
+
+<span class="s4">// Takes a list of rule tuples and applies a variant like `hover`, sm`,</span>
+<span class="s4">// whatever to it. We used to do some extra caching here to avoid generating</span>
+<span class="s4">// a variant of the same rule more than once, but this was never hit because</span>
+<span class="s4">// we cache at the entire selector level further up the tree.</span>
+<span class="s4">//</span>
+<span class="s4">// Technically you can get a cache hit if you have `hover:focus:text-center`</span>
+<span class="s4">// and `focus:hover:text-center` in the same project, but it doesn't feel</span>
+<span class="s4">// worth the complexity for that case.</span>
+
+<span class="s0">function </span><span class="s1">applyVariant</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">, </span><span class="s1">matches</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">matches</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s1">matches</span>
+  <span class="s3">}</span>
+
+  <span class="s6">/** </span><span class="s7">@type </span><span class="s6">{{modifier: string | null, value: string | null}} */</span>
+  <span class="s0">let </span><span class="s1">args </span><span class="s3">= { </span><span class="s1">modifier</span><span class="s3">: </span><span class="s0">null</span><span class="s3">, </span><span class="s1">value</span><span class="s3">: </span><span class="s1">sharedState</span><span class="s3">.</span><span class="s1">NONE </span><span class="s3">}</span>
+
+  <span class="s4">// Retrieve &quot;modifier&quot;</span>
+  <span class="s3">{</span>
+    <span class="s0">let </span><span class="s3">[</span><span class="s1">baseVariant</span><span class="s3">, </span><span class="s1">...modifiers</span><span class="s3">] = </span><span class="s1">splitAtTopLevelOnly</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">, </span><span class="s2">'/'</span><span class="s3">)</span>
+
+    <span class="s4">// This is a hack to support variants with `/` in them, like `ar-1/10/20:text-red-500`</span>
+    <span class="s4">// In this case 1/10 is a value but /20 is a modifier</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">modifiers</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">1</span><span class="s3">) {</span>
+      <span class="s1">baseVariant </span><span class="s3">= </span><span class="s1">baseVariant </span><span class="s3">+ </span><span class="s2">'/' </span><span class="s3">+ </span><span class="s1">modifiers</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s5">0</span><span class="s3">, -</span><span class="s5">1</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">'/'</span><span class="s3">)</span>
+      <span class="s1">modifiers </span><span class="s3">= </span><span class="s1">modifiers</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(-</span><span class="s5">1</span><span class="s3">)</span>
+    <span class="s3">}</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">modifiers</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&amp;&amp; !</span><span class="s1">context</span><span class="s3">.</span><span class="s1">variantMap</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">)) {</span>
+      <span class="s1">variant </span><span class="s3">= </span><span class="s1">baseVariant</span>
+      <span class="s1">args</span><span class="s3">.</span><span class="s1">modifier </span><span class="s3">= </span><span class="s1">modifiers</span><span class="s3">[</span><span class="s5">0</span><span class="s3">]</span>
+
+      <span class="s0">if </span><span class="s3">(!</span><span class="s1">flagEnabled</span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">, </span><span class="s2">'generalizedModifiers'</span><span class="s3">)) {</span>
+        <span class="s0">return </span><span class="s3">[]</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s4">// Retrieve &quot;arbitrary value&quot;</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">variant</span><span class="s3">.</span><span class="s1">endsWith</span><span class="s3">(</span><span class="s2">']'</span><span class="s3">) &amp;&amp; !</span><span class="s1">variant</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">'['</span><span class="s3">)) {</span>
+    <span class="s4">// We either have:</span>
+    <span class="s4">//   @[200px]</span>
+    <span class="s4">//   group-[:hover]</span>
+    <span class="s4">//</span>
+    <span class="s4">// But we don't want:</span>
+    <span class="s4">//   @-[200px]        (`-` is incorrect)</span>
+    <span class="s4">//   group[:hover]    (`-` is missing)</span>
+    <span class="s0">let </span><span class="s1">match </span><span class="s3">= </span><span class="s8">/(.)(-?)\[(.*)\]/g</span><span class="s3">.</span><span class="s1">exec</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">)</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">match</span><span class="s3">) {</span>
+      <span class="s0">let </span><span class="s3">[, </span><span class="s1">char</span><span class="s3">, </span><span class="s1">separator</span><span class="s3">, </span><span class="s1">value</span><span class="s3">] = </span><span class="s1">match</span>
+      <span class="s4">// @-[200px] case</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">char </span><span class="s3">=== </span><span class="s2">'@' </span><span class="s3">&amp;&amp; </span><span class="s1">separator </span><span class="s3">=== </span><span class="s2">'-'</span><span class="s3">) </span><span class="s0">return </span><span class="s3">[]</span>
+      <span class="s4">// group[:hover] case</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">char </span><span class="s3">!== </span><span class="s2">'@' </span><span class="s3">&amp;&amp; </span><span class="s1">separator </span><span class="s3">=== </span><span class="s2">''</span><span class="s3">) </span><span class="s0">return </span><span class="s3">[]</span>
+
+      <span class="s1">variant </span><span class="s3">= </span><span class="s1">variant</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">separator</span><span class="s3">}</span><span class="s2">[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">value</span><span class="s3">}</span><span class="s2">]`</span><span class="s3">, </span><span class="s2">''</span><span class="s3">)</span>
+      <span class="s1">args</span><span class="s3">.</span><span class="s1">value </span><span class="s3">= </span><span class="s1">value</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s4">// Register arbitrary variants</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">isArbitraryValue</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">) &amp;&amp; !</span><span class="s1">context</span><span class="s3">.</span><span class="s1">variantMap</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">)) {</span>
+    <span class="s0">let </span><span class="s1">sort </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">offsets</span><span class="s3">.</span><span class="s1">recordVariant</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">)</span>
+
+    <span class="s0">let </span><span class="s1">selector </span><span class="s3">= </span><span class="s1">normalize</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s5">1</span><span class="s3">, -</span><span class="s5">1</span><span class="s3">))</span>
+    <span class="s0">let </span><span class="s1">selectors </span><span class="s3">= </span><span class="s1">splitAtTopLevelOnly</span><span class="s3">(</span><span class="s1">selector</span><span class="s3">, </span><span class="s2">','</span><span class="s3">)</span>
+
+    <span class="s4">// We do not support multiple selectors for arbitrary variants</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">selectors</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">1</span><span class="s3">) {</span>
+      <span class="s0">return </span><span class="s3">[]</span>
+    <span class="s3">}</span>
+
+    <span class="s0">if </span><span class="s3">(!</span><span class="s1">selectors</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(</span><span class="s1">isValidVariantFormatString</span><span class="s3">)) {</span>
+      <span class="s0">return </span><span class="s3">[]</span>
+    <span class="s3">}</span>
+
+    <span class="s0">let </span><span class="s1">records </span><span class="s3">= </span><span class="s1">selectors</span><span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">sel</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">) =&gt; [</span>
+      <span class="s1">context</span><span class="s3">.</span><span class="s1">offsets</span><span class="s3">.</span><span class="s1">applyParallelOffset</span><span class="s3">(</span><span class="s1">sort</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">),</span>
+      <span class="s1">parseVariant</span><span class="s3">(</span><span class="s1">sel</span><span class="s3">.</span><span class="s1">trim</span><span class="s3">()),</span>
+    <span class="s3">])</span>
+
+    <span class="s1">context</span><span class="s3">.</span><span class="s1">variantMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">, </span><span class="s1">records</span><span class="s3">)</span>
+  <span class="s3">}</span>
+
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">variantMap</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">)) {</span>
+    <span class="s0">let </span><span class="s1">isArbitraryVariant </span><span class="s3">= </span><span class="s1">isArbitraryValue</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">)</span>
+    <span class="s0">let </span><span class="s1">internalFeatures </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">variantOptions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">)?.[</span><span class="s1">INTERNAL_FEATURES</span><span class="s3">] ?? {}</span>
+    <span class="s0">let </span><span class="s1">variantFunctionTuples </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">variantMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">).</span><span class="s1">slice</span><span class="s3">()</span>
+    <span class="s0">let </span><span class="s1">result </span><span class="s3">= []</span>
+
+    <span class="s0">let </span><span class="s1">respectPrefix </span><span class="s3">= (() =&gt; {</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">isArbitraryVariant</span><span class="s3">) </span><span class="s0">return false</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">internalFeatures</span><span class="s3">.</span><span class="s1">respectPrefix </span><span class="s3">=== </span><span class="s0">false</span><span class="s3">) </span><span class="s0">return false</span>
+      <span class="s0">return true</span>
+    <span class="s3">})()</span>
+
+    <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">meta</span><span class="s3">, </span><span class="s1">rule</span><span class="s3">] </span><span class="s1">of matches</span><span class="s3">) {</span>
+      <span class="s4">// Don't generate variants for user css</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">meta</span><span class="s3">.</span><span class="s1">layer </span><span class="s3">=== </span><span class="s2">'user'</span><span class="s3">) {</span>
+        <span class="s0">continue</span>
+      <span class="s3">}</span>
+
+      <span class="s0">let </span><span class="s1">container </span><span class="s3">= </span><span class="s1">postcss</span><span class="s3">.</span><span class="s1">root</span><span class="s3">({ </span><span class="s1">nodes</span><span class="s3">: [</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">clone</span><span class="s3">()] })</span>
+
+      <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">variantSort</span><span class="s3">, </span><span class="s1">variantFunction</span><span class="s3">, </span><span class="s1">containerFromArray</span><span class="s3">] </span><span class="s1">of variantFunctionTuples</span><span class="s3">) {</span>
+        <span class="s0">let </span><span class="s1">clone </span><span class="s3">= (</span><span class="s1">containerFromArray </span><span class="s3">?? </span><span class="s1">container</span><span class="s3">).</span><span class="s1">clone</span><span class="s3">()</span>
+        <span class="s0">let </span><span class="s1">collectedFormats </span><span class="s3">= []</span>
+
+        <span class="s0">function </span><span class="s1">prepareBackup</span><span class="s3">() {</span>
+          <span class="s4">// Already prepared, chicken out</span>
+          <span class="s0">if </span><span class="s3">(</span><span class="s1">clone</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">neededBackup</span><span class="s3">) {</span>
+            <span class="s0">return</span>
+          <span class="s3">}</span>
+          <span class="s1">clone</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">neededBackup </span><span class="s3">= </span><span class="s0">true</span>
+          <span class="s1">clone</span><span class="s3">.</span><span class="s1">walkRules</span><span class="s3">((</span><span class="s1">rule</span><span class="s3">) =&gt; (</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">originalSelector </span><span class="s3">= </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">selector</span><span class="s3">))</span>
+        <span class="s3">}</span>
+
+        <span class="s0">function </span><span class="s1">modifySelectors</span><span class="s3">(</span><span class="s1">modifierFunction</span><span class="s3">) {</span>
+          <span class="s1">prepareBackup</span><span class="s3">()</span>
+          <span class="s1">clone</span><span class="s3">.</span><span class="s1">each</span><span class="s3">((</span><span class="s1">rule</span><span class="s3">) =&gt; {</span>
+            <span class="s0">if </span><span class="s3">(</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">'rule'</span><span class="s3">) {</span>
+              <span class="s0">return</span>
+            <span class="s3">}</span>
+
+            <span class="s1">rule</span><span class="s3">.</span><span class="s1">selectors </span><span class="s3">= </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">selectors</span><span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">selector</span><span class="s3">) =&gt; {</span>
+              <span class="s0">return </span><span class="s1">modifierFunction</span><span class="s3">({</span>
+                <span class="s1">get className</span><span class="s3">() {</span>
+                  <span class="s0">return </span><span class="s1">getClassNameFromSelector</span><span class="s3">(</span><span class="s1">selector</span><span class="s3">)</span>
+                <span class="s3">},</span>
+                <span class="s1">selector</span><span class="s3">,</span>
+              <span class="s3">})</span>
+            <span class="s3">})</span>
+          <span class="s3">})</span>
+
+          <span class="s0">return </span><span class="s1">clone</span>
+        <span class="s3">}</span>
+
+        <span class="s0">let </span><span class="s1">ruleWithVariant </span><span class="s3">= </span><span class="s1">variantFunction</span><span class="s3">({</span>
+          <span class="s4">// Public API</span>
+          <span class="s1">get container</span><span class="s3">() {</span>
+            <span class="s1">prepareBackup</span><span class="s3">()</span>
+            <span class="s0">return </span><span class="s1">clone</span>
+          <span class="s3">},</span>
+          <span class="s1">separator</span><span class="s3">: </span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">separator</span><span class="s3">,</span>
+          <span class="s1">modifySelectors</span><span class="s3">,</span>
+
+          <span class="s4">// Private API for now</span>
+          <span class="s1">wrap</span><span class="s3">(</span><span class="s1">wrapper</span><span class="s3">) {</span>
+            <span class="s0">let </span><span class="s1">nodes </span><span class="s3">= </span><span class="s1">clone</span><span class="s3">.</span><span class="s1">nodes</span>
+            <span class="s1">clone</span><span class="s3">.</span><span class="s1">removeAll</span><span class="s3">()</span>
+            <span class="s1">wrapper</span><span class="s3">.</span><span class="s1">append</span><span class="s3">(</span><span class="s1">nodes</span><span class="s3">)</span>
+            <span class="s1">clone</span><span class="s3">.</span><span class="s1">append</span><span class="s3">(</span><span class="s1">wrapper</span><span class="s3">)</span>
+          <span class="s3">},</span>
+          <span class="s1">format</span><span class="s3">(</span><span class="s1">selectorFormat</span><span class="s3">) {</span>
+            <span class="s1">collectedFormats</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+              <span class="s1">format</span><span class="s3">: </span><span class="s1">selectorFormat</span><span class="s3">,</span>
+              <span class="s1">respectPrefix</span><span class="s3">,</span>
+            <span class="s3">})</span>
+          <span class="s3">},</span>
+          <span class="s1">args</span><span class="s3">,</span>
+        <span class="s3">})</span>
+
+        <span class="s4">// It can happen that a list of format strings is returned from within the function. In that</span>
+        <span class="s4">// case, we have to process them as well. We can use the existing `variantSort`.</span>
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">ruleWithVariant</span><span class="s3">)) {</span>
+          <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">idx</span><span class="s3">, </span><span class="s1">variantFunction</span><span class="s3">] </span><span class="s1">of ruleWithVariant</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">()) {</span>
+            <span class="s4">// This is a little bit scary since we are pushing to an array of items that we are</span>
+            <span class="s4">// currently looping over. However, you can also think of it like a processing queue</span>
+            <span class="s4">// where you keep handling jobs until everything is done and each job can queue more</span>
+            <span class="s4">// jobs if needed.</span>
+            <span class="s1">variantFunctionTuples</span><span class="s3">.</span><span class="s1">push</span><span class="s3">([</span>
+              <span class="s1">context</span><span class="s3">.</span><span class="s1">offsets</span><span class="s3">.</span><span class="s1">applyParallelOffset</span><span class="s3">(</span><span class="s1">variantSort</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">),</span>
+              <span class="s1">variantFunction</span><span class="s3">,</span>
+
+              <span class="s4">// If the clone has been modified we have to pass that back</span>
+              <span class="s4">// though so each rule can use the modified container</span>
+              <span class="s1">clone</span><span class="s3">.</span><span class="s1">clone</span><span class="s3">(),</span>
+            <span class="s3">])</span>
+          <span class="s3">}</span>
+          <span class="s0">continue</span>
+        <span class="s3">}</span>
+
+        <span class="s0">if </span><span class="s3">(</span><span class="s0">typeof </span><span class="s1">ruleWithVariant </span><span class="s3">=== </span><span class="s2">'string'</span><span class="s3">) {</span>
+          <span class="s1">collectedFormats</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+            <span class="s1">format</span><span class="s3">: </span><span class="s1">ruleWithVariant</span><span class="s3">,</span>
+            <span class="s1">respectPrefix</span><span class="s3">,</span>
+          <span class="s3">})</span>
+        <span class="s3">}</span>
+
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">ruleWithVariant </span><span class="s3">=== </span><span class="s0">null</span><span class="s3">) {</span>
+          <span class="s0">continue</span>
+        <span class="s3">}</span>
+
+        <span class="s4">// We had to backup selectors, therefore we assume that somebody touched</span>
+        <span class="s4">// `container` or `modifySelectors`. Let's see if they did, so that we</span>
+        <span class="s4">// can restore the selectors, and collect the format strings.</span>
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">clone</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">neededBackup</span><span class="s3">) {</span>
+          <span class="s0">delete </span><span class="s1">clone</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">neededBackup</span>
+          <span class="s1">clone</span><span class="s3">.</span><span class="s1">walkRules</span><span class="s3">((</span><span class="s1">rule</span><span class="s3">) =&gt; {</span>
+            <span class="s0">let </span><span class="s1">before </span><span class="s3">= </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">originalSelector</span>
+            <span class="s0">if </span><span class="s3">(!</span><span class="s1">before</span><span class="s3">) </span><span class="s0">return</span>
+            <span class="s0">delete </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">originalSelector</span>
+            <span class="s0">if </span><span class="s3">(</span><span class="s1">before </span><span class="s3">=== </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">selector</span><span class="s3">) </span><span class="s0">return </span><span class="s4">// No mutation happened</span>
+
+            <span class="s0">let </span><span class="s1">modified </span><span class="s3">= </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">selector</span>
+
+            <span class="s4">// Rebuild the base selector, this is what plugin authors would do</span>
+            <span class="s4">// as well. E.g.: `${variant}${separator}${className}`.</span>
+            <span class="s4">// However, plugin authors probably also prepend or append certain</span>
+            <span class="s4">// classes, pseudos, ids, ...</span>
+            <span class="s0">let </span><span class="s1">rebuiltBase </span><span class="s3">= </span><span class="s1">selectorParser</span><span class="s3">((</span><span class="s1">selectors</span><span class="s3">) =&gt; {</span>
+              <span class="s1">selectors</span><span class="s3">.</span><span class="s1">walkClasses</span><span class="s3">((</span><span class="s1">classNode</span><span class="s3">) =&gt; {</span>
+                <span class="s1">classNode</span><span class="s3">.</span><span class="s1">value </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">variant</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">separator</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">classNode</span><span class="s3">.</span><span class="s1">value</span><span class="s3">}</span><span class="s2">`</span>
+              <span class="s3">})</span>
+            <span class="s3">}).</span><span class="s1">processSync</span><span class="s3">(</span><span class="s1">before</span><span class="s3">)</span>
+
+            <span class="s4">// Now that we know the original selector, the new selector, and</span>
+            <span class="s4">// the rebuild part in between, we can replace the part that plugin</span>
+            <span class="s4">// authors need to rebuild with `&amp;`, and eventually store it in the</span>
+            <span class="s4">// collectedFormats. Similar to what `format('...')` would do.</span>
+            <span class="s4">//</span>
+            <span class="s4">// E.g.:</span>
+            <span class="s4">//                   variant: foo</span>
+            <span class="s4">//                  selector: .markdown &gt; p</span>
+            <span class="s4">//      modified (by plugin): .foo .foo\\:markdown &gt; p</span>
+            <span class="s4">//    rebuiltBase (internal): .foo\\:markdown &gt; p</span>
+            <span class="s4">//                    format: .foo &amp;</span>
+            <span class="s1">collectedFormats</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+              <span class="s1">format</span><span class="s3">: </span><span class="s1">modified</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s1">rebuiltBase</span><span class="s3">, </span><span class="s2">'&amp;'</span><span class="s3">),</span>
+              <span class="s1">respectPrefix</span><span class="s3">,</span>
+            <span class="s3">})</span>
+            <span class="s1">rule</span><span class="s3">.</span><span class="s1">selector </span><span class="s3">= </span><span class="s1">before</span>
+          <span class="s3">})</span>
+        <span class="s3">}</span>
+
+        <span class="s4">// This tracks the originating layer for the variant</span>
+        <span class="s4">// For example:</span>
+        <span class="s4">// .sm:underline {} is a variant of something in the utilities layer</span>
+        <span class="s4">// .sm:container {} is a variant of the container component</span>
+        <span class="s1">clone</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">[</span><span class="s5">0</span><span class="s3">].</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind </span><span class="s3">= { </span><span class="s1">...clone</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">[</span><span class="s5">0</span><span class="s3">].</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind</span><span class="s3">, </span><span class="s1">parentLayer</span><span class="s3">: </span><span class="s1">meta</span><span class="s3">.</span><span class="s1">layer </span><span class="s3">}</span>
+
+        <span class="s0">let </span><span class="s1">withOffset </span><span class="s3">= [</span>
+          <span class="s3">{</span>
+            <span class="s1">...meta</span><span class="s3">,</span>
+            <span class="s1">sort</span><span class="s3">: </span><span class="s1">context</span><span class="s3">.</span><span class="s1">offsets</span><span class="s3">.</span><span class="s1">applyVariantOffset</span><span class="s3">(</span>
+              <span class="s1">meta</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">,</span>
+              <span class="s1">variantSort</span><span class="s3">,</span>
+              <span class="s1">Object</span><span class="s3">.</span><span class="s1">assign</span><span class="s3">(</span><span class="s1">args</span><span class="s3">, </span><span class="s1">context</span><span class="s3">.</span><span class="s1">variantOptions</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">))</span>
+            <span class="s3">),</span>
+            <span class="s1">collectedFormats</span><span class="s3">: (</span><span class="s1">meta</span><span class="s3">.</span><span class="s1">collectedFormats </span><span class="s3">?? []).</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">collectedFormats</span><span class="s3">),</span>
+          <span class="s3">},</span>
+          <span class="s1">clone</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">[</span><span class="s5">0</span><span class="s3">],</span>
+        <span class="s3">]</span>
+        <span class="s1">result</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">withOffset</span><span class="s3">)</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s0">return </span><span class="s1">result</span>
+  <span class="s3">}</span>
+
+  <span class="s0">return </span><span class="s3">[]</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">parseRules</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">options </span><span class="s3">= {}) {</span>
+  <span class="s4">// PostCSS node</span>
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">isPlainObject</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">) &amp;&amp; !</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)) {</span>
+    <span class="s0">return </span><span class="s3">[[</span><span class="s1">rule</span><span class="s3">], </span><span class="s1">options</span><span class="s3">]</span>
+  <span class="s3">}</span>
+
+  <span class="s4">// Tuple</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)) {</span>
+    <span class="s0">return </span><span class="s1">parseRules</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">[</span><span class="s5">0</span><span class="s3">], </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">rule</span><span class="s3">[</span><span class="s5">1</span><span class="s3">])</span>
+  <span class="s3">}</span>
+
+  <span class="s4">// Simple object</span>
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">cache</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)) {</span>
+    <span class="s1">cache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">, </span><span class="s1">parseObjectStyles</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">))</span>
+  <span class="s3">}</span>
+
+  <span class="s0">return </span><span class="s3">[</span><span class="s1">cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">), </span><span class="s1">options</span><span class="s3">]</span>
+<span class="s3">}</span>
+
+<span class="s0">const </span><span class="s1">IS_VALID_PROPERTY_NAME </span><span class="s3">= </span><span class="s8">/^[a-z_-]/</span>
+
+<span class="s0">function </span><span class="s1">isValidPropName</span><span class="s3">(</span><span class="s1">name</span><span class="s3">) {</span>
+  <span class="s0">return </span><span class="s1">IS_VALID_PROPERTY_NAME</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">name</span><span class="s3">)</span>
+<span class="s3">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string} declaration</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{boolean}</span>
+ <span class="s6">*/</span>
+<span class="s0">function </span><span class="s1">looksLikeUri</span><span class="s3">(</span><span class="s1">declaration</span><span class="s3">) {</span>
+  <span class="s4">// Quick bailout for obvious non-urls</span>
+  <span class="s4">// This doesn't support schemes that don't use a leading // but that's unlikely to be a problem</span>
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">declaration</span><span class="s3">.</span><span class="s1">includes</span><span class="s3">(</span><span class="s2">'://'</span><span class="s3">)) {</span>
+    <span class="s0">return false</span>
+  <span class="s3">}</span>
+
+  <span class="s0">try </span><span class="s3">{</span>
+    <span class="s0">const </span><span class="s1">url </span><span class="s3">= </span><span class="s0">new </span><span class="s1">URL</span><span class="s3">(</span><span class="s1">declaration</span><span class="s3">)</span>
+    <span class="s0">return </span><span class="s1">url</span><span class="s3">.</span><span class="s1">scheme </span><span class="s3">!== </span><span class="s2">'' </span><span class="s3">&amp;&amp; </span><span class="s1">url</span><span class="s3">.</span><span class="s1">host </span><span class="s3">!== </span><span class="s2">''</span>
+  <span class="s3">} </span><span class="s0">catch </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+    <span class="s4">// Definitely not a valid url</span>
+    <span class="s0">return false</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">isParsableNode</span><span class="s3">(</span><span class="s1">node</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s1">isParsable </span><span class="s3">= </span><span class="s0">true</span>
+
+  <span class="s1">node</span><span class="s3">.</span><span class="s1">walkDecls</span><span class="s3">((</span><span class="s1">decl</span><span class="s3">) =&gt; {</span>
+    <span class="s0">if </span><span class="s3">(!</span><span class="s1">isParsableCssValue</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">prop</span><span class="s3">, </span><span class="s1">decl</span><span class="s3">.</span><span class="s1">value</span><span class="s3">)) {</span>
+      <span class="s1">isParsable </span><span class="s3">= </span><span class="s0">false</span>
+      <span class="s0">return false</span>
+    <span class="s3">}</span>
+  <span class="s3">})</span>
+
+  <span class="s0">return </span><span class="s1">isParsable</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">isParsableCssValue</span><span class="s3">(</span><span class="s1">property</span><span class="s3">, </span><span class="s1">value</span><span class="s3">) {</span>
+  <span class="s4">// We don't want to to treat [https://example.com] as a custom property</span>
+  <span class="s4">// Even though, according to the CSS grammar, it's a totally valid CSS declaration</span>
+  <span class="s4">// So we short-circuit here by checking if the custom property looks like a url</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">looksLikeUri</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">property</span><span class="s3">}</span><span class="s2">:</span><span class="s1">$</span><span class="s3">{</span><span class="s1">value</span><span class="s3">}</span><span class="s2">`</span><span class="s3">)) {</span>
+    <span class="s0">return false</span>
+  <span class="s3">}</span>
+
+  <span class="s0">try </span><span class="s3">{</span>
+    <span class="s1">postcss</span><span class="s3">.</span><span class="s1">parse</span><span class="s3">(</span><span class="s2">`a{</span><span class="s1">$</span><span class="s3">{</span><span class="s1">property</span><span class="s3">}</span><span class="s2">:</span><span class="s1">$</span><span class="s3">{</span><span class="s1">value</span><span class="s3">}</span><span class="s2">}`</span><span class="s3">).</span><span class="s1">toResult</span><span class="s3">()</span>
+    <span class="s0">return true</span>
+  <span class="s3">} </span><span class="s0">catch </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+    <span class="s0">return false</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">extractArbitraryProperty</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s3">[, </span><span class="s1">property</span><span class="s3">, </span><span class="s1">value</span><span class="s3">] = </span><span class="s1">classCandidate</span><span class="s3">.</span><span class="s1">match</span><span class="s3">(</span><span class="s8">/^\[([a-zA-Z0-9-_]+):(\S+)\]$/</span><span class="s3">) ?? []</span>
+
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">value </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+    <span class="s0">return null</span>
+  <span class="s3">}</span>
+
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">isValidPropName</span><span class="s3">(</span><span class="s1">property</span><span class="s3">)) {</span>
+    <span class="s0">return null</span>
+  <span class="s3">}</span>
+
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">isValidArbitraryValue</span><span class="s3">(</span><span class="s1">value</span><span class="s3">)) {</span>
+    <span class="s0">return null</span>
+  <span class="s3">}</span>
+
+  <span class="s0">let </span><span class="s1">normalized </span><span class="s3">= </span><span class="s1">normalize</span><span class="s3">(</span><span class="s1">value</span><span class="s3">, { </span><span class="s1">property </span><span class="s3">})</span>
+
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">isParsableCssValue</span><span class="s3">(</span><span class="s1">property</span><span class="s3">, </span><span class="s1">normalized</span><span class="s3">)) {</span>
+    <span class="s0">return null</span>
+  <span class="s3">}</span>
+
+  <span class="s0">let </span><span class="s1">sort </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">offsets</span><span class="s3">.</span><span class="s1">arbitraryProperty</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">)</span>
+
+  <span class="s0">return </span><span class="s3">[</span>
+    <span class="s3">[</span>
+      <span class="s3">{ </span><span class="s1">sort</span><span class="s3">, </span><span class="s1">layer</span><span class="s3">: </span><span class="s2">'utilities'</span><span class="s3">, </span><span class="s1">options</span><span class="s3">: { </span><span class="s1">respectImportant</span><span class="s3">: </span><span class="s0">true </span><span class="s3">} },</span>
+      <span class="s3">() =&gt; ({</span>
+        <span class="s3">[</span><span class="s1">asClass</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">)]: {</span>
+          <span class="s3">[</span><span class="s1">property</span><span class="s3">]: </span><span class="s1">normalized</span><span class="s3">,</span>
+        <span class="s3">},</span>
+      <span class="s3">}),</span>
+    <span class="s3">],</span>
+  <span class="s3">]</span>
+<span class="s3">}</span>
+
+<span class="s0">function</span><span class="s3">* </span><span class="s1">resolveMatchedPlugins</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleMap</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">)) {</span>
+    <span class="s0">yield </span><span class="s3">[</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">), </span><span class="s2">'DEFAULT'</span><span class="s3">]</span>
+  <span class="s3">}</span>
+
+  <span class="s0">yield</span><span class="s3">* (</span><span class="s0">function</span><span class="s3">* (</span><span class="s1">arbitraryPropertyRule</span><span class="s3">) {</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">arbitraryPropertyRule </span><span class="s3">!== </span><span class="s0">null</span><span class="s3">) {</span>
+      <span class="s0">yield </span><span class="s3">[</span><span class="s1">arbitraryPropertyRule</span><span class="s3">, </span><span class="s2">'DEFAULT'</span><span class="s3">]</span>
+    <span class="s3">}</span>
+  <span class="s3">})(</span><span class="s1">extractArbitraryProperty</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">, </span><span class="s1">context</span><span class="s3">))</span>
+
+  <span class="s0">let </span><span class="s1">candidatePrefix </span><span class="s3">= </span><span class="s1">classCandidate</span>
+  <span class="s0">let </span><span class="s1">negative </span><span class="s3">= </span><span class="s0">false</span>
+
+  <span class="s0">const </span><span class="s1">twConfigPrefix </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">prefix</span>
+
+  <span class="s0">const </span><span class="s1">twConfigPrefixLen </span><span class="s3">= </span><span class="s1">twConfigPrefix</span><span class="s3">.</span><span class="s1">length</span>
+
+  <span class="s0">const </span><span class="s1">hasMatchingPrefix </span><span class="s3">=</span>
+    <span class="s1">candidatePrefix</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s1">twConfigPrefix</span><span class="s3">) || </span><span class="s1">candidatePrefix</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">`-</span><span class="s1">$</span><span class="s3">{</span><span class="s1">twConfigPrefix</span><span class="s3">}</span><span class="s2">`</span><span class="s3">)</span>
+
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">candidatePrefix</span><span class="s3">[</span><span class="s1">twConfigPrefixLen</span><span class="s3">] === </span><span class="s2">'-' </span><span class="s3">&amp;&amp; </span><span class="s1">hasMatchingPrefix</span><span class="s3">) {</span>
+    <span class="s1">negative </span><span class="s3">= </span><span class="s0">true</span>
+    <span class="s1">candidatePrefix </span><span class="s3">= </span><span class="s1">twConfigPrefix </span><span class="s3">+ </span><span class="s1">candidatePrefix</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">twConfigPrefixLen </span><span class="s3">+ </span><span class="s5">1</span><span class="s3">)</span>
+  <span class="s3">}</span>
+
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">negative </span><span class="s3">&amp;&amp; </span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleMap</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">candidatePrefix</span><span class="s3">)) {</span>
+    <span class="s0">yield </span><span class="s3">[</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">candidatePrefix</span><span class="s3">), </span><span class="s2">'-DEFAULT'</span><span class="s3">]</span>
+  <span class="s3">}</span>
+
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">prefix</span><span class="s3">, </span><span class="s1">modifier</span><span class="s3">] </span><span class="s1">of candidatePermutations</span><span class="s3">(</span><span class="s1">candidatePrefix</span><span class="s3">)) {</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleMap</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">prefix</span><span class="s3">)) {</span>
+      <span class="s0">yield </span><span class="s3">[</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">prefix</span><span class="s3">), </span><span class="s1">negative </span><span class="s3">? </span><span class="s2">`-</span><span class="s1">$</span><span class="s3">{</span><span class="s1">modifier</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s1">modifier</span><span class="s3">]</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">splitWithSeparator</span><span class="s3">(</span><span class="s1">input</span><span class="s3">, </span><span class="s1">separator</span><span class="s3">) {</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">input </span><span class="s3">=== </span><span class="s1">sharedState</span><span class="s3">.</span><span class="s1">NOT_ON_DEMAND</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s3">[</span><span class="s1">sharedState</span><span class="s3">.</span><span class="s1">NOT_ON_DEMAND</span><span class="s3">]</span>
+  <span class="s3">}</span>
+
+  <span class="s0">return </span><span class="s1">splitAtTopLevelOnly</span><span class="s3">(</span><span class="s1">input</span><span class="s3">, </span><span class="s1">separator</span><span class="s3">)</span>
+<span class="s3">}</span>
+
+<span class="s0">function</span><span class="s3">* </span><span class="s1">recordCandidates</span><span class="s3">(</span><span class="s1">matches</span><span class="s3">, </span><span class="s1">classCandidate</span><span class="s3">) {</span>
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">const </span><span class="s1">match of matches</span><span class="s3">) {</span>
+    <span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind </span><span class="s3">= {</span>
+      <span class="s1">...match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind</span><span class="s3">,</span>
+      <span class="s1">classCandidate</span><span class="s3">,</span>
+      <span class="s1">preserveSource</span><span class="s3">: </span><span class="s1">match</span><span class="s3">[</span><span class="s5">0</span><span class="s3">].</span><span class="s1">options</span><span class="s3">?.</span><span class="s1">preserveSource </span><span class="s3">?? </span><span class="s0">false</span><span class="s3">,</span>
+    <span class="s3">}</span>
+
+    <span class="s0">yield </span><span class="s1">match</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">function</span><span class="s3">* </span><span class="s1">resolveMatches</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s1">separator </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">separator</span>
+  <span class="s0">let </span><span class="s3">[</span><span class="s1">classCandidate</span><span class="s3">, </span><span class="s1">...variants</span><span class="s3">] = </span><span class="s1">splitWithSeparator</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">, </span><span class="s1">separator</span><span class="s3">).</span><span class="s1">reverse</span><span class="s3">()</span>
+  <span class="s0">let </span><span class="s1">important </span><span class="s3">= </span><span class="s0">false</span>
+
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">'!'</span><span class="s3">)) {</span>
+    <span class="s1">important </span><span class="s3">= </span><span class="s0">true</span>
+    <span class="s1">classCandidate </span><span class="s3">= </span><span class="s1">classCandidate</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s5">1</span><span class="s3">)</span>
+  <span class="s3">}</span>
+
+  <span class="s4">// TODO: Reintroduce this in ways that doesn't break on false positives</span>
+  <span class="s4">// function sortAgainst(toSort, against) {</span>
+  <span class="s4">//   return toSort.slice().sort((a, z) =&gt; {</span>
+  <span class="s4">//     return bigSign(against.get(a)[0] - against.get(z)[0])</span>
+  <span class="s4">//   })</span>
+  <span class="s4">// }</span>
+  <span class="s4">// let sorted = sortAgainst(variants, context.variantMap)</span>
+  <span class="s4">// if (sorted.toString() !== variants.toString()) {</span>
+  <span class="s4">//   let corrected = sorted.reverse().concat(classCandidate).join(':')</span>
+  <span class="s4">//   throw new Error(`Class ${candidate} should be written as ${corrected}`)</span>
+  <span class="s4">// }</span>
+
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">matchedPlugins of resolveMatchedPlugins</span><span class="s3">(</span><span class="s1">classCandidate</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)) {</span>
+    <span class="s0">let </span><span class="s1">matches </span><span class="s3">= []</span>
+    <span class="s0">let </span><span class="s1">typesByMatches </span><span class="s3">= </span><span class="s0">new </span><span class="s1">Map</span><span class="s3">()</span>
+
+    <span class="s0">let </span><span class="s3">[</span><span class="s1">plugins</span><span class="s3">, </span><span class="s1">modifier</span><span class="s3">] = </span><span class="s1">matchedPlugins</span>
+    <span class="s0">let </span><span class="s1">isOnlyPlugin </span><span class="s3">= </span><span class="s1">plugins</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">1</span>
+
+    <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">sort</span><span class="s3">, </span><span class="s1">plugin</span><span class="s3">] </span><span class="s1">of plugins</span><span class="s3">) {</span>
+      <span class="s0">let </span><span class="s1">matchesPerPlugin </span><span class="s3">= []</span>
+
+      <span class="s0">if </span><span class="s3">(</span><span class="s0">typeof </span><span class="s1">plugin </span><span class="s3">=== </span><span class="s2">'function'</span><span class="s3">) {</span>
+        <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">ruleSet of </span><span class="s3">[].</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">(</span><span class="s1">modifier</span><span class="s3">, { </span><span class="s1">isOnlyPlugin </span><span class="s3">}))) {</span>
+          <span class="s0">let </span><span class="s3">[</span><span class="s1">rules</span><span class="s3">, </span><span class="s1">options</span><span class="s3">] = </span><span class="s1">parseRules</span><span class="s3">(</span><span class="s1">ruleSet</span><span class="s3">, </span><span class="s1">context</span><span class="s3">.</span><span class="s1">postCssNodeCache</span><span class="s3">)</span>
+          <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">rule of rules</span><span class="s3">) {</span>
+            <span class="s1">matchesPerPlugin</span><span class="s3">.</span><span class="s1">push</span><span class="s3">([{ </span><span class="s1">...sort</span><span class="s3">, </span><span class="s1">options</span><span class="s3">: { </span><span class="s1">...sort</span><span class="s3">.</span><span class="s1">options</span><span class="s3">, </span><span class="s1">...options </span><span class="s3">} }, </span><span class="s1">rule</span><span class="s3">])</span>
+          <span class="s3">}</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+      <span class="s4">// Only process static plugins on exact matches</span>
+      <span class="s0">else if </span><span class="s3">(</span><span class="s1">modifier </span><span class="s3">=== </span><span class="s2">'DEFAULT' </span><span class="s3">|| </span><span class="s1">modifier </span><span class="s3">=== </span><span class="s2">'-DEFAULT'</span><span class="s3">) {</span>
+        <span class="s0">let </span><span class="s1">ruleSet </span><span class="s3">= </span><span class="s1">plugin</span>
+        <span class="s0">let </span><span class="s3">[</span><span class="s1">rules</span><span class="s3">, </span><span class="s1">options</span><span class="s3">] = </span><span class="s1">parseRules</span><span class="s3">(</span><span class="s1">ruleSet</span><span class="s3">, </span><span class="s1">context</span><span class="s3">.</span><span class="s1">postCssNodeCache</span><span class="s3">)</span>
+        <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">rule of rules</span><span class="s3">) {</span>
+          <span class="s1">matchesPerPlugin</span><span class="s3">.</span><span class="s1">push</span><span class="s3">([{ </span><span class="s1">...sort</span><span class="s3">, </span><span class="s1">options</span><span class="s3">: { </span><span class="s1">...sort</span><span class="s3">.</span><span class="s1">options</span><span class="s3">, </span><span class="s1">...options </span><span class="s3">} }, </span><span class="s1">rule</span><span class="s3">])</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">matchesPerPlugin</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+        <span class="s0">let </span><span class="s1">matchingTypes </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+          <span class="s1">getMatchingTypes</span><span class="s3">(</span>
+            <span class="s1">sort</span><span class="s3">.</span><span class="s1">options</span><span class="s3">?.</span><span class="s1">types </span><span class="s3">?? [],</span>
+            <span class="s1">modifier</span><span class="s3">,</span>
+            <span class="s1">sort</span><span class="s3">.</span><span class="s1">options </span><span class="s3">?? {},</span>
+            <span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span>
+          <span class="s3">)</span>
+        <span class="s3">).</span><span class="s1">map</span><span class="s3">(([</span><span class="s1">_</span><span class="s3">, </span><span class="s1">type</span><span class="s3">]) =&gt; </span><span class="s1">type</span><span class="s3">)</span>
+
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">matchingTypes</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+          <span class="s1">typesByMatches</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">matchesPerPlugin</span><span class="s3">, </span><span class="s1">matchingTypes</span><span class="s3">)</span>
+        <span class="s3">}</span>
+
+        <span class="s1">matches</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">matchesPerPlugin</span><span class="s3">)</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">isArbitraryValue</span><span class="s3">(</span><span class="s1">modifier</span><span class="s3">)) {</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">matches</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">1</span><span class="s3">) {</span>
+        <span class="s4">// Partition plugins in 2 categories so that we can start searching in the plugins that</span>
+        <span class="s4">// don't have `any` as a type first.</span>
+        <span class="s0">let </span><span class="s3">[</span><span class="s1">withAny</span><span class="s3">, </span><span class="s1">withoutAny</span><span class="s3">] = </span><span class="s1">matches</span><span class="s3">.</span><span class="s1">reduce</span><span class="s3">(</span>
+          <span class="s3">(</span><span class="s1">group</span><span class="s3">, </span><span class="s1">plugin</span><span class="s3">) =&gt; {</span>
+            <span class="s0">let </span><span class="s1">hasAnyType </span><span class="s3">= </span><span class="s1">plugin</span><span class="s3">.</span><span class="s1">some</span><span class="s3">(([{ </span><span class="s1">options </span><span class="s3">}]) =&gt;</span>
+              <span class="s1">options</span><span class="s3">.</span><span class="s1">types</span><span class="s3">.</span><span class="s1">some</span><span class="s3">(({ </span><span class="s1">type </span><span class="s3">}) =&gt; </span><span class="s1">type </span><span class="s3">=== </span><span class="s2">'any'</span><span class="s3">)</span>
+            <span class="s3">)</span>
+
+            <span class="s0">if </span><span class="s3">(</span><span class="s1">hasAnyType</span><span class="s3">) {</span>
+              <span class="s1">group</span><span class="s3">[</span><span class="s5">0</span><span class="s3">].</span><span class="s1">push</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">)</span>
+            <span class="s3">} </span><span class="s0">else </span><span class="s3">{</span>
+              <span class="s1">group</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">push</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">)</span>
+            <span class="s3">}</span>
+            <span class="s0">return </span><span class="s1">group</span>
+          <span class="s3">},</span>
+          <span class="s3">[[], []]</span>
+        <span class="s3">)</span>
+
+        <span class="s0">function </span><span class="s1">findFallback</span><span class="s3">(</span><span class="s1">matches</span><span class="s3">) {</span>
+          <span class="s4">// If only a single plugin matches, let's take that one</span>
+          <span class="s0">if </span><span class="s3">(</span><span class="s1">matches</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">1</span><span class="s3">) {</span>
+            <span class="s0">return </span><span class="s1">matches</span><span class="s3">[</span><span class="s5">0</span><span class="s3">]</span>
+          <span class="s3">}</span>
+
+          <span class="s4">// Otherwise, find the plugin that creates a valid rule given the arbitrary value, and</span>
+          <span class="s4">// also has the correct type which preferOnConflicts the plugin in case of clashes.</span>
+          <span class="s0">return </span><span class="s1">matches</span><span class="s3">.</span><span class="s1">find</span><span class="s3">((</span><span class="s1">rules</span><span class="s3">) =&gt; {</span>
+            <span class="s0">let </span><span class="s1">matchingTypes </span><span class="s3">= </span><span class="s1">typesByMatches</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">rules</span><span class="s3">)</span>
+            <span class="s0">return </span><span class="s1">rules</span><span class="s3">.</span><span class="s1">some</span><span class="s3">(([{ </span><span class="s1">options </span><span class="s3">}, </span><span class="s1">rule</span><span class="s3">]) =&gt; {</span>
+              <span class="s0">if </span><span class="s3">(!</span><span class="s1">isParsableNode</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)) {</span>
+                <span class="s0">return false</span>
+              <span class="s3">}</span>
+
+              <span class="s0">return </span><span class="s1">options</span><span class="s3">.</span><span class="s1">types</span><span class="s3">.</span><span class="s1">some</span><span class="s3">(</span>
+                <span class="s3">({ </span><span class="s1">type</span><span class="s3">, </span><span class="s1">preferOnConflict </span><span class="s3">}) =&gt; </span><span class="s1">matchingTypes</span><span class="s3">.</span><span class="s1">includes</span><span class="s3">(</span><span class="s1">type</span><span class="s3">) &amp;&amp; </span><span class="s1">preferOnConflict</span>
+              <span class="s3">)</span>
+            <span class="s3">})</span>
+          <span class="s3">})</span>
+        <span class="s3">}</span>
+
+        <span class="s4">// Try to find a fallback plugin, because we already know that multiple plugins matched for</span>
+        <span class="s4">// the given arbitrary value.</span>
+        <span class="s0">let </span><span class="s1">fallback </span><span class="s3">= </span><span class="s1">findFallback</span><span class="s3">(</span><span class="s1">withoutAny</span><span class="s3">) ?? </span><span class="s1">findFallback</span><span class="s3">(</span><span class="s1">withAny</span><span class="s3">)</span>
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">fallback</span><span class="s3">) {</span>
+          <span class="s1">matches </span><span class="s3">= [</span><span class="s1">fallback</span><span class="s3">]</span>
+        <span class="s3">}</span>
+
+        <span class="s4">// We couldn't find a fallback plugin which means that there are now multiple plugins that</span>
+        <span class="s4">// generated css for the current candidate. This means that the result is ambiguous and this</span>
+        <span class="s4">// should not happen. We won't generate anything right now, so let's report this to the user</span>
+        <span class="s4">// by logging some options about what they can do.</span>
+        <span class="s0">else </span><span class="s3">{</span>
+          <span class="s0">let </span><span class="s1">typesPerPlugin </span><span class="s3">= </span><span class="s1">matches</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span>
+            <span class="s3">(</span><span class="s1">match</span><span class="s3">) =&gt; </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">...</span><span class="s3">(</span><span class="s1">typesByMatches</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">match</span><span class="s3">) ?? [])])</span>
+          <span class="s3">)</span>
+
+          <span class="s4">// Remove duplicates, so that we can detect proper unique types for each plugin.</span>
+          <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">pluginTypes of typesPerPlugin</span><span class="s3">) {</span>
+            <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">type of pluginTypes</span><span class="s3">) {</span>
+              <span class="s0">let </span><span class="s1">removeFromOwnGroup </span><span class="s3">= </span><span class="s0">false</span>
+
+              <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">otherGroup of typesPerPlugin</span><span class="s3">) {</span>
+                <span class="s0">if </span><span class="s3">(</span><span class="s1">pluginTypes </span><span class="s3">=== </span><span class="s1">otherGroup</span><span class="s3">) </span><span class="s0">continue</span>
+
+                <span class="s0">if </span><span class="s3">(</span><span class="s1">otherGroup</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">type</span><span class="s3">)) {</span>
+                  <span class="s1">otherGroup</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">type</span><span class="s3">)</span>
+                  <span class="s1">removeFromOwnGroup </span><span class="s3">= </span><span class="s0">true</span>
+                <span class="s3">}</span>
+              <span class="s3">}</span>
+
+              <span class="s0">if </span><span class="s3">(</span><span class="s1">removeFromOwnGroup</span><span class="s3">) </span><span class="s1">pluginTypes</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">type</span><span class="s3">)</span>
+            <span class="s3">}</span>
+          <span class="s3">}</span>
+
+          <span class="s0">let </span><span class="s1">messages </span><span class="s3">= []</span>
+
+          <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">idx</span><span class="s3">, </span><span class="s1">group</span><span class="s3">] </span><span class="s1">of typesPerPlugin</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">()) {</span>
+            <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">type of group</span><span class="s3">) {</span>
+              <span class="s0">let </span><span class="s1">rules </span><span class="s3">= </span><span class="s1">matches</span><span class="s3">[</span><span class="s1">idx</span><span class="s3">]</span>
+                <span class="s3">.</span><span class="s1">map</span><span class="s3">(([, </span><span class="s1">rule</span><span class="s3">]) =&gt; </span><span class="s1">rule</span><span class="s3">)</span>
+                <span class="s3">.</span><span class="s1">flat</span><span class="s3">()</span>
+                <span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">rule</span><span class="s3">) =&gt;</span>
+                  <span class="s1">rule</span>
+                    <span class="s3">.</span><span class="s1">toString</span><span class="s3">()</span>
+                    <span class="s3">.</span><span class="s1">split</span><span class="s3">(</span><span class="s2">'</span><span class="s0">\n</span><span class="s2">'</span><span class="s3">)</span>
+                    <span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s5">1</span><span class="s3">, -</span><span class="s5">1</span><span class="s3">) </span><span class="s4">// Remove selector and closing '}'</span>
+                    <span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">line</span><span class="s3">) =&gt; </span><span class="s1">line</span><span class="s3">.</span><span class="s1">trim</span><span class="s3">())</span>
+                    <span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">x</span><span class="s3">) =&gt; </span><span class="s2">`      </span><span class="s1">$</span><span class="s3">{</span><span class="s1">x</span><span class="s3">}</span><span class="s2">`</span><span class="s3">) </span><span class="s4">// Re-indent</span>
+                    <span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">'</span><span class="s0">\n</span><span class="s2">'</span><span class="s3">)</span>
+                <span class="s3">)</span>
+                <span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">'</span><span class="s0">\n\n</span><span class="s2">'</span><span class="s3">)</span>
+
+              <span class="s1">messages</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+                <span class="s2">`  Use </span><span class="s0">\`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">candidate</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s2">'['</span><span class="s3">, </span><span class="s2">`[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">}</span><span class="s2">:`</span><span class="s3">)}</span><span class="s0">\` </span><span class="s2">for </span><span class="s0">\`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">rules</span><span class="s3">.</span><span class="s1">trim</span><span class="s3">()}</span><span class="s0">\`</span><span class="s2">`</span>
+              <span class="s3">)</span>
+              <span class="s0">break</span>
+            <span class="s3">}</span>
+          <span class="s3">}</span>
+
+          <span class="s1">log</span><span class="s3">.</span><span class="s1">warn</span><span class="s3">([</span>
+            <span class="s2">`The class </span><span class="s0">\`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">candidate</span><span class="s3">}</span><span class="s0">\` </span><span class="s2">is ambiguous and matches multiple utilities.`</span><span class="s3">,</span>
+            <span class="s1">...messages</span><span class="s3">,</span>
+            <span class="s2">`If this is content and not a class, replace it with </span><span class="s0">\`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">candidate</span>
+              <span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s2">'['</span><span class="s3">, </span><span class="s2">'&amp;lsqb;'</span><span class="s3">)</span>
+              <span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s2">']'</span><span class="s3">, </span><span class="s2">'&amp;rsqb;'</span><span class="s3">)}</span><span class="s0">\` </span><span class="s2">to silence this warning.`</span><span class="s3">,</span>
+          <span class="s3">])</span>
+          <span class="s0">continue</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+
+      <span class="s1">matches </span><span class="s3">= </span><span class="s1">matches</span><span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">list</span><span class="s3">) =&gt; </span><span class="s1">list</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">((</span><span class="s1">match</span><span class="s3">) =&gt; </span><span class="s1">isParsableNode</span><span class="s3">(</span><span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">])))</span>
+    <span class="s3">}</span>
+
+    <span class="s1">matches </span><span class="s3">= </span><span class="s1">matches</span><span class="s3">.</span><span class="s1">flat</span><span class="s3">()</span>
+    <span class="s1">matches </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">recordCandidates</span><span class="s3">(</span><span class="s1">matches</span><span class="s3">, </span><span class="s1">classCandidate</span><span class="s3">))</span>
+    <span class="s1">matches </span><span class="s3">= </span><span class="s1">applyPrefix</span><span class="s3">(</span><span class="s1">matches</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">important</span><span class="s3">) {</span>
+      <span class="s1">matches </span><span class="s3">= </span><span class="s1">applyImportant</span><span class="s3">(</span><span class="s1">matches</span><span class="s3">, </span><span class="s1">classCandidate</span><span class="s3">)</span>
+    <span class="s3">}</span>
+
+    <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">variant of variants</span><span class="s3">) {</span>
+      <span class="s1">matches </span><span class="s3">= </span><span class="s1">applyVariant</span><span class="s3">(</span><span class="s1">variant</span><span class="s3">, </span><span class="s1">matches</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+    <span class="s3">}</span>
+
+    <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">match of matches</span><span class="s3">) {</span>
+      <span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind </span><span class="s3">= { </span><span class="s1">...match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind</span><span class="s3">, </span><span class="s1">candidate </span><span class="s3">}</span>
+
+      <span class="s4">// Apply final format selector</span>
+      <span class="s1">match </span><span class="s3">= </span><span class="s1">applyFinalFormat</span><span class="s3">(</span><span class="s1">match</span><span class="s3">, { </span><span class="s1">context</span><span class="s3">, </span><span class="s1">candidate </span><span class="s3">})</span>
+
+      <span class="s4">// Skip rules with invalid selectors</span>
+      <span class="s4">// This will cause the candidate to be added to the &quot;not class&quot;</span>
+      <span class="s4">// cache skipping it entirely for future builds</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">match </span><span class="s3">=== </span><span class="s0">null</span><span class="s3">) {</span>
+        <span class="s0">continue</span>
+      <span class="s3">}</span>
+
+      <span class="s0">yield </span><span class="s1">match</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">applyFinalFormat</span><span class="s3">(</span><span class="s1">match</span><span class="s3">, { </span><span class="s1">context</span><span class="s3">, </span><span class="s1">candidate </span><span class="s3">}) {</span>
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">match</span><span class="s3">[</span><span class="s5">0</span><span class="s3">].</span><span class="s1">collectedFormats</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s1">match</span>
+  <span class="s3">}</span>
+
+  <span class="s0">let </span><span class="s1">isValid </span><span class="s3">= </span><span class="s0">true</span>
+  <span class="s0">let </span><span class="s1">finalFormat</span>
+
+  <span class="s0">try </span><span class="s3">{</span>
+    <span class="s1">finalFormat </span><span class="s3">= </span><span class="s1">formatVariantSelector</span><span class="s3">(</span><span class="s1">match</span><span class="s3">[</span><span class="s5">0</span><span class="s3">].</span><span class="s1">collectedFormats</span><span class="s3">, {</span>
+      <span class="s1">context</span><span class="s3">,</span>
+      <span class="s1">candidate</span><span class="s3">,</span>
+    <span class="s3">})</span>
+  <span class="s3">} </span><span class="s0">catch </span><span class="s3">{</span>
+    <span class="s4">// The format selector we produced is invalid</span>
+    <span class="s4">// This could be because:</span>
+    <span class="s4">// - A bug exists</span>
+    <span class="s4">// - A plugin introduced an invalid variant selector (ex: `addVariant('foo', '&amp;;foo')`)</span>
+    <span class="s4">// - The user used an invalid arbitrary variant (ex: `[&amp;;foo]:underline`)</span>
+    <span class="s4">// Either way the build will fail because of this</span>
+    <span class="s4">// We would rather that the build pass &quot;silently&quot; given that this could</span>
+    <span class="s4">// happen because of picking up invalid things when scanning content</span>
+    <span class="s4">// So we'll throw out the candidate instead</span>
+
+    <span class="s0">return null</span>
+  <span class="s3">}</span>
+
+  <span class="s0">let </span><span class="s1">container </span><span class="s3">= </span><span class="s1">postcss</span><span class="s3">.</span><span class="s1">root</span><span class="s3">({ </span><span class="s1">nodes</span><span class="s3">: [</span><span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">].</span><span class="s1">clone</span><span class="s3">()] })</span>
+
+  <span class="s1">container</span><span class="s3">.</span><span class="s1">walkRules</span><span class="s3">((</span><span class="s1">rule</span><span class="s3">) =&gt; {</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">inKeyframes</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)) {</span>
+      <span class="s0">return</span>
+    <span class="s3">}</span>
+
+    <span class="s0">try </span><span class="s3">{</span>
+      <span class="s0">let </span><span class="s1">selector </span><span class="s3">= </span><span class="s1">finalizeSelector</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">selector</span><span class="s3">, </span><span class="s1">finalFormat</span><span class="s3">, {</span>
+        <span class="s1">candidate</span><span class="s3">,</span>
+        <span class="s1">context</span><span class="s3">,</span>
+      <span class="s3">})</span>
+
+      <span class="s4">// Finalize Selector determined that this candidate is irrelevant</span>
+      <span class="s4">// TODO: This elimination should happen earlier so this never happens</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">selector </span><span class="s3">=== </span><span class="s0">null</span><span class="s3">) {</span>
+        <span class="s1">rule</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">()</span>
+        <span class="s0">return</span>
+      <span class="s3">}</span>
+
+      <span class="s1">rule</span><span class="s3">.</span><span class="s1">selector </span><span class="s3">= </span><span class="s1">selector</span>
+    <span class="s3">} </span><span class="s0">catch </span><span class="s3">{</span>
+      <span class="s4">// If this selector is invalid we also want to skip it</span>
+      <span class="s4">// But it's likely that being invalid here means there's a bug in a plugin rather than too loosely matching content</span>
+      <span class="s1">isValid </span><span class="s3">= </span><span class="s0">false</span>
+      <span class="s0">return false</span>
+    <span class="s3">}</span>
+  <span class="s3">})</span>
+
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">isValid</span><span class="s3">) {</span>
+    <span class="s0">return null</span>
+  <span class="s3">}</span>
+
+  <span class="s4">// If all rules have been eliminated we can skip this candidate entirely</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">container</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+    <span class="s0">return null</span>
+  <span class="s3">}</span>
+
+  <span class="s1">match</span><span class="s3">[</span><span class="s5">1</span><span class="s3">] = </span><span class="s1">container</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">[</span><span class="s5">0</span><span class="s3">]</span>
+
+  <span class="s0">return </span><span class="s1">match</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">inKeyframes</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">) {</span>
+  <span class="s0">return </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">parent </span><span class="s3">&amp;&amp; </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">parent</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">'atrule' </span><span class="s3">&amp;&amp; </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">parent</span><span class="s3">.</span><span class="s1">name </span><span class="s3">=== </span><span class="s2">'keyframes'</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">getImportantStrategy</span><span class="s3">(</span><span class="s1">important</span><span class="s3">) {</span>
+  <span class="s0">if </span><span class="s3">(</span><span class="s1">important </span><span class="s3">=== </span><span class="s0">true</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s3">(</span><span class="s1">rule</span><span class="s3">) =&gt; {</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">inKeyframes</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)) {</span>
+        <span class="s0">return</span>
+      <span class="s3">}</span>
+
+      <span class="s1">rule</span><span class="s3">.</span><span class="s1">walkDecls</span><span class="s3">((</span><span class="s1">d</span><span class="s3">) =&gt; {</span>
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">d</span><span class="s3">.</span><span class="s1">parent</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">'rule' </span><span class="s3">&amp;&amp; !</span><span class="s1">inKeyframes</span><span class="s3">(</span><span class="s1">d</span><span class="s3">.</span><span class="s1">parent</span><span class="s3">)) {</span>
+          <span class="s1">d</span><span class="s3">.</span><span class="s1">important </span><span class="s3">= </span><span class="s0">true</span>
+        <span class="s3">}</span>
+      <span class="s3">})</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s0">if </span><span class="s3">(</span><span class="s0">typeof </span><span class="s1">important </span><span class="s3">=== </span><span class="s2">'string'</span><span class="s3">) {</span>
+    <span class="s0">return </span><span class="s3">(</span><span class="s1">rule</span><span class="s3">) =&gt; {</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">inKeyframes</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)) {</span>
+        <span class="s0">return</span>
+      <span class="s3">}</span>
+
+      <span class="s1">rule</span><span class="s3">.</span><span class="s1">selectors </span><span class="s3">= </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">selectors</span><span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">selector</span><span class="s3">) =&gt; {</span>
+        <span class="s0">return </span><span class="s1">applyImportantSelector</span><span class="s3">(</span><span class="s1">selector</span><span class="s3">, </span><span class="s1">important</span><span class="s3">)</span>
+      <span class="s3">})</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">generateRules</span><span class="s3">(</span><span class="s1">candidates</span><span class="s3">, </span><span class="s1">context</span><span class="s3">, </span><span class="s1">isSorting </span><span class="s3">= </span><span class="s0">false</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s1">allRules </span><span class="s3">= []</span>
+  <span class="s0">let </span><span class="s1">strategy </span><span class="s3">= </span><span class="s1">getImportantStrategy</span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">important</span><span class="s3">)</span>
+
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">candidate of candidates</span><span class="s3">) {</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">notClassCache</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">)) {</span>
+      <span class="s0">continue</span>
+    <span class="s3">}</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleCache</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">)) {</span>
+      <span class="s1">allRules </span><span class="s3">= </span><span class="s1">allRules</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">)))</span>
+      <span class="s0">continue</span>
+    <span class="s3">}</span>
+
+    <span class="s0">let </span><span class="s1">matches </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">resolveMatches</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">, </span><span class="s1">context</span><span class="s3">))</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">matches</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+      <span class="s1">context</span><span class="s3">.</span><span class="s1">notClassCache</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">)</span>
+      <span class="s0">continue</span>
+    <span class="s3">}</span>
+
+    <span class="s1">context</span><span class="s3">.</span><span class="s1">classCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">, </span><span class="s1">matches</span><span class="s3">)</span>
+
+    <span class="s0">let </span><span class="s1">rules </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">) ?? </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">()</span>
+    <span class="s1">context</span><span class="s3">.</span><span class="s1">candidateRuleCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">candidate</span><span class="s3">, </span><span class="s1">rules</span><span class="s3">)</span>
+
+    <span class="s0">for </span><span class="s3">(</span><span class="s0">const </span><span class="s1">match of matches</span><span class="s3">) {</span>
+      <span class="s0">let </span><span class="s3">[{ </span><span class="s1">sort</span><span class="s3">, </span><span class="s1">options </span><span class="s3">}, </span><span class="s1">rule</span><span class="s3">] = </span><span class="s1">match</span>
+
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">respectImportant </span><span class="s3">&amp;&amp; </span><span class="s1">strategy</span><span class="s3">) {</span>
+        <span class="s0">let </span><span class="s1">container </span><span class="s3">= </span><span class="s1">postcss</span><span class="s3">.</span><span class="s1">root</span><span class="s3">({ </span><span class="s1">nodes</span><span class="s3">: [</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">clone</span><span class="s3">()] })</span>
+        <span class="s1">container</span><span class="s3">.</span><span class="s1">walkRules</span><span class="s3">(</span><span class="s1">strategy</span><span class="s3">)</span>
+        <span class="s1">rule </span><span class="s3">= </span><span class="s1">container</span><span class="s3">.</span><span class="s1">nodes</span><span class="s3">[</span><span class="s5">0</span><span class="s3">]</span>
+      <span class="s3">}</span>
+
+      <span class="s4">// Note: We have to clone rules during sorting</span>
+      <span class="s4">// so we eliminate some shared mutable state</span>
+      <span class="s0">let </span><span class="s1">newEntry </span><span class="s3">= [</span><span class="s1">sort</span><span class="s3">, </span><span class="s1">isSorting </span><span class="s3">? </span><span class="s1">rule</span><span class="s3">.</span><span class="s1">clone</span><span class="s3">() : </span><span class="s1">rule</span><span class="s3">]</span>
+      <span class="s1">rules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newEntry</span><span class="s3">)</span>
+      <span class="s1">context</span><span class="s3">.</span><span class="s1">ruleCache</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newEntry</span><span class="s3">)</span>
+      <span class="s1">allRules</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">newEntry</span><span class="s3">)</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s0">return </span><span class="s1">allRules</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">isArbitraryValue</span><span class="s3">(</span><span class="s1">input</span><span class="s3">) {</span>
+  <span class="s0">return </span><span class="s1">input</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">'['</span><span class="s3">) &amp;&amp; </span><span class="s1">input</span><span class="s3">.</span><span class="s1">endsWith</span><span class="s3">(</span><span class="s2">']'</span><span class="s3">)</span>
+<span class="s3">}</span>
+
+<span class="s0">export </span><span class="s3">{ </span><span class="s1">resolveMatches</span><span class="s3">, </span><span class="s1">generateRules </span><span class="s3">}</span>
+</pre>
+</body>
+</html>

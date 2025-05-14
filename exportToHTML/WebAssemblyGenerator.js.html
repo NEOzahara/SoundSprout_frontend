@@ -1,0 +1,560 @@
+<html>
+<head>
+<title>WebAssemblyGenerator.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+WebAssemblyGenerator.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">t </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;@webassemblyjs/ast&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">moduleContextFromModuleAST </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;@webassemblyjs/ast&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">editWithAST</span><span class="s3">, </span><span class="s1">addWithAST </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;@webassemblyjs/wasm-edit&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">decode </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;@webassemblyjs/wasm-parser&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">RawSource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;webpack-sources&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Generator </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Generator&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">WEBASSEMBLY_TYPES </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleSourceTypesConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WebAssemblyUtils </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./WebAssemblyUtils&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">WebAssemblyExportImportedDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../dependencies/WebAssemblyExportImportedDependency&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../DependencyTemplates&quot;)} DependencyTemplates */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Generator&quot;).GenerateContext} GenerateContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;).SourceTypes} SourceTypes */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../NormalModule&quot;)} NormalModule */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../RuntimeTemplate&quot;)} RuntimeTemplate */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./WebAssemblyUtils&quot;).UsedWasmDependency} UsedWasmDependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;@webassemblyjs/ast&quot;).Instruction} Instruction */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;@webassemblyjs/ast&quot;).ModuleImport} ModuleImport */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;@webassemblyjs/ast&quot;).ModuleExport} ModuleExport */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;@webassemblyjs/ast&quot;).Global} Global */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;@webassemblyjs/ast&quot;).AST} AST */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;@webassemblyjs/ast&quot;).GlobalType} GlobalType */</span>
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{import(&quot;@webassemblyjs/ast&quot;).NodePath&lt;T&gt;} NodePath</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(buf: ArrayBuffer) =&gt; ArrayBuffer} ArrayBufferTransform</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{((prev: ArrayBuffer) =&gt; ArrayBuffer)[]} fns transforms</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ArrayBufferTransform} composed transform</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compose </span><span class="s3">= (</span><span class="s1">...fns</span><span class="s3">) =&gt;</span>
+	<span class="s1">fns</span><span class="s3">.</span><span class="s1">reduce</span><span class="s3">(</span>
+		<span class="s3">(</span><span class="s1">prevFn</span><span class="s3">, </span><span class="s1">nextFn</span><span class="s3">) =&gt; </span><span class="s1">value </span><span class="s3">=&gt; </span><span class="s1">nextFn</span><span class="s3">(</span><span class="s1">prevFn</span><span class="s3">(</span><span class="s1">value</span><span class="s3">)),</span>
+		<span class="s1">value </span><span class="s3">=&gt; </span><span class="s1">value</span>
+	<span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Removes the start instruction</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} state state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} state.ast Module's ast</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ArrayBufferTransform} transform</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">removeStartFunc </span><span class="s3">= </span><span class="s1">state </span><span class="s3">=&gt; </span><span class="s1">bin </span><span class="s3">=&gt;</span>
+	<span class="s1">editWithAST</span><span class="s3">(</span><span class="s1">state</span><span class="s3">.</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">bin</span><span class="s3">, {</span>
+		<span class="s1">Start</span><span class="s3">(</span><span class="s1">path</span><span class="s3">) {</span>
+			<span class="s1">path</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">();</span>
+		<span class="s3">}</span>
+	<span class="s3">});</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Get imported globals</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} ast Module's AST</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{t.ModuleImport[]} - nodes</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getImportedGlobals </span><span class="s3">= </span><span class="s1">ast </span><span class="s3">=&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{t.ModuleImport[]} */</span>
+	<span class="s4">const </span><span class="s1">importedGlobals </span><span class="s3">= [];</span>
+
+	<span class="s1">t</span><span class="s3">.</span><span class="s1">traverse</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, {</span>
+		<span class="s1">ModuleImport</span><span class="s3">({ </span><span class="s1">node </span><span class="s3">}) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">t</span><span class="s3">.</span><span class="s1">isGlobalType</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">descr</span><span class="s3">)) {</span>
+				<span class="s1">importedGlobals</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">});</span>
+
+	<span class="s4">return </span><span class="s1">importedGlobals</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Get the count for imported func</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} ast Module's AST</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} - count</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getCountImportedFunc </span><span class="s3">= </span><span class="s1">ast </span><span class="s3">=&gt; {</span>
+	<span class="s4">let </span><span class="s1">count </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+
+	<span class="s1">t</span><span class="s3">.</span><span class="s1">traverse</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, {</span>
+		<span class="s1">ModuleImport</span><span class="s3">({ </span><span class="s1">node </span><span class="s3">}) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">t</span><span class="s3">.</span><span class="s1">isFuncImportDescr</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">descr</span><span class="s3">)) {</span>
+				<span class="s1">count</span><span class="s3">++;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">});</span>
+
+	<span class="s4">return </span><span class="s1">count</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Get next type index</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} ast Module's AST</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{t.Index} - index</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getNextTypeIndex </span><span class="s3">= </span><span class="s1">ast </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">typeSectionMetadata </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">getSectionMetadata</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, </span><span class="s2">&quot;type&quot;</span><span class="s3">);</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">typeSectionMetadata </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">t</span><span class="s3">.</span><span class="s1">indexLiteral</span><span class="s3">(</span><span class="s7">0</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s4">return </span><span class="s1">t</span><span class="s3">.</span><span class="s1">indexLiteral</span><span class="s3">(</span><span class="s1">typeSectionMetadata</span><span class="s3">.</span><span class="s1">vectorOfSize</span><span class="s3">.</span><span class="s1">value</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Get next func index</span>
+ <span class="s5">* The Func section metadata provide information for implemented funcs</span>
+ <span class="s5">* in order to have the correct index we shift the index by number of external</span>
+ <span class="s5">* functions.</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} ast Module's AST</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} countImportedFunc number of imported funcs</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{t.Index} - index</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getNextFuncIndex </span><span class="s3">= (</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">countImportedFunc</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">funcSectionMetadata </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">getSectionMetadata</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, </span><span class="s2">&quot;func&quot;</span><span class="s3">);</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">funcSectionMetadata </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">t</span><span class="s3">.</span><span class="s1">indexLiteral</span><span class="s3">(</span><span class="s7">0 </span><span class="s3">+ </span><span class="s1">countImportedFunc</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s4">const </span><span class="s1">vectorOfSize </span><span class="s3">= </span><span class="s1">funcSectionMetadata</span><span class="s3">.</span><span class="s1">vectorOfSize</span><span class="s3">.</span><span class="s1">value</span><span class="s3">;</span>
+
+	<span class="s4">return </span><span class="s1">t</span><span class="s3">.</span><span class="s1">indexLiteral</span><span class="s3">(</span><span class="s1">vectorOfSize </span><span class="s3">+ </span><span class="s1">countImportedFunc</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Creates an init instruction for a global type</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.GlobalType} globalType the global type</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{t.Instruction} init expression</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">createDefaultInitForGlobal </span><span class="s3">= </span><span class="s1">globalType </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">globalType</span><span class="s3">.</span><span class="s1">valtype</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] === </span><span class="s2">&quot;i&quot;</span><span class="s3">) {</span>
+		<span class="s0">// create NumberLiteral global initializer</span>
+		<span class="s4">return </span><span class="s1">t</span><span class="s3">.</span><span class="s1">objectInstruction</span><span class="s3">(</span><span class="s2">&quot;const&quot;</span><span class="s3">, </span><span class="s1">globalType</span><span class="s3">.</span><span class="s1">valtype</span><span class="s3">, [</span>
+			<span class="s1">t</span><span class="s3">.</span><span class="s1">numberLiteralFromRaw</span><span class="s3">(</span><span class="s7">66</span><span class="s3">)</span>
+		<span class="s3">]);</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">globalType</span><span class="s3">.</span><span class="s1">valtype</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] === </span><span class="s2">&quot;f&quot;</span><span class="s3">) {</span>
+		<span class="s0">// create FloatLiteral global initializer</span>
+		<span class="s4">return </span><span class="s1">t</span><span class="s3">.</span><span class="s1">objectInstruction</span><span class="s3">(</span><span class="s2">&quot;const&quot;</span><span class="s3">, </span><span class="s1">globalType</span><span class="s3">.</span><span class="s1">valtype</span><span class="s3">, [</span>
+			<span class="s1">t</span><span class="s3">.</span><span class="s1">floatLiteral</span><span class="s3">(</span><span class="s7">66</span><span class="s3">, </span><span class="s4">false</span><span class="s3">, </span><span class="s4">false</span><span class="s3">, </span><span class="s2">&quot;66&quot;</span><span class="s3">)</span>
+		<span class="s3">]);</span>
+	<span class="s3">}</span>
+	<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">`unknown type: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">globalType</span><span class="s3">.</span><span class="s1">valtype</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Rewrite the import globals:</span>
+ <span class="s5">* - removes the ModuleImport instruction</span>
+ <span class="s5">* - injects at the same offset a mutable global of the same type</span>
+ <span class="s5">*</span>
+ <span class="s5">* Since the imported globals are before the other global declarations, our</span>
+ <span class="s5">* indices will be preserved.</span>
+ <span class="s5">*</span>
+ <span class="s5">* Note that globals will become mutable.</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} state transformation state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} state.ast Module's ast</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.Instruction[]} state.additionalInitCode list of addition instructions for the init function</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ArrayBufferTransform} transform</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">rewriteImportedGlobals </span><span class="s3">= </span><span class="s1">state </span><span class="s3">=&gt; </span><span class="s1">bin </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">additionalInitCode </span><span class="s3">= </span><span class="s1">state</span><span class="s3">.</span><span class="s1">additionalInitCode</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Array&lt;t.Global&gt;} */</span>
+	<span class="s4">const </span><span class="s1">newGlobals </span><span class="s3">= [];</span>
+
+	<span class="s1">bin </span><span class="s3">= </span><span class="s1">editWithAST</span><span class="s3">(</span><span class="s1">state</span><span class="s3">.</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">bin</span><span class="s3">, {</span>
+		<span class="s1">ModuleImport</span><span class="s3">(</span><span class="s1">path</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">t</span><span class="s3">.</span><span class="s1">isGlobalType</span><span class="s3">(</span><span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">descr</span><span class="s3">)) {</span>
+				<span class="s4">const </span><span class="s1">globalType </span><span class="s3">=</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{GlobalType} */</span>
+					<span class="s3">(</span><span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">descr</span><span class="s3">);</span>
+
+				<span class="s1">globalType</span><span class="s3">.</span><span class="s1">mutability </span><span class="s3">= </span><span class="s2">&quot;var&quot;</span><span class="s3">;</span>
+
+				<span class="s4">const </span><span class="s1">init </span><span class="s3">= [</span>
+					<span class="s1">createDefaultInitForGlobal</span><span class="s3">(</span><span class="s1">globalType</span><span class="s3">),</span>
+					<span class="s1">t</span><span class="s3">.</span><span class="s1">instruction</span><span class="s3">(</span><span class="s2">&quot;end&quot;</span><span class="s3">)</span>
+				<span class="s3">];</span>
+
+				<span class="s1">newGlobals</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">t</span><span class="s3">.</span><span class="s1">global</span><span class="s3">(</span><span class="s1">globalType</span><span class="s3">, </span><span class="s1">init</span><span class="s3">));</span>
+
+				<span class="s1">path</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">();</span>
+			<span class="s3">}</span>
+		<span class="s3">},</span>
+
+		<span class="s0">// in order to preserve non-imported global's order we need to re-inject</span>
+		<span class="s0">// those as well</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NodePath&lt;Global&gt;} path path</span>
+		 <span class="s5">*/</span>
+		<span class="s1">Global</span><span class="s3">(</span><span class="s1">path</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s3">{ </span><span class="s1">node </span><span class="s3">} = </span><span class="s1">path</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s3">[</span><span class="s1">init</span><span class="s3">] = </span><span class="s1">node</span><span class="s3">.</span><span class="s1">init</span><span class="s3">;</span>
+
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">init</span><span class="s3">.</span><span class="s1">id </span><span class="s3">=== </span><span class="s2">&quot;get_global&quot;</span><span class="s3">) {</span>
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">globalType</span><span class="s3">.</span><span class="s1">mutability </span><span class="s3">= </span><span class="s2">&quot;var&quot;</span><span class="s3">;</span>
+
+				<span class="s4">const </span><span class="s1">initialGlobalIdx </span><span class="s3">= </span><span class="s1">init</span><span class="s3">.</span><span class="s1">args</span><span class="s3">[</span><span class="s7">0</span><span class="s3">];</span>
+
+				<span class="s1">node</span><span class="s3">.</span><span class="s1">init </span><span class="s3">= [</span>
+					<span class="s1">createDefaultInitForGlobal</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">globalType</span><span class="s3">),</span>
+					<span class="s1">t</span><span class="s3">.</span><span class="s1">instruction</span><span class="s3">(</span><span class="s2">&quot;end&quot;</span><span class="s3">)</span>
+				<span class="s3">];</span>
+
+				<span class="s1">additionalInitCode</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* get_global in global initializer only works for imported globals.</span>
+					 <span class="s5">* They have the same indices as the init params, so use the</span>
+					 <span class="s5">* same index.</span>
+					 <span class="s5">*/</span>
+					<span class="s1">t</span><span class="s3">.</span><span class="s1">instruction</span><span class="s3">(</span><span class="s2">&quot;get_local&quot;</span><span class="s3">, [</span><span class="s1">initialGlobalIdx</span><span class="s3">]),</span>
+					<span class="s1">t</span><span class="s3">.</span><span class="s1">instruction</span><span class="s3">(</span><span class="s2">&quot;set_global&quot;</span><span class="s3">, [</span><span class="s1">t</span><span class="s3">.</span><span class="s1">indexLiteral</span><span class="s3">(</span><span class="s1">newGlobals</span><span class="s3">.</span><span class="s1">length</span><span class="s3">)])</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s1">newGlobals</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">);</span>
+
+			<span class="s1">path</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">();</span>
+		<span class="s3">}</span>
+	<span class="s3">});</span>
+
+	<span class="s0">// Add global declaration instructions</span>
+	<span class="s4">return </span><span class="s1">addWithAST</span><span class="s3">(</span><span class="s1">state</span><span class="s3">.</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">bin</span><span class="s3">, </span><span class="s1">newGlobals</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Rewrite the export names</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} state state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} state.ast Module's ast</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} state.module Module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} state.moduleGraph module graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;string&gt;} state.externalExports Module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} state.runtime runtime</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ArrayBufferTransform} transform</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">rewriteExportNames </span><span class="s3">=</span>
+	<span class="s3">({ </span><span class="s1">ast</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">externalExports</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">}) =&gt;</span>
+	<span class="s1">bin </span><span class="s3">=&gt;</span>
+		<span class="s1">editWithAST</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">bin</span><span class="s3">, {</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NodePath&lt;ModuleExport&gt;} path path</span>
+			 <span class="s5">*/</span>
+			<span class="s1">ModuleExport</span><span class="s3">(</span><span class="s1">path</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">isExternal </span><span class="s3">= </span><span class="s1">externalExports</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">name</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">isExternal</span><span class="s3">) {</span>
+					<span class="s1">path</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">();</span>
+					<span class="s4">return</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">const </span><span class="s1">usedName </span><span class="s3">= </span><span class="s1">moduleGraph</span>
+					<span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">getUsedName</span><span class="s3">(</span><span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">name</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">usedName</span><span class="s3">) {</span>
+					<span class="s1">path</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">();</span>
+					<span class="s4">return</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">usedName</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Mangle import names and modules</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} state state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} state.ast Module's ast</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Map&lt;string, UsedWasmDependency&gt;} state.usedDependencyMap mappings to mangle names</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ArrayBufferTransform} transform</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">rewriteImports </span><span class="s3">=</span>
+	<span class="s3">({ </span><span class="s1">ast</span><span class="s3">, </span><span class="s1">usedDependencyMap </span><span class="s3">}) =&gt;</span>
+	<span class="s1">bin </span><span class="s3">=&gt;</span>
+		<span class="s1">editWithAST</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">bin</span><span class="s3">, {</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NodePath&lt;ModuleImport&gt;} path path</span>
+			 <span class="s5">*/</span>
+			<span class="s1">ModuleImport</span><span class="s3">(</span><span class="s1">path</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">usedDependencyMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+					<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">module</span><span class="s3">}</span><span class="s2">:</span><span class="s1">$</span><span class="s3">{</span><span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">name</span><span class="s3">}</span><span class="s2">`</span>
+				<span class="s3">);</span>
+
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">result </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">module </span><span class="s3">= </span><span class="s1">result</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+					<span class="s1">path</span><span class="s3">.</span><span class="s1">node</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s1">result</span><span class="s3">.</span><span class="s1">name</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Add an init function.</span>
+ <span class="s5">*</span>
+ <span class="s5">* The init function fills the globals given input arguments.</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} state transformation state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AST} state.ast Module's ast</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.Identifier} state.initFuncId identifier of the init function</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.Index} state.startAtFuncOffset index of the start function</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.ModuleImport[]} state.importedGlobals list of imported globals</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.Instruction[]} state.additionalInitCode list of addition instructions for the init function</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.Index} state.nextFuncIndex index of the next function</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{t.Index} state.nextTypeIndex index of the next type</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ArrayBufferTransform} transform</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">addInitFunction </span><span class="s3">=</span>
+	<span class="s3">({</span>
+		<span class="s1">ast</span><span class="s3">,</span>
+		<span class="s1">initFuncId</span><span class="s3">,</span>
+		<span class="s1">startAtFuncOffset</span><span class="s3">,</span>
+		<span class="s1">importedGlobals</span><span class="s3">,</span>
+		<span class="s1">additionalInitCode</span><span class="s3">,</span>
+		<span class="s1">nextFuncIndex</span><span class="s3">,</span>
+		<span class="s1">nextTypeIndex</span>
+	<span class="s3">}) =&gt;</span>
+	<span class="s1">bin </span><span class="s3">=&gt; {</span>
+		<span class="s4">const </span><span class="s1">funcParams </span><span class="s3">= </span><span class="s1">importedGlobals</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">importedGlobal </span><span class="s3">=&gt; {</span>
+			<span class="s0">// used for debugging</span>
+			<span class="s4">const </span><span class="s1">id </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(</span>
+				<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">importedGlobal</span><span class="s3">.</span><span class="s1">module</span><span class="s3">}</span><span class="s2">.</span><span class="s1">$</span><span class="s3">{</span><span class="s1">importedGlobal</span><span class="s3">.</span><span class="s1">name</span><span class="s3">}</span><span class="s2">`</span>
+			<span class="s3">);</span>
+
+			<span class="s4">return </span><span class="s1">t</span><span class="s3">.</span><span class="s1">funcParam</span><span class="s3">(</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">importedGlobal</span><span class="s3">.</span><span class="s1">descr</span><span class="s3">.</span><span class="s1">valtype</span><span class="s3">),</span>
+				<span class="s1">id</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Instruction[]} */</span>
+		<span class="s4">const </span><span class="s1">funcBody </span><span class="s3">= [];</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">index</span><span class="s3">, </span><span class="s1">_importedGlobal</span><span class="s3">] </span><span class="s1">of importedGlobals</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">()) {</span>
+			<span class="s4">const </span><span class="s1">args </span><span class="s3">= [</span><span class="s1">t</span><span class="s3">.</span><span class="s1">indexLiteral</span><span class="s3">(</span><span class="s1">index</span><span class="s3">)];</span>
+			<span class="s4">const </span><span class="s1">body </span><span class="s3">= [</span>
+				<span class="s1">t</span><span class="s3">.</span><span class="s1">instruction</span><span class="s3">(</span><span class="s2">&quot;get_local&quot;</span><span class="s3">, </span><span class="s1">args</span><span class="s3">),</span>
+				<span class="s1">t</span><span class="s3">.</span><span class="s1">instruction</span><span class="s3">(</span><span class="s2">&quot;set_global&quot;</span><span class="s3">, </span><span class="s1">args</span><span class="s3">)</span>
+			<span class="s3">];</span>
+
+			<span class="s1">funcBody</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">...body</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">startAtFuncOffset </span><span class="s3">=== </span><span class="s2">&quot;number&quot;</span><span class="s3">) {</span>
+			<span class="s1">funcBody</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+				<span class="s1">t</span><span class="s3">.</span><span class="s1">callInstruction</span><span class="s3">(</span><span class="s1">t</span><span class="s3">.</span><span class="s1">numberLiteralFromRaw</span><span class="s3">(</span><span class="s1">startAtFuncOffset</span><span class="s3">))</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">instr of additionalInitCode</span><span class="s3">) {</span>
+			<span class="s1">funcBody</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">instr</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s1">funcBody</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">t</span><span class="s3">.</span><span class="s1">instruction</span><span class="s3">(</span><span class="s2">&quot;end&quot;</span><span class="s3">));</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */</span>
+		<span class="s4">const </span><span class="s1">funcResults </span><span class="s3">= [];</span>
+
+		<span class="s0">// Code section</span>
+		<span class="s4">const </span><span class="s1">funcSignature </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">signature</span><span class="s3">(</span><span class="s1">funcParams</span><span class="s3">, </span><span class="s1">funcResults</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">func </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">func</span><span class="s3">(</span><span class="s1">initFuncId</span><span class="s3">, </span><span class="s1">funcSignature</span><span class="s3">, </span><span class="s1">funcBody</span><span class="s3">);</span>
+
+		<span class="s0">// Type section</span>
+		<span class="s4">const </span><span class="s1">functype </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">typeInstruction</span><span class="s3">(</span><span class="s1">undefined</span><span class="s3">, </span><span class="s1">funcSignature</span><span class="s3">);</span>
+
+		<span class="s0">// Func section</span>
+		<span class="s4">const </span><span class="s1">funcindex </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">indexInFuncSection</span><span class="s3">(</span><span class="s1">nextTypeIndex</span><span class="s3">);</span>
+
+		<span class="s0">// Export section</span>
+		<span class="s4">const </span><span class="s1">moduleExport </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">moduleExport</span><span class="s3">(</span>
+			<span class="s1">initFuncId</span><span class="s3">.</span><span class="s1">value</span><span class="s3">,</span>
+			<span class="s1">t</span><span class="s3">.</span><span class="s1">moduleExportDescr</span><span class="s3">(</span><span class="s2">&quot;Func&quot;</span><span class="s3">, </span><span class="s1">nextFuncIndex</span><span class="s3">)</span>
+		<span class="s3">);</span>
+
+		<span class="s4">return </span><span class="s1">addWithAST</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">bin</span><span class="s3">, [</span><span class="s1">func</span><span class="s3">, </span><span class="s1">moduleExport</span><span class="s3">, </span><span class="s1">funcindex</span><span class="s3">, </span><span class="s1">functype</span><span class="s3">]);</span>
+	<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Extract mangle mappings from module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module current module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean | undefined} mangle mangle imports</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Map&lt;string, UsedWasmDependency&gt;} mappings to mangled names</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getUsedDependencyMap </span><span class="s3">= (</span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">mangle</span><span class="s3">) =&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, UsedWasmDependency&gt;} */</span>
+	<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">usedDep of WebAssemblyUtils</span><span class="s3">.</span><span class="s1">getUsedDependencies</span><span class="s3">(</span>
+		<span class="s1">moduleGraph</span><span class="s3">,</span>
+		<span class="s1">module</span><span class="s3">,</span>
+		<span class="s1">mangle</span>
+	<span class="s3">)) {</span>
+		<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s1">usedDep</span><span class="s3">.</span><span class="s1">dependency</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">request </span><span class="s3">= </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">request</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">exportName </span><span class="s3">= </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">name</span><span class="s3">;</span>
+		<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">request</span><span class="s3">}</span><span class="s2">:</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportName</span><span class="s3">}</span><span class="s2">`</span><span class="s3">, </span><span class="s1">usedDep</span><span class="s3">);</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">map</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} WebAssemblyGeneratorOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} [mangleImports] mangle imports</span>
+ <span class="s5">*/</span>
+
+<span class="s4">class </span><span class="s1">WebAssemblyGenerator </span><span class="s4">extends </span><span class="s1">Generator </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{WebAssemblyGeneratorOptions} options options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NormalModule} module fresh module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{SourceTypes} available types (do not mutate)</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getTypes</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">WEBASSEMBLY_TYPES</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NormalModule} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string=} type source type</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} estimate size of the module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getSize</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">type</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">originalSource </span><span class="s3">= </span><span class="s1">module</span><span class="s3">.</span><span class="s1">originalSource</span><span class="s3">();</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">originalSource</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">originalSource</span><span class="s3">.</span><span class="s1">size</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NormalModule} module module for which the code should be generated</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{GenerateContext} generateContext context for generate</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Source | null} generated code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">generate</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, { </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">}) {</span>
+		<span class="s4">const </span><span class="s1">bin </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Buffer} */</span>
+			<span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Source} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">originalSource</span><span class="s3">()).</span><span class="s1">source</span><span class="s3">());</span>
+
+		<span class="s4">const </span><span class="s1">initFuncId </span><span class="s3">= </span><span class="s1">t</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(</span><span class="s2">&quot;&quot;</span><span class="s3">);</span>
+
+		<span class="s0">// parse it</span>
+		<span class="s4">const </span><span class="s1">ast </span><span class="s3">= </span><span class="s1">decode</span><span class="s3">(</span><span class="s1">bin</span><span class="s3">, {</span>
+			<span class="s1">ignoreDataSection</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+			<span class="s1">ignoreCodeSection</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+			<span class="s1">ignoreCustomNameSection</span><span class="s3">: </span><span class="s4">true</span>
+		<span class="s3">});</span>
+
+		<span class="s4">const </span><span class="s1">moduleContext </span><span class="s3">= </span><span class="s1">moduleContextFromModuleAST</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">.</span><span class="s1">body</span><span class="s3">[</span><span class="s7">0</span><span class="s3">]);</span>
+
+		<span class="s4">const </span><span class="s1">importedGlobals </span><span class="s3">= </span><span class="s1">getImportedGlobals</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">countImportedFunc </span><span class="s3">= </span><span class="s1">getCountImportedFunc</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">startAtFuncOffset </span><span class="s3">= </span><span class="s1">moduleContext</span><span class="s3">.</span><span class="s1">getStart</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">nextFuncIndex </span><span class="s3">= </span><span class="s1">getNextFuncIndex</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">, </span><span class="s1">countImportedFunc</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">nextTypeIndex </span><span class="s3">= </span><span class="s1">getNextTypeIndex</span><span class="s3">(</span><span class="s1">ast</span><span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">usedDependencyMap </span><span class="s3">= </span><span class="s1">getUsedDependencyMap</span><span class="s3">(</span>
+			<span class="s1">moduleGraph</span><span class="s3">,</span>
+			<span class="s1">module</span><span class="s3">,</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mangleImports</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">externalExports </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span>
+			<span class="s1">module</span><span class="s3">.</span><span class="s1">dependencies</span>
+				<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">d </span><span class="s3">=&gt; </span><span class="s1">d </span><span class="s4">instanceof </span><span class="s1">WebAssemblyExportImportedDependency</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">d </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">wasmDep </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WebAssemblyExportImportedDependency} */ </span><span class="s3">(</span>
+						<span class="s1">d</span>
+					<span class="s3">);</span>
+					<span class="s4">return </span><span class="s1">wasmDep</span><span class="s3">.</span><span class="s1">exportName</span><span class="s3">;</span>
+				<span class="s3">})</span>
+		<span class="s3">);</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{t.Instruction[]} */</span>
+		<span class="s4">const </span><span class="s1">additionalInitCode </span><span class="s3">= [];</span>
+
+		<span class="s4">const </span><span class="s1">transform </span><span class="s3">= </span><span class="s1">compose</span><span class="s3">(</span>
+			<span class="s1">rewriteExportNames</span><span class="s3">({</span>
+				<span class="s1">ast</span><span class="s3">,</span>
+				<span class="s1">moduleGraph</span><span class="s3">,</span>
+				<span class="s1">module</span><span class="s3">,</span>
+				<span class="s1">externalExports</span><span class="s3">,</span>
+				<span class="s1">runtime</span>
+			<span class="s3">}),</span>
+
+			<span class="s1">removeStartFunc</span><span class="s3">({ </span><span class="s1">ast </span><span class="s3">}),</span>
+
+			<span class="s1">rewriteImportedGlobals</span><span class="s3">({ </span><span class="s1">ast</span><span class="s3">, </span><span class="s1">additionalInitCode </span><span class="s3">}),</span>
+
+			<span class="s1">rewriteImports</span><span class="s3">({</span>
+				<span class="s1">ast</span><span class="s3">,</span>
+				<span class="s1">usedDependencyMap</span>
+			<span class="s3">}),</span>
+
+			<span class="s1">addInitFunction</span><span class="s3">({</span>
+				<span class="s1">ast</span><span class="s3">,</span>
+				<span class="s1">initFuncId</span><span class="s3">,</span>
+				<span class="s1">importedGlobals</span><span class="s3">,</span>
+				<span class="s1">additionalInitCode</span><span class="s3">,</span>
+				<span class="s1">startAtFuncOffset</span><span class="s3">,</span>
+				<span class="s1">nextFuncIndex</span><span class="s3">,</span>
+				<span class="s1">nextTypeIndex</span>
+			<span class="s3">})</span>
+		<span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">newBin </span><span class="s3">= </span><span class="s1">transform</span><span class="s3">(</span><span class="s1">bin</span><span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">newBuf </span><span class="s3">= </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">newBin</span><span class="s3">);</span>
+
+		<span class="s4">return new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">newBuf</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Error} error the error</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NormalModule} module module for which the code should be generated</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{GenerateContext} generateContext context for generate</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Source | null} generated code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">generateError</span><span class="s3">(</span><span class="s1">error</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">generateContext</span><span class="s3">) {</span>
+		<span class="s4">return new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">error</span><span class="s3">.</span><span class="s1">message</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">WebAssemblyGenerator</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,355 @@
+<html>
+<head>
+<title>require-atomic-updates.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #cf8e6d;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+require-atomic-updates.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">disallow assignments that can lead to race conditions due to usage of `await` or `yield`</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Teddy Katz</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Toru Nagashima</span>
+ <span class="s0">*/</span>
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Make the map from identifiers to each reference.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{escope.Scope} scope The scope to get references.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Map&lt;Identifier, escope.Reference&gt;} [outReferenceMap] The map from identifier nodes to each reference object.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Map&lt;Identifier, escope.Reference&gt;} `referenceMap`.</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">createReferenceMap</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">, </span><span class="s2">outReferenceMap </span><span class="s4">= </span><span class="s5">new </span><span class="s2">Map</span><span class="s4">()) {</span>
+    <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">reference of scope</span><span class="s4">.</span><span class="s2">references</span><span class="s4">) {</span>
+        <span class="s5">if </span><span class="s4">(</span><span class="s2">reference</span><span class="s4">.</span><span class="s2">resolved </span><span class="s4">=== </span><span class="s5">null</span><span class="s4">) {</span>
+            <span class="s5">continue</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s2">outReferenceMap</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">, </span><span class="s2">reference</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">childScope of scope</span><span class="s4">.</span><span class="s2">childScopes</span><span class="s4">) {</span>
+        <span class="s5">if </span><span class="s4">(</span><span class="s2">childScope</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;function&quot;</span><span class="s4">) {</span>
+            <span class="s2">createReferenceMap</span><span class="s4">(</span><span class="s2">childScope</span><span class="s4">, </span><span class="s2">outReferenceMap</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s5">return </span><span class="s2">outReferenceMap</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Get `reference.writeExpr` of a given reference.</span>
+ <span class="s0">* If it's the read reference of MemberExpression in LHS, returns RHS in order to address `a.b = await a`</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{escope.Reference} reference The reference to get.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Expression|null} The `reference.writeExpr`.</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">getWriteExpr</span><span class="s4">(</span><span class="s2">reference</span><span class="s4">) {</span>
+    <span class="s5">if </span><span class="s4">(</span><span class="s2">reference</span><span class="s4">.</span><span class="s2">writeExpr</span><span class="s4">) {</span>
+        <span class="s5">return </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">writeExpr</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s5">let </span><span class="s2">node </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">;</span>
+
+    <span class="s5">while </span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+        <span class="s5">const </span><span class="s2">t </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">;</span>
+
+        <span class="s5">if </span><span class="s4">(</span><span class="s2">t </span><span class="s4">=== </span><span class="s3">&quot;AssignmentExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">left </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s5">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">right</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s5">if </span><span class="s4">(</span><span class="s2">t </span><span class="s4">=== </span><span class="s3">&quot;MemberExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">object </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s2">node </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+            <span class="s5">continue</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s5">break</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s5">return null</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks if an expression is a variable that can only be observed within the given function.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Variable|null} variable The variable to check</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} isMemberAccess If `true` then this is a member access.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the variable is local to the given function, and is never referenced in a closure.</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">isLocalVariableWithoutEscape</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">isMemberAccess</span><span class="s4">) {</span>
+    <span class="s5">if </span><span class="s4">(!</span><span class="s2">variable</span><span class="s4">) {</span>
+        <span class="s5">return false</span><span class="s4">; </span><span class="s6">// A global variable which was not defined.</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// If the reference is a property access and the variable is a parameter, it handles the variable is not local.</span>
+    <span class="s5">if </span><span class="s4">(</span><span class="s2">isMemberAccess </span><span class="s4">&amp;&amp; </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">d </span><span class="s4">=&gt; </span><span class="s2">d</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Parameter&quot;</span><span class="s4">)) {</span>
+        <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s5">const </span><span class="s2">functionScope </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">.</span><span class="s2">variableScope</span><span class="s4">;</span>
+
+    <span class="s5">return </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">references</span><span class="s4">.</span><span class="s2">every</span><span class="s4">(</span><span class="s2">reference </span><span class="s4">=&gt;</span>
+        <span class="s2">reference</span><span class="s4">.</span><span class="s2">from</span><span class="s4">.</span><span class="s2">variableScope </span><span class="s4">=== </span><span class="s2">functionScope</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Represents segment information.</span>
+ <span class="s0">*/</span>
+<span class="s5">class </span><span class="s2">SegmentInfo </span><span class="s4">{</span>
+    <span class="s2">constructor</span><span class="s4">() {</span>
+        <span class="s5">this</span><span class="s4">.</span><span class="s2">info </span><span class="s4">= </span><span class="s5">new </span><span class="s2">WeakMap</span><span class="s4">();</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Initialize the segment information.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{PathSegment} segment The segment to initialize.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">initialize</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+        <span class="s5">const </span><span class="s2">outdatedReadVariables </span><span class="s4">= </span><span class="s5">new </span><span class="s2">Set</span><span class="s4">();</span>
+        <span class="s5">const </span><span class="s2">freshReadVariables </span><span class="s4">= </span><span class="s5">new </span><span class="s2">Set</span><span class="s4">();</span>
+
+        <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">prevSegment of segment</span><span class="s4">.</span><span class="s2">prevSegments</span><span class="s4">) {</span>
+            <span class="s5">const </span><span class="s2">info </span><span class="s4">= </span><span class="s5">this</span><span class="s4">.</span><span class="s2">info</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">prevSegment</span><span class="s4">);</span>
+
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">info</span><span class="s4">) {</span>
+                <span class="s2">info</span><span class="s4">.</span><span class="s2">outdatedReadVariables</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">Set</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">add</span><span class="s4">, </span><span class="s2">outdatedReadVariables</span><span class="s4">);</span>
+                <span class="s2">info</span><span class="s4">.</span><span class="s2">freshReadVariables</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">Set</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">add</span><span class="s4">, </span><span class="s2">freshReadVariables</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s5">this</span><span class="s4">.</span><span class="s2">info</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">, { </span><span class="s2">outdatedReadVariables</span><span class="s4">, </span><span class="s2">freshReadVariables </span><span class="s4">});</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Mark a given variable as read on given segments.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{PathSegment[]} segments The segments that it read the variable on.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Variable} variable The variable to be read.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">markAsRead</span><span class="s4">(</span><span class="s2">segments</span><span class="s4">, </span><span class="s2">variable</span><span class="s4">) {</span>
+        <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">segment of segments</span><span class="s4">) {</span>
+            <span class="s5">const </span><span class="s2">info </span><span class="s4">= </span><span class="s5">this</span><span class="s4">.</span><span class="s2">info</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">info</span><span class="s4">) {</span>
+                <span class="s2">info</span><span class="s4">.</span><span class="s2">freshReadVariables</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">);</span>
+
+                <span class="s6">// If a variable is freshly read again, then it's no more out-dated.</span>
+                <span class="s2">info</span><span class="s4">.</span><span class="s2">outdatedReadVariables</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Move `freshReadVariables` to `outdatedReadVariables`.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{PathSegment[]} segments The segments to process.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">makeOutdated</span><span class="s4">(</span><span class="s2">segments</span><span class="s4">) {</span>
+        <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">segment of segments</span><span class="s4">) {</span>
+            <span class="s5">const </span><span class="s2">info </span><span class="s4">= </span><span class="s5">this</span><span class="s4">.</span><span class="s2">info</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">info</span><span class="s4">) {</span>
+                <span class="s2">info</span><span class="s4">.</span><span class="s2">freshReadVariables</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">Set</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">add</span><span class="s4">, </span><span class="s2">info</span><span class="s4">.</span><span class="s2">outdatedReadVariables</span><span class="s4">);</span>
+                <span class="s2">info</span><span class="s4">.</span><span class="s2">freshReadVariables</span><span class="s4">.</span><span class="s2">clear</span><span class="s4">();</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Check if a given variable is outdated on the current segments.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{PathSegment[]} segments The current segments.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Variable} variable The variable to check.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the variable is outdated on the segments.</span>
+     <span class="s0">*/</span>
+    <span class="s2">isOutdated</span><span class="s4">(</span><span class="s2">segments</span><span class="s4">, </span><span class="s2">variable</span><span class="s4">) {</span>
+        <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">segment of segments</span><span class="s4">) {</span>
+            <span class="s5">const </span><span class="s2">info </span><span class="s4">= </span><span class="s5">this</span><span class="s4">.</span><span class="s2">info</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">info </span><span class="s4">&amp;&amp; </span><span class="s2">info</span><span class="s4">.</span><span class="s2">outdatedReadVariables</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">)) {</span>
+                <span class="s5">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+        <span class="s5">return false</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s6">//------------------------------------------------------------------------------</span>
+<span class="s6">// Rule Definition</span>
+<span class="s6">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;problem&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow assignments that can lead to race conditions due to usage of `await` or `yield`&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s5">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/require-atomic-updates&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">fixable</span><span class="s4">: </span><span class="s5">null</span><span class="s4">,</span>
+
+        <span class="s2">schema</span><span class="s4">: [{</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+            <span class="s2">properties</span><span class="s4">: {</span>
+                <span class="s2">allowProperties</span><span class="s4">: {</span>
+                    <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span><span class="s4">,</span>
+                    <span class="s5">default</span><span class="s4">: </span><span class="s5">false</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+            <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s5">false</span>
+        <span class="s4">}],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">nonAtomicUpdate</span><span class="s4">: </span><span class="s3">&quot;Possible race condition: `{{value}}` might be reassigned based on an outdated value of `{{value}}`.&quot;</span><span class="s4">,</span>
+            <span class="s2">nonAtomicObjectUpdate</span><span class="s4">: </span><span class="s3">&quot;Possible race condition: `{{value}}` might be assigned based on an outdated state of `{{object}}`.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s5">const </span><span class="s2">allowProperties </span><span class="s4">= !!</span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">allowProperties</span><span class="s4">;</span>
+
+        <span class="s5">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+        <span class="s5">const </span><span class="s2">assignmentReferences </span><span class="s4">= </span><span class="s5">new </span><span class="s2">Map</span><span class="s4">();</span>
+        <span class="s5">const </span><span class="s2">segmentInfo </span><span class="s4">= </span><span class="s5">new </span><span class="s2">SegmentInfo</span><span class="s4">();</span>
+        <span class="s5">let </span><span class="s2">stack </span><span class="s4">= </span><span class="s5">null</span><span class="s4">;</span>
+
+        <span class="s5">return </span><span class="s4">{</span>
+            <span class="s2">onCodePathStart</span><span class="s4">(</span><span class="s2">codePath</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s5">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s5">const </span><span class="s2">shouldVerify </span><span class="s4">=</span>
+                    <span class="s2">scope</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;function&quot; </span><span class="s4">&amp;&amp;</span>
+                    <span class="s4">(</span><span class="s2">scope</span><span class="s4">.</span><span class="s2">block</span><span class="s4">.</span><span class="s2">async </span><span class="s4">|| </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">block</span><span class="s4">.</span><span class="s2">generator</span><span class="s4">);</span>
+
+                <span class="s2">stack </span><span class="s4">= {</span>
+                    <span class="s2">upper</span><span class="s4">: </span><span class="s2">stack</span><span class="s4">,</span>
+                    <span class="s2">codePath</span><span class="s4">,</span>
+                    <span class="s2">referenceMap</span><span class="s4">: </span><span class="s2">shouldVerify </span><span class="s4">? </span><span class="s2">createReferenceMap</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">) : </span><span class="s5">null</span><span class="s4">,</span>
+                    <span class="s2">currentSegments</span><span class="s4">: </span><span class="s5">new </span><span class="s2">Set</span><span class="s4">()</span>
+                <span class="s4">};</span>
+            <span class="s4">},</span>
+            <span class="s2">onCodePathEnd</span><span class="s4">() {</span>
+                <span class="s2">stack </span><span class="s4">= </span><span class="s2">stack</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">;</span>
+            <span class="s4">},</span>
+
+            <span class="s6">// Initialize the segment information.</span>
+            <span class="s2">onCodePathSegmentStart</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">segmentInfo</span><span class="s4">.</span><span class="s2">initialize</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+                <span class="s2">stack</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onUnreachableCodePathSegmentStart</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">stack</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onUnreachableCodePathSegmentEnd</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">stack</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onCodePathSegmentEnd</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">stack</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+
+            <span class="s6">// Handle references to prepare verification.</span>
+            <span class="s2">Identifier</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s5">const </span><span class="s4">{ </span><span class="s2">referenceMap </span><span class="s4">} = </span><span class="s2">stack</span><span class="s4">;</span>
+                <span class="s5">const </span><span class="s2">reference </span><span class="s4">= </span><span class="s2">referenceMap </span><span class="s4">&amp;&amp; </span><span class="s2">referenceMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+
+                <span class="s6">// Ignore if this is not a valid variable reference.</span>
+                <span class="s5">if </span><span class="s4">(!</span><span class="s2">reference</span><span class="s4">) {</span>
+                    <span class="s5">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+                <span class="s5">const </span><span class="s2">variable </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">resolved</span><span class="s4">;</span>
+                <span class="s5">const </span><span class="s2">writeExpr </span><span class="s4">= </span><span class="s2">getWriteExpr</span><span class="s4">(</span><span class="s2">reference</span><span class="s4">);</span>
+                <span class="s5">const </span><span class="s2">isMemberAccess </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;MemberExpression&quot;</span><span class="s4">;</span>
+
+                <span class="s6">// Add a fresh read variable.</span>
+                <span class="s5">if </span><span class="s4">(</span><span class="s2">reference</span><span class="s4">.</span><span class="s2">isRead</span><span class="s4">() &amp;&amp; !(</span><span class="s2">writeExpr </span><span class="s4">&amp;&amp; </span><span class="s2">writeExpr</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;=&quot;</span><span class="s4">)) {</span>
+                    <span class="s2">segmentInfo</span><span class="s4">.</span><span class="s2">markAsRead</span><span class="s4">(</span><span class="s2">stack</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">, </span><span class="s2">variable</span><span class="s4">);</span>
+                <span class="s4">}</span>
+
+                <span class="s6">/* 
+                 * Register the variable to verify after ESLint traversed the `writeExpr` node 
+                 * if this reference is an assignment to a variable which is referred from other closure. 
+                 */</span>
+                <span class="s5">if </span><span class="s4">(</span><span class="s2">writeExpr </span><span class="s4">&amp;&amp;</span>
+                    <span class="s2">writeExpr</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">right </span><span class="s4">=== </span><span class="s2">writeExpr </span><span class="s4">&amp;&amp; </span><span class="s6">// ← exclude variable declarations.</span>
+                    <span class="s4">!</span><span class="s2">isLocalVariableWithoutEscape</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">isMemberAccess</span><span class="s4">)</span>
+                <span class="s4">) {</span>
+                    <span class="s5">let </span><span class="s2">refs </span><span class="s4">= </span><span class="s2">assignmentReferences</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">writeExpr</span><span class="s4">);</span>
+
+                    <span class="s5">if </span><span class="s4">(!</span><span class="s2">refs</span><span class="s4">) {</span>
+                        <span class="s2">refs </span><span class="s4">= [];</span>
+                        <span class="s2">assignmentReferences</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">writeExpr</span><span class="s4">, </span><span class="s2">refs</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+
+                    <span class="s2">refs</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">reference</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s6">/* 
+             * Verify assignments. 
+             * If the reference exists in `outdatedReadVariables` list, report it. 
+             */</span>
+            <span class="s3">&quot;:expression:exit&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+
+                <span class="s6">// referenceMap exists if this is in a resumable function scope.</span>
+                <span class="s5">if </span><span class="s4">(!</span><span class="s2">stack</span><span class="s4">.</span><span class="s2">referenceMap</span><span class="s4">) {</span>
+                    <span class="s5">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">// Mark the read variables on this code path as outdated.</span>
+                <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;AwaitExpression&quot; </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;YieldExpression&quot;</span><span class="s4">) {</span>
+                    <span class="s2">segmentInfo</span><span class="s4">.</span><span class="s2">makeOutdated</span><span class="s4">(</span><span class="s2">stack</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">);</span>
+                <span class="s4">}</span>
+
+                <span class="s6">// Verify.</span>
+                <span class="s5">const </span><span class="s2">references </span><span class="s4">= </span><span class="s2">assignmentReferences</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+
+                <span class="s5">if </span><span class="s4">(</span><span class="s2">references</span><span class="s4">) {</span>
+                    <span class="s2">assignmentReferences</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+
+                    <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">reference of references</span><span class="s4">) {</span>
+                        <span class="s5">const </span><span class="s2">variable </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">resolved</span><span class="s4">;</span>
+
+                        <span class="s5">if </span><span class="s4">(</span><span class="s2">segmentInfo</span><span class="s4">.</span><span class="s2">isOutdated</span><span class="s4">(</span><span class="s2">stack</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">, </span><span class="s2">variable</span><span class="s4">)) {</span>
+                            <span class="s5">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">left </span><span class="s4">=== </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">) {</span>
+                                <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                                    <span class="s2">node</span><span class="s4">: </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">,</span>
+                                    <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;nonAtomicUpdate&quot;</span><span class="s4">,</span>
+                                    <span class="s2">data</span><span class="s4">: {</span>
+                                        <span class="s2">value</span><span class="s4">: </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">name</span>
+                                    <span class="s4">}</span>
+                                <span class="s4">});</span>
+                            <span class="s4">} </span><span class="s5">else if </span><span class="s4">(!</span><span class="s2">allowProperties</span><span class="s4">) {</span>
+                                <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                                    <span class="s2">node</span><span class="s4">: </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">,</span>
+                                    <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;nonAtomicObjectUpdate&quot;</span><span class="s4">,</span>
+                                    <span class="s2">data</span><span class="s4">: {</span>
+                                        <span class="s2">value</span><span class="s4">: </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">left</span><span class="s4">),</span>
+                                        <span class="s2">object</span><span class="s4">: </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">name</span>
+                                    <span class="s4">}</span>
+                                <span class="s4">});</span>
+                            <span class="s4">}</span>
+
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

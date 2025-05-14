@@ -1,0 +1,201 @@
+<html>
+<head>
+<title>ContextDependency.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ContextDependency.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">Dependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Dependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">DependencyTemplate </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../DependencyTemplate&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">makeSerializable </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/makeSerializable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">memoize </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/memoize&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ContextModule&quot;).ContextOptions} ContextOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).TRANSITIVE} TRANSITIVE */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../WebpackError&quot;)} WebpackError */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../serialization/ObjectMiddleware&quot;).ObjectDeserializerContext} ObjectDeserializerContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../serialization/ObjectMiddleware&quot;).ObjectSerializerContext} ObjectSerializerContext */</span>
+
+<span class="s4">const </span><span class="s1">getCriticalDependencyWarning </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt;</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./CriticalDependencyWarning&quot;</span><span class="s3">)</span>
+<span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{ContextOptions &amp; { request: string }} ContextDependencyOptions */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RegExp | null | undefined} r regexp</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} stringified regexp</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">regExpToString </span><span class="s3">= </span><span class="s1">r </span><span class="s3">=&gt; (</span><span class="s1">r </span><span class="s3">? </span><span class="s1">String</span><span class="s3">(</span><span class="s1">r</span><span class="s3">) : </span><span class="s2">&quot;&quot;</span><span class="s3">);</span>
+
+<span class="s4">class </span><span class="s1">ContextDependency </span><span class="s4">extends </span><span class="s1">Dependency </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContextDependencyOptions} options options for the context module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string=} context request context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">();</span>
+
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">&amp;&amp; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">request</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{false | undefined | string} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">critical </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">hadGlobalOrStickyRegExp </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+
+		<span class="s4">if </span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">&amp;&amp;</span>
+			<span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">.</span><span class="s1">global </span><span class="s3">|| </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">.</span><span class="s1">sticky</span><span class="s3">)</span>
+		<span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= { </span><span class="s1">...</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">, </span><span class="s1">regExp</span><span class="s3">: </span><span class="s4">null </span><span class="s3">};</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hadGlobalOrStickyRegExp </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">request </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">range </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">valueRange </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{boolean | string | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">inShorthand </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s0">// TODO refactor this</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">replaces </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_requestContext </span><span class="s3">= </span><span class="s1">context</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | undefined} a request context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getContext</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">_requestContext</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get category</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s2">&quot;commonjs&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean | TRANSITIVE} true, when changes to the referenced module could affect the referencing module; TRANSITIVE, when changes to the referenced module could affect referencing modules of the referencing module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">couldAffectReferencingModule</span><span class="s3">() {</span>
+		<span class="s4">return true</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | null} an identifier to merge equal requests</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getResourceIdentifier</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s3">(</span>
+			<span class="s2">`context</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_requestContext </span><span class="s3">|| </span><span class="s2">&quot;&quot;</span><span class="s3">}</span><span class="s2">|ctx request</span><span class="s1">$</span><span class="s3">{</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">request</span>
+			<span class="s3">} </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">recursive</span><span class="s3">} </span><span class="s2">` </span><span class="s3">+</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">regExpToString</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">)} </span><span class="s1">$</span><span class="s3">{</span><span class="s1">regExpToString</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">include</span>
+			<span class="s3">)} </span><span class="s1">$</span><span class="s3">{</span><span class="s1">regExpToString</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exclude</span><span class="s3">)} </span><span class="s2">` </span><span class="s3">+</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">} </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">} </span><span class="s2">` </span><span class="s3">+</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">)}</span><span class="s2">` </span><span class="s3">+</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span>
+					<span class="s3">? </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span><span class="s3">)}</span><span class="s2">`</span>
+					<span class="s3">: </span><span class="s2">&quot;&quot;</span>
+			<span class="s3">}</span><span class="s2">`</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Returns warnings</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{WebpackError[] | null | undefined} warnings</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getWarnings</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">warnings </span><span class="s3">= </span><span class="s4">super</span><span class="s3">.</span><span class="s1">getWarnings</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">);</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">critical</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">warnings</span><span class="s3">) </span><span class="s1">warnings </span><span class="s3">= [];</span>
+			<span class="s4">const </span><span class="s1">CriticalDependencyWarning </span><span class="s3">= </span><span class="s1">getCriticalDependencyWarning</span><span class="s3">();</span>
+			<span class="s1">warnings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s4">new </span><span class="s1">CriticalDependencyWarning</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">critical</span><span class="s3">));</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hadGlobalOrStickyRegExp</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">warnings</span><span class="s3">) </span><span class="s1">warnings </span><span class="s3">= [];</span>
+			<span class="s4">const </span><span class="s1">CriticalDependencyWarning </span><span class="s3">= </span><span class="s1">getCriticalDependencyWarning</span><span class="s3">();</span>
+			<span class="s1">warnings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+				<span class="s4">new </span><span class="s1">CriticalDependencyWarning</span><span class="s3">(</span>
+					<span class="s2">&quot;Contexts can't use RegExps with the 'g' or 'y' flags.&quot;</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return </span><span class="s1">warnings</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectSerializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">serialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">write </span><span class="s3">} = </span><span class="s1">context</span><span class="s3">;</span>
+
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">critical</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hadGlobalOrStickyRegExp</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">request</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_requestContext</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">range</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">valueRange</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">prepend</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">replaces</span><span class="s3">);</span>
+
+		<span class="s4">super</span><span class="s3">.</span><span class="s1">serialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectDeserializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">deserialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">read </span><span class="s3">} = </span><span class="s1">context</span><span class="s3">;</span>
+
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">critical </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">hadGlobalOrStickyRegExp </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">request </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_requestContext </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">range </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">valueRange </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">prepend </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">replaces </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+
+		<span class="s4">super</span><span class="s3">.</span><span class="s1">deserialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">makeSerializable</span><span class="s3">(</span>
+	<span class="s1">ContextDependency</span><span class="s3">,</span>
+	<span class="s2">&quot;webpack/lib/dependencies/ContextDependency&quot;</span>
+<span class="s3">);</span>
+
+<span class="s1">ContextDependency</span><span class="s3">.</span><span class="s1">Template </span><span class="s3">= </span><span class="s1">DependencyTemplate</span><span class="s3">;</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ContextDependency</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

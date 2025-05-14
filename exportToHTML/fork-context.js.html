@@ -1,0 +1,373 @@
+<html>
+<head>
+<title>fork-context.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+fork-context.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">A class to operate forking.</span>
+ <span class="s0">*</span>
+ <span class="s0">* This is state of forking.</span>
+ <span class="s0">* This has a fork list and manages it.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Toru Nagashima</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">assert </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;assert&quot;</span><span class="s4">),</span>
+    <span class="s2">CodePathSegment </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./code-path-segment&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines whether or not a given segment is reachable.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CodePathSegment} segment The segment to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the segment is reachable.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isReachable</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">segment</span><span class="s4">.</span><span class="s2">reachable</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates a new segment for each fork in the given context and appends it</span>
+ <span class="s0">* to the end of the specified range of segments. Ultimately, this ends up calling</span>
+ <span class="s0">* `new CodePathSegment()` for each of the forks using the `create` argument</span>
+ <span class="s0">* as a wrapper around special behavior.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The `startIndex` and `endIndex` arguments specify a range of segments in</span>
+ <span class="s0">* `context` that should become `allPrevSegments` for the newly created</span>
+ <span class="s0">* `CodePathSegment` objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* When `context.segmentsList` is `[[a, b], [c, d], [e, f]]`, `begin` is `0`, and</span>
+ <span class="s0">* `end` is `-1`, this creates two new segments, `[g, h]`. This `g` is appended to</span>
+ <span class="s0">* the end of the path from `a`, `c`, and `e`. This `h` is appended to the end of</span>
+ <span class="s0">* `b`, `d`, and `f`.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ForkContext} context An instance from which the previous segments</span>
+ <span class="s0">*      will be obtained.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} startIndex The index of the first segment in the context</span>
+ <span class="s0">*      that should be specified as previous segments for the newly created segments.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} endIndex The index of the last segment in the context</span>
+ <span class="s0">*      that should be specified as previous segments for the newly created segments.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Function} create A function that creates new `CodePathSegment`</span>
+ <span class="s0">*      instances in a particular way. See the `CodePathSegment.new*` methods.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array&lt;CodePathSegment&gt;} An array of the newly-created segments.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createSegments</span><span class="s4">(</span><span class="s2">context</span><span class="s4">, </span><span class="s2">startIndex</span><span class="s4">, </span><span class="s2">endIndex</span><span class="s4">, </span><span class="s2">create</span><span class="s4">) {</span>
+
+    <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{Array&lt;Array&lt;CodePathSegment&gt;&gt;} */</span>
+    <span class="s6">const </span><span class="s2">list </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">segmentsList</span><span class="s4">;</span>
+
+    <span class="s5">/* 
+     * Both `startIndex` and `endIndex` work the same way: if the number is zero 
+     * or more, then the number is used as-is. If the number is negative, 
+     * then that number is added to the length of the segments list to 
+     * determine the index to use. That means -1 for either argument 
+     * is the last element, -2 is the second to last, and so on. 
+     * 
+     * So if `startIndex` is 0, `endIndex` is -1, and `list.length` is 3, the 
+     * effective `startIndex` is 0 and the effective `endIndex` is 2, so this function 
+     * will include items at indices 0, 1, and 2. 
+     * 
+     * Therefore, if `startIndex` is -1 and `endIndex` is -1, that means we'll only 
+     * be using the last segment in `list`. 
+     */</span>
+    <span class="s6">const </span><span class="s2">normalizedBegin </span><span class="s4">= </span><span class="s2">startIndex </span><span class="s4">&gt;= </span><span class="s7">0 </span><span class="s4">? </span><span class="s2">startIndex </span><span class="s4">: </span><span class="s2">list</span><span class="s4">.</span><span class="s2">length </span><span class="s4">+ </span><span class="s2">startIndex</span><span class="s4">;</span>
+    <span class="s6">const </span><span class="s2">normalizedEnd </span><span class="s4">= </span><span class="s2">endIndex </span><span class="s4">&gt;= </span><span class="s7">0 </span><span class="s4">? </span><span class="s2">endIndex </span><span class="s4">: </span><span class="s2">list</span><span class="s4">.</span><span class="s2">length </span><span class="s4">+ </span><span class="s2">endIndex</span><span class="s4">;</span>
+
+    <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{Array&lt;CodePathSegment&gt;} */</span>
+    <span class="s6">const </span><span class="s2">segments </span><span class="s4">= [];</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">count</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+
+        <span class="s5">// this is passed into `new CodePathSegment` to add to code path.</span>
+        <span class="s6">const </span><span class="s2">allPrevSegments </span><span class="s4">= [];</span>
+
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">j </span><span class="s4">= </span><span class="s2">normalizedBegin</span><span class="s4">; </span><span class="s2">j </span><span class="s4">&lt;= </span><span class="s2">normalizedEnd</span><span class="s4">; ++</span><span class="s2">j</span><span class="s4">) {</span>
+            <span class="s2">allPrevSegments</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">list</span><span class="s4">[</span><span class="s2">j</span><span class="s4">][</span><span class="s2">i</span><span class="s4">]);</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// note: `create` is just a wrapper that augments `new CodePathSegment`.</span>
+        <span class="s2">segments</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">.</span><span class="s2">idGenerator</span><span class="s4">.</span><span class="s2">next</span><span class="s4">(), </span><span class="s2">allPrevSegments</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">segments</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Inside of a `finally` block we end up with two parallel paths. If the code path</span>
+ <span class="s0">* exits by a control statement (such as `break` or `continue`) from the `finally`</span>
+ <span class="s0">* block, then we need to merge the remaining parallel paths back into one.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ForkContext} context The fork context to work on.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Array&lt;CodePathSegment&gt;} segments Segments to merge.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array&lt;CodePathSegment&gt;} The merged segments.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">mergeExtraSegments</span><span class="s4">(</span><span class="s2">context</span><span class="s4">, </span><span class="s2">segments</span><span class="s4">) {</span>
+    <span class="s6">let </span><span class="s2">currentSegments </span><span class="s4">= </span><span class="s2">segments</span><span class="s4">;</span>
+
+    <span class="s5">/* 
+     * We need to ensure that the array returned from this function contains no more 
+     * than the number of segments that the context allows. `context.count` indicates 
+     * how many items should be in the returned array to ensure that the new segment 
+     * entries will line up with the already existing segment entries. 
+     */</span>
+    <span class="s6">while </span><span class="s4">(</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">count</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">merged </span><span class="s4">= [];</span>
+
+        <span class="s5">/* 
+         * Because `context.count` is a factor of 2 inside of a `finally` block, 
+         * we can divide the segment count by 2 to merge the paths together. 
+         * This loops through each segment in the list and creates a new `CodePathSegment` 
+         * that has the segment and the segment two slots away as previous segments. 
+         * 
+         * If `currentSegments` is [a,b,c,d], this will create new segments e and f, such 
+         * that: 
+         * 
+         * When `i` is 0: 
+         * a-&gt;e 
+         * c-&gt;e 
+         * 
+         * When `i` is 1: 
+         * b-&gt;f 
+         * d-&gt;f 
+         */</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">, </span><span class="s2">length </span><span class="s4">= </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">floor</span><span class="s4">(</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">/ </span><span class="s7">2</span><span class="s4">); </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+            <span class="s2">merged</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">CodePathSegment</span><span class="s4">.</span><span class="s2">newNext</span><span class="s4">(</span>
+                <span class="s2">context</span><span class="s4">.</span><span class="s2">idGenerator</span><span class="s4">.</span><span class="s2">next</span><span class="s4">(),</span>
+                <span class="s4">[</span><span class="s2">currentSegments</span><span class="s4">[</span><span class="s2">i</span><span class="s4">], </span><span class="s2">currentSegments</span><span class="s4">[</span><span class="s2">i </span><span class="s4">+ </span><span class="s2">length</span><span class="s4">]]</span>
+            <span class="s4">));</span>
+        <span class="s4">}</span>
+
+        <span class="s5">/* 
+         * Go through the loop condition one more time to see if we have the 
+         * number of segments for the context. If not, we'll keep merging paths 
+         * of the merged segments until we get there. 
+         */</span>
+        <span class="s2">currentSegments </span><span class="s4">= </span><span class="s2">merged</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">currentSegments</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Public Interface</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Manages the forking of code paths.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">ForkContext </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates a new instance.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{IdGenerator} idGenerator An identifier generator for segments.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ForkContext|null} upper The preceding fork context.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} count The number of parallel segments in each element</span>
+     <span class="s0">*      of `segmentsList`.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">idGenerator</span><span class="s4">, </span><span class="s2">upper</span><span class="s4">, </span><span class="s2">count</span><span class="s4">) {</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* The ID generator that will generate segment IDs for any new</span>
+         <span class="s0">* segments that are created.</span>
+         <span class="s0">* </span><span class="s1">@type </span><span class="s0">{IdGenerator}</span>
+         <span class="s0">*/</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">idGenerator </span><span class="s4">= </span><span class="s2">idGenerator</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* The preceding fork context.</span>
+         <span class="s0">* </span><span class="s1">@type </span><span class="s0">{ForkContext|null}</span>
+         <span class="s0">*/</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">upper </span><span class="s4">= </span><span class="s2">upper</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* The number of elements in each element of `segmentsList`. In most</span>
+         <span class="s0">* cases, this is 1 but can be 2 when there is a `finally` present,</span>
+         <span class="s0">* which forks the code path outside of normal flow. In the case of nested</span>
+         <span class="s0">* `finally` blocks, this can be a multiple of 2.</span>
+         <span class="s0">* </span><span class="s1">@type </span><span class="s0">{number}</span>
+         <span class="s0">*/</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">count </span><span class="s4">= </span><span class="s2">count</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* The segments within this context. Each element in this array has</span>
+         <span class="s0">* `count` elements that represent one step in each fork. For example,</span>
+         <span class="s0">* when `segmentsList` is `[[a, b], [c, d], [e, f]]`, there is one path</span>
+         <span class="s0">* a-&gt;c-&gt;e and one path b-&gt;d-&gt;f, and `count` is 2 because each element</span>
+         <span class="s0">* is an array with two elements.</span>
+         <span class="s0">* </span><span class="s1">@type </span><span class="s0">{Array&lt;Array&lt;CodePathSegment&gt;&gt;}</span>
+         <span class="s0">*/</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">segmentsList </span><span class="s4">= [];</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* The segments that begin this fork context.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{Array&lt;CodePathSegment&gt;}</span>
+     <span class="s0">*/</span>
+    <span class="s2">get head</span><span class="s4">() {</span>
+        <span class="s6">const </span><span class="s2">list </span><span class="s4">= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">segmentsList</span><span class="s4">;</span>
+
+        <span class="s6">return </span><span class="s2">list</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0 </span><span class="s4">? [] : </span><span class="s2">list</span><span class="s4">[</span><span class="s2">list</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Indicates if the context contains no segments.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{boolean}</span>
+     <span class="s0">*/</span>
+    <span class="s2">get empty</span><span class="s4">() {</span>
+        <span class="s6">return this</span><span class="s4">.</span><span class="s2">segmentsList</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Indicates if there are any segments that are reachable.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{boolean}</span>
+     <span class="s0">*/</span>
+    <span class="s2">get reachable</span><span class="s4">() {</span>
+        <span class="s6">const </span><span class="s2">segments </span><span class="s4">= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">head</span><span class="s4">;</span>
+
+        <span class="s6">return </span><span class="s2">segments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0 </span><span class="s4">&amp;&amp; </span><span class="s2">segments</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">isReachable</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates new segments in this context and appends them to the end of the</span>
+     <span class="s0">* already existing `CodePathSegment`s specified by `startIndex` and</span>
+     <span class="s0">* `endIndex`.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} startIndex The index of the first segment in the context</span>
+     <span class="s0">*      that should be specified as previous segments for the newly created segments.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} endIndex The index of the last segment in the context</span>
+     <span class="s0">*      that should be specified as previous segments for the newly created segments.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array&lt;CodePathSegment&gt;} An array of the newly created segments.</span>
+     <span class="s0">*/</span>
+    <span class="s2">makeNext</span><span class="s4">(</span><span class="s2">startIndex</span><span class="s4">, </span><span class="s2">endIndex</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">createSegments</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, </span><span class="s2">startIndex</span><span class="s4">, </span><span class="s2">endIndex</span><span class="s4">, </span><span class="s2">CodePathSegment</span><span class="s4">.</span><span class="s2">newNext</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates new unreachable segments in this context and appends them to the end of the</span>
+     <span class="s0">* already existing `CodePathSegment`s specified by `startIndex` and</span>
+     <span class="s0">* `endIndex`.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} startIndex The index of the first segment in the context</span>
+     <span class="s0">*      that should be specified as previous segments for the newly created segments.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} endIndex The index of the last segment in the context</span>
+     <span class="s0">*      that should be specified as previous segments for the newly created segments.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array&lt;CodePathSegment&gt;} An array of the newly created segments.</span>
+     <span class="s0">*/</span>
+    <span class="s2">makeUnreachable</span><span class="s4">(</span><span class="s2">startIndex</span><span class="s4">, </span><span class="s2">endIndex</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">createSegments</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, </span><span class="s2">startIndex</span><span class="s4">, </span><span class="s2">endIndex</span><span class="s4">, </span><span class="s2">CodePathSegment</span><span class="s4">.</span><span class="s2">newUnreachable</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates new segments in this context and does not append them to the end</span>
+     <span class="s0">*  of the already existing `CodePathSegment`s specified by `startIndex` and</span>
+     <span class="s0">* `endIndex`. The `startIndex` and `endIndex` are only used to determine if</span>
+     <span class="s0">* the new segments should be reachable. If any of the segments in this range</span>
+     <span class="s0">* are reachable then the new segments are also reachable; otherwise, the new</span>
+     <span class="s0">* segments are unreachable.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} startIndex The index of the first segment in the context</span>
+     <span class="s0">*      that should be considered for reachability.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} endIndex The index of the last segment in the context</span>
+     <span class="s0">*      that should be considered for reachability.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array&lt;CodePathSegment&gt;} An array of the newly created segments.</span>
+     <span class="s0">*/</span>
+    <span class="s2">makeDisconnected</span><span class="s4">(</span><span class="s2">startIndex</span><span class="s4">, </span><span class="s2">endIndex</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">createSegments</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, </span><span class="s2">startIndex</span><span class="s4">, </span><span class="s2">endIndex</span><span class="s4">, </span><span class="s2">CodePathSegment</span><span class="s4">.</span><span class="s2">newDisconnected</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Adds segments to the head of this context.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Array&lt;CodePathSegment&gt;} segments The segments to add.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">add</span><span class="s4">(</span><span class="s2">segments</span><span class="s4">) {</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s2">segments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt;= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">count</span><span class="s4">, </span><span class="s3">`</span><span class="s2">$</span><span class="s4">{</span><span class="s2">segments</span><span class="s4">.</span><span class="s2">length</span><span class="s4">} </span><span class="s3">&gt;= </span><span class="s2">$</span><span class="s4">{</span><span class="s6">this</span><span class="s4">.</span><span class="s2">count</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">segmentsList</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">mergeExtraSegments</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, </span><span class="s2">segments</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Replaces the head segments with the given segments.</span>
+     <span class="s0">* The current head segments are removed.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Array&lt;CodePathSegment&gt;} replacementHeadSegments The new head segments.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">replaceHead</span><span class="s4">(</span><span class="s2">replacementHeadSegments</span><span class="s4">) {</span>
+        <span class="s2">assert</span><span class="s4">(</span>
+            <span class="s2">replacementHeadSegments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt;= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">count</span><span class="s4">,</span>
+            <span class="s3">`</span><span class="s2">$</span><span class="s4">{</span><span class="s2">replacementHeadSegments</span><span class="s4">.</span><span class="s2">length</span><span class="s4">} </span><span class="s3">&gt;= </span><span class="s2">$</span><span class="s4">{</span><span class="s6">this</span><span class="s4">.</span><span class="s2">count</span><span class="s4">}</span><span class="s3">`</span>
+        <span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">segmentsList</span><span class="s4">.</span><span class="s2">splice</span><span class="s4">(-</span><span class="s7">1</span><span class="s4">, </span><span class="s7">1</span><span class="s4">, </span><span class="s2">mergeExtraSegments</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, </span><span class="s2">replacementHeadSegments</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Adds all segments of a given fork context into this context.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ForkContext} otherForkContext The fork context to add from.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">addAll</span><span class="s4">(</span><span class="s2">otherForkContext</span><span class="s4">) {</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s2">otherForkContext</span><span class="s4">.</span><span class="s2">count </span><span class="s4">=== </span><span class="s6">this</span><span class="s4">.</span><span class="s2">count</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">segmentsList</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">...otherForkContext</span><span class="s4">.</span><span class="s2">segmentsList</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Clears all segments in this context.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">clear</span><span class="s4">() {</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">segmentsList </span><span class="s4">= [];</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates a new root context, meaning that there are no parent</span>
+     <span class="s0">* fork contexts.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{IdGenerator} idGenerator An identifier generator for segments.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ForkContext} New fork context.</span>
+     <span class="s0">*/</span>
+    <span class="s6">static </span><span class="s2">newRoot</span><span class="s4">(</span><span class="s2">idGenerator</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">context </span><span class="s4">= </span><span class="s6">new </span><span class="s2">ForkContext</span><span class="s4">(</span><span class="s2">idGenerator</span><span class="s4">, </span><span class="s6">null</span><span class="s4">, </span><span class="s7">1</span><span class="s4">);</span>
+
+        <span class="s2">context</span><span class="s4">.</span><span class="s2">add</span><span class="s4">([</span><span class="s2">CodePathSegment</span><span class="s4">.</span><span class="s2">newRoot</span><span class="s4">(</span><span class="s2">idGenerator</span><span class="s4">.</span><span class="s2">next</span><span class="s4">())]);</span>
+
+        <span class="s6">return </span><span class="s2">context</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates an empty fork context preceded by a given context.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ForkContext} parentContext The parent fork context.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} shouldForkLeavingPath Indicates that we are inside of</span>
+     <span class="s0">*      a `finally` block and should therefore fork the path that leaves</span>
+     <span class="s0">*      `finally`.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ForkContext} New fork context.</span>
+     <span class="s0">*/</span>
+    <span class="s6">static </span><span class="s2">newEmpty</span><span class="s4">(</span><span class="s2">parentContext</span><span class="s4">, </span><span class="s2">shouldForkLeavingPath</span><span class="s4">) {</span>
+        <span class="s6">return new </span><span class="s2">ForkContext</span><span class="s4">(</span>
+            <span class="s2">parentContext</span><span class="s4">.</span><span class="s2">idGenerator</span><span class="s4">,</span>
+            <span class="s2">parentContext</span><span class="s4">,</span>
+            <span class="s4">(</span><span class="s2">shouldForkLeavingPath </span><span class="s4">? </span><span class="s7">2 </span><span class="s4">: </span><span class="s7">1</span><span class="s4">) * </span><span class="s2">parentContext</span><span class="s4">.</span><span class="s2">count</span>
+        <span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s2">ForkContext</span><span class="s4">;</span>
+</pre>
+</body>
+</html>

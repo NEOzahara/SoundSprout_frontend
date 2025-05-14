@@ -1,0 +1,1233 @@
+<html>
+<head>
+<title>url-state-machine.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #2aacb8;}
+.s5 { color: #42c3d4;}
+.s6 { color: #7a7e85;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+url-state-machine.js</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;use strict&quot;</span><span class="s1">;</span>
+<span class="s3">const </span><span class="s2">punycode </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;punycode&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">tr46 </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;tr46&quot;</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s2">infra </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./infra&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">utf8DecodeWithoutBOM </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./encoding&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">percentDecodeString</span><span class="s1">, </span><span class="s2">utf8PercentEncodeCodePoint</span><span class="s1">, </span><span class="s2">utf8PercentEncodeString</span><span class="s1">, </span><span class="s2">isC0ControlPercentEncode</span><span class="s1">,</span>
+  <span class="s2">isFragmentPercentEncode</span><span class="s1">, </span><span class="s2">isQueryPercentEncode</span><span class="s1">, </span><span class="s2">isSpecialQueryPercentEncode</span><span class="s1">, </span><span class="s2">isPathPercentEncode</span><span class="s1">,</span>
+  <span class="s2">isUserinfoPercentEncode </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./percent-encoding&quot;</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s2">specialSchemes </span><span class="s1">= {</span>
+  <span class="s2">ftp</span><span class="s1">: </span><span class="s4">21</span><span class="s1">,</span>
+  <span class="s2">file</span><span class="s1">: </span><span class="s3">null</span><span class="s1">,</span>
+  <span class="s2">http</span><span class="s1">: </span><span class="s4">80</span><span class="s1">,</span>
+  <span class="s2">https</span><span class="s1">: </span><span class="s4">443</span><span class="s1">,</span>
+  <span class="s2">ws</span><span class="s1">: </span><span class="s4">80</span><span class="s1">,</span>
+  <span class="s2">wss</span><span class="s1">: </span><span class="s4">443</span>
+<span class="s1">};</span>
+
+<span class="s3">const </span><span class="s2">failure </span><span class="s1">= </span><span class="s2">Symbol</span><span class="s1">(</span><span class="s0">&quot;failure&quot;</span><span class="s1">);</span>
+
+<span class="s3">function </span><span class="s2">countSymbols</span><span class="s1">(</span><span class="s2">str</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s1">[</span><span class="s2">...str</span><span class="s1">].</span><span class="s2">length</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">at</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">idx</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">c </span><span class="s1">= </span><span class="s2">input</span><span class="s1">[</span><span class="s2">idx</span><span class="s1">];</span>
+  <span class="s3">return </span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) ? </span><span class="s2">undefined </span><span class="s1">: </span><span class="s2">String</span><span class="s1">.</span><span class="s2">fromCodePoint</span><span class="s1">(</span><span class="s2">c</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isSingleDot</span><span class="s1">(</span><span class="s2">buffer</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;.&quot; </span><span class="s1">|| </span><span class="s2">buffer</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">() === </span><span class="s0">&quot;%2e&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isDoubleDot</span><span class="s1">(</span><span class="s2">buffer</span><span class="s1">) {</span>
+  <span class="s2">buffer </span><span class="s1">= </span><span class="s2">buffer</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+  <span class="s3">return </span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;..&quot; </span><span class="s1">|| </span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;%2e.&quot; </span><span class="s1">|| </span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;.%2e&quot; </span><span class="s1">|| </span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;%2e%2e&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isWindowsDriveLetterCodePoints</span><span class="s1">(</span><span class="s2">cp1</span><span class="s1">, </span><span class="s2">cp2</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIAlpha</span><span class="s1">(</span><span class="s2">cp1</span><span class="s1">) &amp;&amp; (</span><span class="s2">cp2 </span><span class="s1">=== </span><span class="s4">58 </span><span class="s1">|| </span><span class="s2">cp2 </span><span class="s1">=== </span><span class="s4">124</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isWindowsDriveLetterString</span><span class="s1">(</span><span class="s2">string</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">string</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s4">2 </span><span class="s1">&amp;&amp; </span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIAlpha</span><span class="s1">(</span><span class="s2">string</span><span class="s1">.</span><span class="s2">codePointAt</span><span class="s1">(</span><span class="s4">0</span><span class="s1">)) &amp;&amp; (</span><span class="s2">string</span><span class="s1">[</span><span class="s4">1</span><span class="s1">] === </span><span class="s0">&quot;:&quot; </span><span class="s1">|| </span><span class="s2">string</span><span class="s1">[</span><span class="s4">1</span><span class="s1">] === </span><span class="s0">&quot;|&quot;</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isNormalizedWindowsDriveLetterString</span><span class="s1">(</span><span class="s2">string</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">string</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s4">2 </span><span class="s1">&amp;&amp; </span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIAlpha</span><span class="s1">(</span><span class="s2">string</span><span class="s1">.</span><span class="s2">codePointAt</span><span class="s1">(</span><span class="s4">0</span><span class="s1">)) &amp;&amp; </span><span class="s2">string</span><span class="s1">[</span><span class="s4">1</span><span class="s1">] === </span><span class="s0">&quot;:&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">containsForbiddenHostCodePoint</span><span class="s1">(</span><span class="s2">string</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">string</span><span class="s1">.</span><span class="s2">search</span><span class="s1">(</span><span class="s5">/\u0000|\u0009|\u000A|\u000D|\u0020|#|%|\/|:|&lt;|&gt;|\?|@|\[|\\|\]|\^|\|/u</span><span class="s1">) !== -</span><span class="s4">1</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">containsForbiddenHostCodePointExcludingPercent</span><span class="s1">(</span><span class="s2">string</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">string</span><span class="s1">.</span><span class="s2">search</span><span class="s1">(</span><span class="s5">/\u0000|\u0009|\u000A|\u000D|\u0020|#|\/|:|&lt;|&gt;|\?|@|\[|\\|\]|\^|\|/u</span><span class="s1">) !== -</span><span class="s4">1</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isSpecialScheme</span><span class="s1">(</span><span class="s2">scheme</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">specialSchemes</span><span class="s1">[</span><span class="s2">scheme</span><span class="s1">] !== </span><span class="s2">undefined</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">isSpecialScheme</span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isNotSpecial</span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s1">!</span><span class="s2">isSpecialScheme</span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">defaultPort</span><span class="s1">(</span><span class="s2">scheme</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">specialSchemes</span><span class="s1">[</span><span class="s2">scheme</span><span class="s1">];</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">parseIPv4Number</span><span class="s1">(</span><span class="s2">input</span><span class="s1">) {</span>
+  <span class="s3">let </span><span class="s2">R </span><span class="s1">= </span><span class="s4">10</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt;= </span><span class="s4">2 </span><span class="s1">&amp;&amp; </span><span class="s2">input</span><span class="s1">.</span><span class="s2">charAt</span><span class="s1">(</span><span class="s4">0</span><span class="s1">) === </span><span class="s0">&quot;0&quot; </span><span class="s1">&amp;&amp; </span><span class="s2">input</span><span class="s1">.</span><span class="s2">charAt</span><span class="s1">(</span><span class="s4">1</span><span class="s1">).</span><span class="s2">toLowerCase</span><span class="s1">() === </span><span class="s0">&quot;x&quot;</span><span class="s1">) {</span>
+    <span class="s2">input </span><span class="s1">= </span><span class="s2">input</span><span class="s1">.</span><span class="s2">substring</span><span class="s1">(</span><span class="s4">2</span><span class="s1">);</span>
+    <span class="s2">R </span><span class="s1">= </span><span class="s4">16</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt;= </span><span class="s4">2 </span><span class="s1">&amp;&amp; </span><span class="s2">input</span><span class="s1">.</span><span class="s2">charAt</span><span class="s1">(</span><span class="s4">0</span><span class="s1">) === </span><span class="s0">&quot;0&quot;</span><span class="s1">) {</span>
+    <span class="s2">input </span><span class="s1">= </span><span class="s2">input</span><span class="s1">.</span><span class="s2">substring</span><span class="s1">(</span><span class="s4">1</span><span class="s1">);</span>
+    <span class="s2">R </span><span class="s1">= </span><span class="s4">8</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">input </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s4">0</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">let </span><span class="s2">regex </span><span class="s1">= </span><span class="s5">/[^0-7]/u</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">R </span><span class="s1">=== </span><span class="s4">10</span><span class="s1">) {</span>
+    <span class="s2">regex </span><span class="s1">= </span><span class="s5">/[^0-9]/u</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">R </span><span class="s1">=== </span><span class="s4">16</span><span class="s1">) {</span>
+    <span class="s2">regex </span><span class="s1">= </span><span class="s5">/[^0-9A-Fa-f]/u</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">regex</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">input</span><span class="s1">)) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">parseInt</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">R</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">parseIPv4</span><span class="s1">(</span><span class="s2">input</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">parts </span><span class="s1">= </span><span class="s2">input</span><span class="s1">.</span><span class="s2">split</span><span class="s1">(</span><span class="s0">&quot;.&quot;</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">parts</span><span class="s1">[</span><span class="s2">parts</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s4">1</span><span class="s1">] === </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">parts</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s4">1</span><span class="s1">) {</span>
+      <span class="s2">parts</span><span class="s1">.</span><span class="s2">pop</span><span class="s1">();</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">parts</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s4">4</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">input</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">numbers </span><span class="s1">= [];</span>
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">part of parts</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">part </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">input</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">const </span><span class="s2">n </span><span class="s1">= </span><span class="s2">parseIPv4Number</span><span class="s1">(</span><span class="s2">part</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">n </span><span class="s1">=== </span><span class="s2">failure</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">input</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">numbers</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">n</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">let </span><span class="s2">i </span><span class="s1">= </span><span class="s4">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">numbers</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s4">1</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">numbers</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] &gt; </span><span class="s4">255</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">numbers</span><span class="s1">[</span><span class="s2">numbers</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s4">1</span><span class="s1">] &gt;= </span><span class="s4">256 </span><span class="s1">** (</span><span class="s4">5 </span><span class="s1">- </span><span class="s2">numbers</span><span class="s1">.</span><span class="s2">length</span><span class="s1">)) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">let </span><span class="s2">ipv4 </span><span class="s1">= </span><span class="s2">numbers</span><span class="s1">.</span><span class="s2">pop</span><span class="s1">();</span>
+  <span class="s3">let </span><span class="s2">counter </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">n of numbers</span><span class="s1">) {</span>
+    <span class="s2">ipv4 </span><span class="s1">+= </span><span class="s2">n </span><span class="s1">* </span><span class="s4">256 </span><span class="s1">** (</span><span class="s4">3 </span><span class="s1">- </span><span class="s2">counter</span><span class="s1">);</span>
+    <span class="s1">++</span><span class="s2">counter</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">ipv4</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">serializeIPv4</span><span class="s1">(</span><span class="s2">address</span><span class="s1">) {</span>
+  <span class="s3">let </span><span class="s2">output </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">n </span><span class="s1">= </span><span class="s2">address</span><span class="s1">;</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">let </span><span class="s2">i </span><span class="s1">= </span><span class="s4">1</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt;= </span><span class="s4">4</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+    <span class="s2">output </span><span class="s1">= </span><span class="s2">String</span><span class="s1">(</span><span class="s2">n </span><span class="s1">% </span><span class="s4">256</span><span class="s1">) + </span><span class="s2">output</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">i </span><span class="s1">!== </span><span class="s4">4</span><span class="s1">) {</span>
+      <span class="s2">output </span><span class="s1">= </span><span class="s0">`.</span><span class="s2">$</span><span class="s1">{</span><span class="s2">output</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s2">n </span><span class="s1">= </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">floor</span><span class="s1">(</span><span class="s2">n </span><span class="s1">/ </span><span class="s4">256</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">output</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">parseIPv6</span><span class="s1">(</span><span class="s2">input</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">address </span><span class="s1">= [</span><span class="s4">0</span><span class="s1">, </span><span class="s4">0</span><span class="s1">, </span><span class="s4">0</span><span class="s1">, </span><span class="s4">0</span><span class="s1">, </span><span class="s4">0</span><span class="s1">, </span><span class="s4">0</span><span class="s1">, </span><span class="s4">0</span><span class="s1">, </span><span class="s4">0</span><span class="s1">];</span>
+  <span class="s3">let </span><span class="s2">pieceIndex </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">compress </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">pointer </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+
+  <span class="s2">input </span><span class="s1">= </span><span class="s2">punycode</span><span class="s1">.</span><span class="s2">ucs2</span><span class="s1">.</span><span class="s2">decode</span><span class="s1">(</span><span class="s2">input</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] === </span><span class="s4">58</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">] !== </span><span class="s4">58</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">pointer </span><span class="s1">+= </span><span class="s4">2</span><span class="s1">;</span>
+    <span class="s1">++</span><span class="s2">pieceIndex</span><span class="s1">;</span>
+    <span class="s2">compress </span><span class="s1">= </span><span class="s2">pieceIndex</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">while </span><span class="s1">(</span><span class="s2">pointer </span><span class="s1">&lt; </span><span class="s2">input</span><span class="s1">.</span><span class="s2">length</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">pieceIndex </span><span class="s1">=== </span><span class="s4">8</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] === </span><span class="s4">58</span><span class="s1">) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">compress </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s1">++</span><span class="s2">pointer</span><span class="s1">;</span>
+      <span class="s1">++</span><span class="s2">pieceIndex</span><span class="s1">;</span>
+      <span class="s2">compress </span><span class="s1">= </span><span class="s2">pieceIndex</span><span class="s1">;</span>
+      <span class="s3">continue</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">let </span><span class="s2">value </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+    <span class="s3">let </span><span class="s2">length </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+
+    <span class="s3">while </span><span class="s1">(</span><span class="s2">length </span><span class="s1">&lt; </span><span class="s4">4 </span><span class="s1">&amp;&amp; </span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">])) {</span>
+      <span class="s2">value </span><span class="s1">= </span><span class="s2">value </span><span class="s1">* </span><span class="s4">0x10 </span><span class="s1">+ </span><span class="s2">parseInt</span><span class="s1">(</span><span class="s2">at</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">pointer</span><span class="s1">), </span><span class="s4">16</span><span class="s1">);</span>
+      <span class="s1">++</span><span class="s2">pointer</span><span class="s1">;</span>
+      <span class="s1">++</span><span class="s2">length</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] === </span><span class="s4">46</span><span class="s1">) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">length </span><span class="s1">=== </span><span class="s4">0</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s2">pointer </span><span class="s1">-= </span><span class="s2">length</span><span class="s1">;</span>
+
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">pieceIndex </span><span class="s1">&gt; </span><span class="s4">6</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s3">let </span><span class="s2">numbersSeen </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+
+      <span class="s3">while </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] !== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s3">let </span><span class="s2">ipv4Piece </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">numbersSeen </span><span class="s1">&gt; </span><span class="s4">0</span><span class="s1">) {</span>
+          <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] === </span><span class="s4">46 </span><span class="s1">&amp;&amp; </span><span class="s2">numbersSeen </span><span class="s1">&lt; </span><span class="s4">4</span><span class="s1">) {</span>
+            <span class="s1">++</span><span class="s2">pointer</span><span class="s1">;</span>
+          <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+          <span class="s1">}</span>
+        <span class="s1">}</span>
+
+        <span class="s3">if </span><span class="s1">(!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIDigit</span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">])) {</span>
+          <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+        <span class="s1">}</span>
+
+        <span class="s3">while </span><span class="s1">(</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIDigit</span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">])) {</span>
+          <span class="s3">const </span><span class="s2">number </span><span class="s1">= </span><span class="s2">parseInt</span><span class="s1">(</span><span class="s2">at</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">pointer</span><span class="s1">));</span>
+          <span class="s3">if </span><span class="s1">(</span><span class="s2">ipv4Piece </span><span class="s1">=== </span><span class="s3">null</span><span class="s1">) {</span>
+            <span class="s2">ipv4Piece </span><span class="s1">= </span><span class="s2">number</span><span class="s1">;</span>
+          <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">ipv4Piece </span><span class="s1">=== </span><span class="s4">0</span><span class="s1">) {</span>
+            <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+          <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s2">ipv4Piece </span><span class="s1">= </span><span class="s2">ipv4Piece </span><span class="s1">* </span><span class="s4">10 </span><span class="s1">+ </span><span class="s2">number</span><span class="s1">;</span>
+          <span class="s1">}</span>
+          <span class="s3">if </span><span class="s1">(</span><span class="s2">ipv4Piece </span><span class="s1">&gt; </span><span class="s4">255</span><span class="s1">) {</span>
+            <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+          <span class="s1">}</span>
+          <span class="s1">++</span><span class="s2">pointer</span><span class="s1">;</span>
+        <span class="s1">}</span>
+
+        <span class="s2">address</span><span class="s1">[</span><span class="s2">pieceIndex</span><span class="s1">] = </span><span class="s2">address</span><span class="s1">[</span><span class="s2">pieceIndex</span><span class="s1">] * </span><span class="s4">0x100 </span><span class="s1">+ </span><span class="s2">ipv4Piece</span><span class="s1">;</span>
+
+        <span class="s1">++</span><span class="s2">numbersSeen</span><span class="s1">;</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">numbersSeen </span><span class="s1">=== </span><span class="s4">2 </span><span class="s1">|| </span><span class="s2">numbersSeen </span><span class="s1">=== </span><span class="s4">4</span><span class="s1">) {</span>
+          <span class="s1">++</span><span class="s2">pieceIndex</span><span class="s1">;</span>
+        <span class="s1">}</span>
+      <span class="s1">}</span>
+
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">numbersSeen </span><span class="s1">!== </span><span class="s4">4</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s3">break</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] === </span><span class="s4">58</span><span class="s1">) {</span>
+      <span class="s1">++</span><span class="s2">pointer</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] === </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+      <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">] !== </span><span class="s2">undefined</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">address</span><span class="s1">[</span><span class="s2">pieceIndex</span><span class="s1">] = </span><span class="s2">value</span><span class="s1">;</span>
+    <span class="s1">++</span><span class="s2">pieceIndex</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">compress </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s3">let </span><span class="s2">swaps </span><span class="s1">= </span><span class="s2">pieceIndex </span><span class="s1">- </span><span class="s2">compress</span><span class="s1">;</span>
+    <span class="s2">pieceIndex </span><span class="s1">= </span><span class="s4">7</span><span class="s1">;</span>
+    <span class="s3">while </span><span class="s1">(</span><span class="s2">pieceIndex </span><span class="s1">!== </span><span class="s4">0 </span><span class="s1">&amp;&amp; </span><span class="s2">swaps </span><span class="s1">&gt; </span><span class="s4">0</span><span class="s1">) {</span>
+      <span class="s3">const </span><span class="s2">temp </span><span class="s1">= </span><span class="s2">address</span><span class="s1">[</span><span class="s2">compress </span><span class="s1">+ </span><span class="s2">swaps </span><span class="s1">- </span><span class="s4">1</span><span class="s1">];</span>
+      <span class="s2">address</span><span class="s1">[</span><span class="s2">compress </span><span class="s1">+ </span><span class="s2">swaps </span><span class="s1">- </span><span class="s4">1</span><span class="s1">] = </span><span class="s2">address</span><span class="s1">[</span><span class="s2">pieceIndex</span><span class="s1">];</span>
+      <span class="s2">address</span><span class="s1">[</span><span class="s2">pieceIndex</span><span class="s1">] = </span><span class="s2">temp</span><span class="s1">;</span>
+      <span class="s1">--</span><span class="s2">pieceIndex</span><span class="s1">;</span>
+      <span class="s1">--</span><span class="s2">swaps</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">compress </span><span class="s1">=== </span><span class="s3">null </span><span class="s1">&amp;&amp; </span><span class="s2">pieceIndex </span><span class="s1">!== </span><span class="s4">8</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">address</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">serializeIPv6</span><span class="s1">(</span><span class="s2">address</span><span class="s1">) {</span>
+  <span class="s3">let </span><span class="s2">output </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+  <span class="s3">const </span><span class="s2">compress </span><span class="s1">= </span><span class="s2">findLongestZeroSequence</span><span class="s1">(</span><span class="s2">address</span><span class="s1">);</span>
+  <span class="s3">let </span><span class="s2">ignore0 </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">let </span><span class="s2">pieceIndex </span><span class="s1">= </span><span class="s4">0</span><span class="s1">; </span><span class="s2">pieceIndex </span><span class="s1">&lt;= </span><span class="s4">7</span><span class="s1">; ++</span><span class="s2">pieceIndex</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">ignore0 </span><span class="s1">&amp;&amp; </span><span class="s2">address</span><span class="s1">[</span><span class="s2">pieceIndex</span><span class="s1">] === </span><span class="s4">0</span><span class="s1">) {</span>
+      <span class="s3">continue</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">ignore0</span><span class="s1">) {</span>
+      <span class="s2">ignore0 </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">compress </span><span class="s1">=== </span><span class="s2">pieceIndex</span><span class="s1">) {</span>
+      <span class="s3">const </span><span class="s2">separator </span><span class="s1">= </span><span class="s2">pieceIndex </span><span class="s1">=== </span><span class="s4">0 </span><span class="s1">? </span><span class="s0">&quot;::&quot; </span><span class="s1">: </span><span class="s0">&quot;:&quot;</span><span class="s1">;</span>
+      <span class="s2">output </span><span class="s1">+= </span><span class="s2">separator</span><span class="s1">;</span>
+      <span class="s2">ignore0 </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">continue</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">output </span><span class="s1">+= </span><span class="s2">address</span><span class="s1">[</span><span class="s2">pieceIndex</span><span class="s1">].</span><span class="s2">toString</span><span class="s1">(</span><span class="s4">16</span><span class="s1">);</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">pieceIndex </span><span class="s1">!== </span><span class="s4">7</span><span class="s1">) {</span>
+      <span class="s2">output </span><span class="s1">+= </span><span class="s0">&quot;:&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">output</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">parseHost</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">isNotSpecialArg </span><span class="s1">= </span><span class="s3">false</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s4">0</span><span class="s1">] === </span><span class="s0">&quot;[&quot;</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">input</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s4">1</span><span class="s1">] !== </span><span class="s0">&quot;]&quot;</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">return </span><span class="s2">parseIPv6</span><span class="s1">(</span><span class="s2">input</span><span class="s1">.</span><span class="s2">substring</span><span class="s1">(</span><span class="s4">1</span><span class="s1">, </span><span class="s2">input</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s4">1</span><span class="s1">));</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">isNotSpecialArg</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">parseOpaqueHost</span><span class="s1">(</span><span class="s2">input</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">domain </span><span class="s1">= </span><span class="s2">utf8DecodeWithoutBOM</span><span class="s1">(</span><span class="s2">percentDecodeString</span><span class="s1">(</span><span class="s2">input</span><span class="s1">));</span>
+  <span class="s3">const </span><span class="s2">asciiDomain </span><span class="s1">= </span><span class="s2">domainToASCII</span><span class="s1">(</span><span class="s2">domain</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">asciiDomain </span><span class="s1">=== </span><span class="s2">failure</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">containsForbiddenHostCodePoint</span><span class="s1">(</span><span class="s2">asciiDomain</span><span class="s1">)) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">ipv4Host </span><span class="s1">= </span><span class="s2">parseIPv4</span><span class="s1">(</span><span class="s2">asciiDomain</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">ipv4Host </span><span class="s1">=== </span><span class="s0">&quot;number&quot; </span><span class="s1">|| </span><span class="s2">ipv4Host </span><span class="s1">=== </span><span class="s2">failure</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">ipv4Host</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">asciiDomain</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">parseOpaqueHost</span><span class="s1">(</span><span class="s2">input</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">containsForbiddenHostCodePointExcludingPercent</span><span class="s1">(</span><span class="s2">input</span><span class="s1">)) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">utf8PercentEncodeString</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">isC0ControlPercentEncode</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">findLongestZeroSequence</span><span class="s1">(</span><span class="s2">arr</span><span class="s1">) {</span>
+  <span class="s3">let </span><span class="s2">maxIdx </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">maxLen </span><span class="s1">= </span><span class="s4">1</span><span class="s1">; </span><span class="s6">// only find elements &gt; 1</span>
+  <span class="s3">let </span><span class="s2">currStart </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">currLen </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">let </span><span class="s2">i </span><span class="s1">= </span><span class="s4">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">arr</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">arr</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] !== </span><span class="s4">0</span><span class="s1">) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">currLen </span><span class="s1">&gt; </span><span class="s2">maxLen</span><span class="s1">) {</span>
+        <span class="s2">maxIdx </span><span class="s1">= </span><span class="s2">currStart</span><span class="s1">;</span>
+        <span class="s2">maxLen </span><span class="s1">= </span><span class="s2">currLen</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s2">currStart </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+      <span class="s2">currLen </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">currStart </span><span class="s1">=== </span><span class="s3">null</span><span class="s1">) {</span>
+        <span class="s2">currStart </span><span class="s1">= </span><span class="s2">i</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s1">++</span><span class="s2">currLen</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s6">// if trailing zeros</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">currLen </span><span class="s1">&gt; </span><span class="s2">maxLen</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">currStart</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">maxIdx</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">serializeHost</span><span class="s1">(</span><span class="s2">host</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">host </span><span class="s1">=== </span><span class="s0">&quot;number&quot;</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">serializeIPv4</span><span class="s1">(</span><span class="s2">host</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s6">// IPv6 serializer</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">host </span><span class="s3">instanceof </span><span class="s2">Array</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s0">`[</span><span class="s2">$</span><span class="s1">{</span><span class="s2">serializeIPv6</span><span class="s1">(</span><span class="s2">host</span><span class="s1">)}</span><span class="s0">]`</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">host</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">domainToASCII</span><span class="s1">(</span><span class="s2">domain</span><span class="s1">, </span><span class="s2">beStrict </span><span class="s1">= </span><span class="s3">false</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">result </span><span class="s1">= </span><span class="s2">tr46</span><span class="s1">.</span><span class="s2">toASCII</span><span class="s1">(</span><span class="s2">domain</span><span class="s1">, {</span>
+    <span class="s2">checkBidi</span><span class="s1">: </span><span class="s3">true</span><span class="s1">,</span>
+    <span class="s2">checkHyphens</span><span class="s1">: </span><span class="s3">false</span><span class="s1">,</span>
+    <span class="s2">checkJoiners</span><span class="s1">: </span><span class="s3">true</span><span class="s1">,</span>
+    <span class="s2">useSTD3ASCIIRules</span><span class="s1">: </span><span class="s2">beStrict</span><span class="s1">,</span>
+    <span class="s2">verifyDNSLength</span><span class="s1">: </span><span class="s2">beStrict</span>
+  <span class="s1">});</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">result </span><span class="s1">=== </span><span class="s3">null </span><span class="s1">|| </span><span class="s2">result </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">return </span><span class="s2">result</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">trimControlChars</span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">url</span><span class="s1">.</span><span class="s2">replace</span><span class="s1">(</span><span class="s5">/^[\u0000-\u001F\u0020]+|[\u0000-\u001F\u0020]+$/ug</span><span class="s1">, </span><span class="s0">&quot;&quot;</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">trimTabAndNewline</span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">url</span><span class="s1">.</span><span class="s2">replace</span><span class="s1">(</span><span class="s5">/\u0009|\u000A|\u000D/ug</span><span class="s1">, </span><span class="s0">&quot;&quot;</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">shortenPath</span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s1">{ </span><span class="s2">path </span><span class="s1">} = </span><span class="s2">url</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">path</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s4">0</span><span class="s1">) {</span>
+    <span class="s3">return</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot; </span><span class="s1">&amp;&amp; </span><span class="s2">path</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s4">1 </span><span class="s1">&amp;&amp; </span><span class="s2">isNormalizedWindowsDriveLetter</span><span class="s1">(</span><span class="s2">path</span><span class="s1">[</span><span class="s4">0</span><span class="s1">])) {</span>
+    <span class="s3">return</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s2">path</span><span class="s1">.</span><span class="s2">pop</span><span class="s1">();</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">includesCredentials</span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">url</span><span class="s1">.</span><span class="s2">username </span><span class="s1">!== </span><span class="s0">&quot;&quot; </span><span class="s1">|| </span><span class="s2">url</span><span class="s1">.</span><span class="s2">password </span><span class="s1">!== </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">cannotHaveAUsernamePasswordPort</span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">=== </span><span class="s3">null </span><span class="s1">|| </span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">=== </span><span class="s0">&quot;&quot; </span><span class="s1">|| </span><span class="s2">url</span><span class="s1">.</span><span class="s2">cannotBeABaseURL </span><span class="s1">|| </span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isNormalizedWindowsDriveLetter</span><span class="s1">(</span><span class="s2">string</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s5">/^[A-Za-z]:$/u</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">string</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">URLStateMachine</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">base</span><span class="s1">, </span><span class="s2">encodingOverride</span><span class="s1">, </span><span class="s2">url</span><span class="s1">, </span><span class="s2">stateOverride</span><span class="s1">) {</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">= </span><span class="s4">0</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">input </span><span class="s1">= </span><span class="s2">input</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">base </span><span class="s1">= </span><span class="s2">base </span><span class="s1">|| </span><span class="s3">null</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">encodingOverride </span><span class="s1">= </span><span class="s2">encodingOverride </span><span class="s1">|| </span><span class="s0">&quot;utf-8&quot;</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">= </span><span class="s2">stateOverride</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">url </span><span class="s1">= </span><span class="s2">url</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">failure </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url </span><span class="s1">= {</span>
+      <span class="s2">scheme</span><span class="s1">: </span><span class="s0">&quot;&quot;</span><span class="s1">,</span>
+      <span class="s2">username</span><span class="s1">: </span><span class="s0">&quot;&quot;</span><span class="s1">,</span>
+      <span class="s2">password</span><span class="s1">: </span><span class="s0">&quot;&quot;</span><span class="s1">,</span>
+      <span class="s2">host</span><span class="s1">: </span><span class="s3">null</span><span class="s1">,</span>
+      <span class="s2">port</span><span class="s1">: </span><span class="s3">null</span><span class="s1">,</span>
+      <span class="s2">path</span><span class="s1">: [],</span>
+      <span class="s2">query</span><span class="s1">: </span><span class="s3">null</span><span class="s1">,</span>
+      <span class="s2">fragment</span><span class="s1">: </span><span class="s3">null</span><span class="s1">,</span>
+
+      <span class="s2">cannotBeABaseURL</span><span class="s1">: </span><span class="s3">false</span>
+    <span class="s1">};</span>
+
+    <span class="s3">const </span><span class="s2">res </span><span class="s1">= </span><span class="s2">trimControlChars</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">res </span><span class="s1">!== </span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">input </span><span class="s1">= </span><span class="s2">res</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">res </span><span class="s1">= </span><span class="s2">trimTabAndNewline</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">res </span><span class="s1">!== </span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">input </span><span class="s1">= </span><span class="s2">res</span><span class="s1">;</span>
+
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s2">stateOverride </span><span class="s1">|| </span><span class="s0">&quot;scheme start&quot;</span><span class="s1">;</span>
+
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">atFlag </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">arrFlag </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">passwordTokenSeenFlag </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">input </span><span class="s1">= </span><span class="s2">punycode</span><span class="s1">.</span><span class="s2">ucs2</span><span class="s1">.</span><span class="s2">decode</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">);</span>
+
+  <span class="s3">for </span><span class="s1">(; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">&lt;= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">) {</span>
+    <span class="s3">const </span><span class="s2">c </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">];</span>
+    <span class="s3">const </span><span class="s2">cStr </span><span class="s1">= </span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) ? </span><span class="s2">undefined </span><span class="s1">: </span><span class="s2">String</span><span class="s1">.</span><span class="s2">fromCodePoint</span><span class="s1">(</span><span class="s2">c</span><span class="s1">);</span>
+
+    <span class="s6">// exec state machine</span>
+    <span class="s3">const </span><span class="s2">ret </span><span class="s1">= </span><span class="s3">this</span><span class="s1">[</span><span class="s0">`parse </span><span class="s2">$</span><span class="s1">{</span><span class="s3">this</span><span class="s1">.</span><span class="s2">state</span><span class="s1">}</span><span class="s0">`</span><span class="s1">](</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">ret</span><span class="s1">) {</span>
+      <span class="s3">break</span><span class="s1">; </span><span class="s6">// terminate algorithm</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">ret </span><span class="s1">=== </span><span class="s2">failure</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">failure </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">break</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse scheme start&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseSchemeStart</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIAlpha</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">cStr</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;scheme&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;no scheme&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse scheme&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseScheme</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIAlphanumeric</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) || </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">43 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">45 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">46</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">cStr</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">58</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; !</span><span class="s2">isSpecialScheme</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">)) {</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s3">if </span><span class="s1">(!</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">isSpecialScheme</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">)) {</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s3">if </span><span class="s1">((</span><span class="s2">includesCredentials</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) || </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) &amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;file&quot;</span><span class="s1">) {</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot; </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+      <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">=== </span><span class="s2">defaultPort</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">)) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot;</span><span class="s1">) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">] !== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">2</span><span class="s1">] !== </span><span class="s4">47</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;file&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base </span><span class="s1">!== </span><span class="s3">null </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;special relative or authority&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;special authority slashes&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">] === </span><span class="s4">47</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path or authority&quot;</span><span class="s1">;</span>
+      <span class="s1">++</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">cannotBeABaseURL </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s0">&quot;&quot;</span><span class="s1">);</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;cannot-be-a-base-URL path&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;no scheme&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">= -</span><span class="s4">1</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse no scheme&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseNoScheme</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base </span><span class="s1">=== </span><span class="s3">null </span><span class="s1">|| (</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">cannotBeABaseURL </span><span class="s1">&amp;&amp; </span><span class="s2">c </span><span class="s1">!== </span><span class="s4">35</span><span class="s1">)) {</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">cannotBeABaseURL </span><span class="s1">&amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">();</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">query</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">cannotBeABaseURL </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;fragment&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot;</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;file&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;relative&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse special relative or authority&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseSpecialRelativeOrAuthority</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">] === </span><span class="s4">47</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;special authority ignore slashes&quot;</span><span class="s1">;</span>
+    <span class="s1">++</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;relative&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse path or authority&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parsePathOrAuthority</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;authority&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse relative&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseRelative</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;relative slash&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;relative slash&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">username </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">username</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">password </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">password</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">host</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">port</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">();</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">query</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;query&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;fragment&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">pop</span><span class="s1">();</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+      <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse relative slash&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseRelativeSlash</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; (</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;special authority ignore slashes&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;authority&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">username </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">username</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">password </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">password</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">host</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">port</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse special authority slashes&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseSpecialAuthoritySlashes</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">] === </span><span class="s4">47</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;special authority ignore slashes&quot;</span><span class="s1">;</span>
+    <span class="s1">++</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;special authority ignore slashes&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse special authority ignore slashes&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseSpecialAuthorityIgnoreSlashes</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">!== </span><span class="s4">47 </span><span class="s1">&amp;&amp; </span><span class="s2">c </span><span class="s1">!== </span><span class="s4">92</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;authority&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse authority&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseAuthority</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">64</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">atFlag</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">`%40</span><span class="s2">$</span><span class="s1">{</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">atFlag </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+
+    <span class="s6">// careful, this is based on buffer and has its own pointer (this.pointer != pointer) and inner chars</span>
+    <span class="s3">const </span><span class="s2">len </span><span class="s1">= </span><span class="s2">countSymbols</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">);</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">let </span><span class="s2">pointer </span><span class="s1">= </span><span class="s4">0</span><span class="s1">; </span><span class="s2">pointer </span><span class="s1">&lt; </span><span class="s2">len</span><span class="s1">; ++</span><span class="s2">pointer</span><span class="s1">) {</span>
+      <span class="s3">const </span><span class="s2">codePoint </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">.</span><span class="s2">codePointAt</span><span class="s1">(</span><span class="s2">pointer</span><span class="s1">);</span>
+
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">codePoint </span><span class="s1">=== </span><span class="s4">58 </span><span class="s1">&amp;&amp; !</span><span class="s3">this</span><span class="s1">.</span><span class="s2">passwordTokenSeenFlag</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">passwordTokenSeenFlag </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s3">continue</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">const </span><span class="s2">encodedCodePoints </span><span class="s1">= </span><span class="s2">utf8PercentEncodeCodePoint</span><span class="s1">(</span><span class="s2">codePoint</span><span class="s1">, </span><span class="s2">isUserinfoPercentEncode</span><span class="s1">);</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">passwordTokenSeenFlag</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">password </span><span class="s1">+= </span><span class="s2">encodedCodePoints</span><span class="s1">;</span>
+      <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">username </span><span class="s1">+= </span><span class="s2">encodedCodePoints</span><span class="s1">;</span>
+      <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) || </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35 </span><span class="s1">||</span>
+             <span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">atFlag </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">-= </span><span class="s2">countSymbols</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">) + </span><span class="s4">1</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;host&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">cStr</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse hostname&quot;</span><span class="s1">] =</span>
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse host&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseHostName</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot;</span><span class="s1">) {</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;file host&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">58 </span><span class="s1">&amp;&amp; !</span><span class="s3">this</span><span class="s1">.</span><span class="s2">arrFlag</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">=== </span><span class="s0">&quot;hostname&quot;</span><span class="s1">) {</span>
+      <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">const </span><span class="s2">host </span><span class="s1">= </span><span class="s2">parseHost</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">, </span><span class="s2">isNotSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">));</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">host </span><span class="s1">=== </span><span class="s2">failure</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s2">host</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;port&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) || </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35 </span><span class="s1">||</span>
+             <span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">)) {</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;&quot; </span><span class="s1">&amp;&amp;</span>
+               <span class="s1">(</span><span class="s2">includesCredentials</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) || </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">const </span><span class="s2">host </span><span class="s1">= </span><span class="s2">parseHost</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">, </span><span class="s2">isNotSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">));</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">host </span><span class="s1">=== </span><span class="s2">failure</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s2">host</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path start&quot;</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+      <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">91</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">arrFlag </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">93</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">arrFlag </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">cStr</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse port&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parsePort</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIDigit</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">cStr</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) || </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35 </span><span class="s1">||</span>
+             <span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) ||</span>
+             <span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">!== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s3">const </span><span class="s2">port </span><span class="s1">= </span><span class="s2">parseInt</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">);</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">port </span><span class="s1">&gt; </span><span class="s4">2 </span><span class="s1">** </span><span class="s4">16 </span><span class="s1">- </span><span class="s4">1</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">= </span><span class="s2">port </span><span class="s1">=== </span><span class="s2">defaultPort</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">) ? </span><span class="s3">null </span><span class="s1">: </span><span class="s2">port</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+      <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path start&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">const </span><span class="s2">fileOtherwiseCodePoints </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">([</span><span class="s4">47</span><span class="s1">, </span><span class="s4">92</span><span class="s1">, </span><span class="s4">63</span><span class="s1">, </span><span class="s4">35</span><span class="s1">]);</span>
+
+<span class="s3">function </span><span class="s2">startsWithWindowsDriveLetter</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">pointer</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">length </span><span class="s1">= </span><span class="s2">input</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s3">return </span><span class="s2">length </span><span class="s1">&gt;= </span><span class="s4">2 </span><span class="s1">&amp;&amp;</span>
+    <span class="s2">isWindowsDriveLetterCodePoints</span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer</span><span class="s1">], </span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">]) &amp;&amp;</span>
+    <span class="s1">(</span><span class="s2">length </span><span class="s1">=== </span><span class="s4">2 </span><span class="s1">|| </span><span class="s2">fileOtherwiseCodePoints</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">input</span><span class="s1">[</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">2</span><span class="s1">]));</span>
+<span class="s1">}</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse file&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseFile</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">= </span><span class="s0">&quot;file&quot;</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;file slash&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base </span><span class="s1">!== </span><span class="s3">null </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot;</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">host</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">();</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">query</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;query&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;fragment&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(!</span><span class="s2">startsWithWindowsDriveLetter</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">, </span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">)) {</span>
+        <span class="s2">shortenPath</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">);</span>
+      <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path </span><span class="s1">= [];</span>
+      <span class="s1">}</span>
+
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+      <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse file slash&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseFileSlash</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;file host&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base </span><span class="s1">!== </span><span class="s3">null </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot;</span><span class="s1">) {</span>
+      <span class="s3">if </span><span class="s1">(!</span><span class="s2">startsWithWindowsDriveLetter</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">, </span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">) &amp;&amp;</span>
+          <span class="s2">isNormalizedWindowsDriveLetterString</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">path</span><span class="s1">[</span><span class="s4">0</span><span class="s1">])) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">path</span><span class="s1">[</span><span class="s4">0</span><span class="s1">]);</span>
+      <span class="s1">}</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">base</span><span class="s1">.</span><span class="s2">host</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse file host&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseFileHost</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) || </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+    <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; </span><span class="s2">isWindowsDriveLetterString</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">=== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path start&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+      <span class="s3">let </span><span class="s2">host </span><span class="s1">= </span><span class="s2">parseHost</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">, </span><span class="s2">isNotSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">));</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">host </span><span class="s1">=== </span><span class="s2">failure</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">failure</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">host </span><span class="s1">=== </span><span class="s0">&quot;localhost&quot;</span><span class="s1">) {</span>
+        <span class="s2">host </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">= </span><span class="s2">host</span><span class="s1">;</span>
+
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">) {</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+      <span class="s1">}</span>
+
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path start&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">cStr</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse path start&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parsePathStart</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">!== </span><span class="s4">47 </span><span class="s1">&amp;&amp; </span><span class="s2">c </span><span class="s1">!== </span><span class="s4">92</span><span class="s1">) {</span>
+      <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;query&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;fragment&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;path&quot;</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">!== </span><span class="s4">47</span><span class="s1">) {</span>
+      <span class="s1">--</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">=== </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s0">&quot;&quot;</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse path&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parsePath</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) || </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">47 </span><span class="s1">|| (</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) ||</span>
+      <span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; (</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63 </span><span class="s1">|| </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">))) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isDoubleDot</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">)) {</span>
+      <span class="s2">shortenPath</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">);</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">!== </span><span class="s4">47 </span><span class="s1">&amp;&amp; !(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">)) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s0">&quot;&quot;</span><span class="s1">);</span>
+      <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">isSingleDot</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">!== </span><span class="s4">47 </span><span class="s1">&amp;&amp;</span>
+               <span class="s1">!(</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">92</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s0">&quot;&quot;</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">isSingleDot</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">)) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;file&quot; </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s4">0 </span><span class="s1">&amp;&amp; </span><span class="s2">isWindowsDriveLetterString</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">)) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">`</span><span class="s2">$</span><span class="s1">{</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">[</span><span class="s4">0</span><span class="s1">]}</span><span class="s0">:`</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;query&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;fragment&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s6">// TODO: If c is not a URL code point and not &quot;%&quot;, parse error.</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">37 </span><span class="s1">&amp;&amp;</span>
+      <span class="s1">(!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">]) ||</span>
+        <span class="s1">!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">2</span><span class="s1">]))) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">utf8PercentEncodeCodePoint</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">isPathPercentEncode</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse cannot-be-a-base-URL path&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseCannotBeABaseURLPath</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">63</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;query&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;fragment&quot;</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s6">// TODO: Add: not a URL code point</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) &amp;&amp; </span><span class="s2">c </span><span class="s1">!== </span><span class="s4">37</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">37 </span><span class="s1">&amp;&amp;</span>
+        <span class="s1">(!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">]) ||</span>
+         <span class="s1">!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">2</span><span class="s1">]))) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">[</span><span class="s4">0</span><span class="s1">] += </span><span class="s2">utf8PercentEncodeCodePoint</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">isC0ControlPercentEncode</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse query&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseQuery</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">cStr</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) || </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;ws&quot; </span><span class="s1">|| </span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme </span><span class="s1">=== </span><span class="s0">&quot;wss&quot;</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">encodingOverride </span><span class="s1">= </span><span class="s0">&quot;utf-8&quot;</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">((!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">stateOverride </span><span class="s1">&amp;&amp; </span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) || </span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+    <span class="s3">const </span><span class="s2">queryPercentEncodePredicate </span><span class="s1">= </span><span class="s2">isSpecial</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) ? </span><span class="s2">isSpecialQueryPercentEncode </span><span class="s1">: </span><span class="s2">isQueryPercentEncode</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">+= </span><span class="s2">utf8PercentEncodeString</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">buffer</span><span class="s1">, </span><span class="s2">queryPercentEncodePredicate</span><span class="s1">);</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">35</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">state </span><span class="s1">= </span><span class="s0">&quot;fragment&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+    <span class="s6">// TODO: If c is not a URL code point and not &quot;%&quot;, parse error.</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">37 </span><span class="s1">&amp;&amp;</span>
+      <span class="s1">(!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">]) ||</span>
+        <span class="s1">!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">2</span><span class="s1">]))) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">buffer </span><span class="s1">+= </span><span class="s2">cStr</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">URLStateMachine</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">[</span><span class="s0">&quot;parse fragment&quot;</span><span class="s1">] = </span><span class="s3">function </span><span class="s2">parseFragment</span><span class="s1">(</span><span class="s2">c</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">isNaN</span><span class="s1">(</span><span class="s2">c</span><span class="s1">)) {</span>
+    <span class="s6">// TODO: If c is not a URL code point and not &quot;%&quot;, parse error.</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">c </span><span class="s1">=== </span><span class="s4">37 </span><span class="s1">&amp;&amp;</span>
+      <span class="s1">(!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">1</span><span class="s1">]) ||</span>
+        <span class="s1">!</span><span class="s2">infra</span><span class="s1">.</span><span class="s2">isASCIIHex</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">input</span><span class="s1">[</span><span class="s3">this</span><span class="s1">.</span><span class="s2">pointer </span><span class="s1">+ </span><span class="s4">2</span><span class="s1">]))) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">parseError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">+= </span><span class="s2">utf8PercentEncodeCodePoint</span><span class="s1">(</span><span class="s2">c</span><span class="s1">, </span><span class="s2">isFragmentPercentEncode</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">function </span><span class="s2">serializeURL</span><span class="s1">(</span><span class="s2">url</span><span class="s1">, </span><span class="s2">excludeFragment</span><span class="s1">) {</span>
+  <span class="s3">let </span><span class="s2">output </span><span class="s1">= </span><span class="s0">`</span><span class="s2">$</span><span class="s1">{</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">}</span><span class="s0">:`</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">output </span><span class="s1">+= </span><span class="s0">&quot;//&quot;</span><span class="s1">;</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">username </span><span class="s1">!== </span><span class="s0">&quot;&quot; </span><span class="s1">|| </span><span class="s2">url</span><span class="s1">.</span><span class="s2">password </span><span class="s1">!== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s2">output </span><span class="s1">+= </span><span class="s2">url</span><span class="s1">.</span><span class="s2">username</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">password </span><span class="s1">!== </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+        <span class="s2">output </span><span class="s1">+= </span><span class="s0">`:</span><span class="s2">$</span><span class="s1">{</span><span class="s2">url</span><span class="s1">.</span><span class="s2">password</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s2">output </span><span class="s1">+= </span><span class="s0">&quot;@&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">output </span><span class="s1">+= </span><span class="s2">serializeHost</span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host</span><span class="s1">);</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) {</span>
+      <span class="s2">output </span><span class="s1">+= </span><span class="s0">`:</span><span class="s2">$</span><span class="s1">{</span><span class="s2">url</span><span class="s1">.</span><span class="s2">port</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">cannotBeABaseURL</span><span class="s1">) {</span>
+    <span class="s2">output </span><span class="s1">+= </span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">[</span><span class="s4">0</span><span class="s1">];</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">host </span><span class="s1">=== </span><span class="s3">null </span><span class="s1">&amp;&amp; </span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s4">1 </span><span class="s1">&amp;&amp; </span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">[</span><span class="s4">0</span><span class="s1">] === </span><span class="s0">&quot;&quot;</span><span class="s1">) {</span>
+      <span class="s2">output </span><span class="s1">+= </span><span class="s0">&quot;/.&quot;</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">segment of url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">) {</span>
+      <span class="s2">output </span><span class="s1">+= </span><span class="s0">`/</span><span class="s2">$</span><span class="s1">{</span><span class="s2">segment</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">output </span><span class="s1">+= </span><span class="s0">`?</span><span class="s2">$</span><span class="s1">{</span><span class="s2">url</span><span class="s1">.</span><span class="s2">query</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">excludeFragment </span><span class="s1">&amp;&amp; </span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">output </span><span class="s1">+= </span><span class="s0">`#</span><span class="s2">$</span><span class="s1">{</span><span class="s2">url</span><span class="s1">.</span><span class="s2">fragment</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">output</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">serializeOrigin</span><span class="s1">(</span><span class="s2">tuple</span><span class="s1">) {</span>
+  <span class="s3">let </span><span class="s2">result </span><span class="s1">= </span><span class="s0">`</span><span class="s2">$</span><span class="s1">{</span><span class="s2">tuple</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">}</span><span class="s0">://`</span><span class="s1">;</span>
+  <span class="s2">result </span><span class="s1">+= </span><span class="s2">serializeHost</span><span class="s1">(</span><span class="s2">tuple</span><span class="s1">.</span><span class="s2">host</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">tuple</span><span class="s1">.</span><span class="s2">port </span><span class="s1">!== </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">result </span><span class="s1">+= </span><span class="s0">`:</span><span class="s2">$</span><span class="s1">{</span><span class="s2">tuple</span><span class="s1">.</span><span class="s2">port</span><span class="s1">}</span><span class="s0">`</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">result</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">serializeURL </span><span class="s1">= </span><span class="s2">serializeURL</span><span class="s1">;</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">serializeURLOrigin </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">url</span><span class="s1">) {</span>
+  <span class="s6">// https://url.spec.whatwg.org/#concept-url-origin</span>
+  <span class="s3">switch </span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">) {</span>
+    <span class="s3">case </span><span class="s0">&quot;blob&quot;</span><span class="s1">:</span>
+      <span class="s3">try </span><span class="s1">{</span>
+        <span class="s3">return </span><span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">serializeURLOrigin</span><span class="s1">(</span><span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">parseURL</span><span class="s1">(</span><span class="s2">url</span><span class="s1">.</span><span class="s2">path</span><span class="s1">[</span><span class="s4">0</span><span class="s1">]));</span>
+      <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s6">// serializing an opaque origin returns &quot;null&quot;</span>
+        <span class="s3">return </span><span class="s0">&quot;null&quot;</span><span class="s1">;</span>
+      <span class="s1">}</span>
+    <span class="s3">case </span><span class="s0">&quot;ftp&quot;</span><span class="s1">:</span>
+    <span class="s3">case </span><span class="s0">&quot;http&quot;</span><span class="s1">:</span>
+    <span class="s3">case </span><span class="s0">&quot;https&quot;</span><span class="s1">:</span>
+    <span class="s3">case </span><span class="s0">&quot;ws&quot;</span><span class="s1">:</span>
+    <span class="s3">case </span><span class="s0">&quot;wss&quot;</span><span class="s1">:</span>
+      <span class="s3">return </span><span class="s2">serializeOrigin</span><span class="s1">({</span>
+        <span class="s2">scheme</span><span class="s1">: </span><span class="s2">url</span><span class="s1">.</span><span class="s2">scheme</span><span class="s1">,</span>
+        <span class="s2">host</span><span class="s1">: </span><span class="s2">url</span><span class="s1">.</span><span class="s2">host</span><span class="s1">,</span>
+        <span class="s2">port</span><span class="s1">: </span><span class="s2">url</span><span class="s1">.</span><span class="s2">port</span>
+      <span class="s1">});</span>
+    <span class="s3">case </span><span class="s0">&quot;file&quot;</span><span class="s1">:</span>
+      <span class="s6">// The spec says:</span>
+      <span class="s6">// &gt; Unfortunate as it is, this is left as an exercise to the reader. When in doubt, return a new opaque origin.</span>
+      <span class="s6">// Browsers tested so far:</span>
+      <span class="s6">// - Chrome says &quot;file://&quot;, but treats file: URLs as cross-origin for most (all?) purposes; see e.g.</span>
+      <span class="s6">//   https://bugs.chromium.org/p/chromium/issues/detail?id=37586</span>
+      <span class="s6">// - Firefox says &quot;null&quot;, but treats file: URLs as same-origin sometimes based on directory stuff; see</span>
+      <span class="s6">//   https://developer.mozilla.org/en-US/docs/Archive/Misc_top_level/Same-origin_policy_for_file:_URIs</span>
+      <span class="s3">return </span><span class="s0">&quot;null&quot;</span><span class="s1">;</span>
+    <span class="s3">default</span><span class="s1">:</span>
+      <span class="s6">// serializing an opaque origin returns &quot;null&quot;</span>
+      <span class="s3">return </span><span class="s0">&quot;null&quot;</span><span class="s1">;</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">basicURLParse </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">options</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">options </span><span class="s1">=== </span><span class="s2">undefined</span><span class="s1">) {</span>
+    <span class="s2">options </span><span class="s1">= {};</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">usm </span><span class="s1">= </span><span class="s3">new </span><span class="s2">URLStateMachine</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">options</span><span class="s1">.</span><span class="s2">baseURL</span><span class="s1">, </span><span class="s2">options</span><span class="s1">.</span><span class="s2">encodingOverride</span><span class="s1">, </span><span class="s2">options</span><span class="s1">.</span><span class="s2">url</span><span class="s1">, </span><span class="s2">options</span><span class="s1">.</span><span class="s2">stateOverride</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">usm</span><span class="s1">.</span><span class="s2">failure</span><span class="s1">) {</span>
+    <span class="s3">return null</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">usm</span><span class="s1">.</span><span class="s2">url</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">setTheUsername </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">url</span><span class="s1">, </span><span class="s2">username</span><span class="s1">) {</span>
+  <span class="s2">url</span><span class="s1">.</span><span class="s2">username </span><span class="s1">= </span><span class="s2">utf8PercentEncodeString</span><span class="s1">(</span><span class="s2">username</span><span class="s1">, </span><span class="s2">isUserinfoPercentEncode</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">setThePassword </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">url</span><span class="s1">, </span><span class="s2">password</span><span class="s1">) {</span>
+  <span class="s2">url</span><span class="s1">.</span><span class="s2">password </span><span class="s1">= </span><span class="s2">utf8PercentEncodeString</span><span class="s1">(</span><span class="s2">password</span><span class="s1">, </span><span class="s2">isUserinfoPercentEncode</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">serializeHost </span><span class="s1">= </span><span class="s2">serializeHost</span><span class="s1">;</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">cannotHaveAUsernamePasswordPort </span><span class="s1">= </span><span class="s2">cannotHaveAUsernamePasswordPort</span><span class="s1">;</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">serializeInteger </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">integer</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">String</span><span class="s1">(</span><span class="s2">integer</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">parseURL </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">input</span><span class="s1">, </span><span class="s2">options</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">options </span><span class="s1">=== </span><span class="s2">undefined</span><span class="s1">) {</span>
+    <span class="s2">options </span><span class="s1">= {};</span>
+  <span class="s1">}</span>
+
+  <span class="s6">// We don't handle blobs, so this just delegates:</span>
+  <span class="s3">return </span><span class="s2">module</span><span class="s1">.</span><span class="s2">exports</span><span class="s1">.</span><span class="s2">basicURLParse</span><span class="s1">(</span><span class="s2">input</span><span class="s1">, { </span><span class="s2">baseURL</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">baseURL</span><span class="s1">, </span><span class="s2">encodingOverride</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">encodingOverride </span><span class="s1">});</span>
+<span class="s1">};</span>
+</pre>
+</body>
+</html>

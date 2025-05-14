@@ -1,0 +1,293 @@
+<html>
+<head>
+<title>Int64.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #5f826b; font-style: italic;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #bcbec4;}
+.s5 { color: #2aacb8;}
+.s6 { color: #6aab73;}
+.s7 { color: #42c3d4;}
+.s8 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+Int64.js</font>
+</center></td></tr></table>
+<pre><span class="s0">//     Int64.js</span>
+<span class="s0">//</span>
+<span class="s0">//     Copyright (c) 2012 Robert Kieffer</span>
+<span class="s0">//     MIT License - http://opensource.org/licenses/mit-license.php</span>
+
+<span class="s2">/**</span>
+ <span class="s2">* Support for handling 64-bit int numbers in Javascript (node.js)</span>
+ <span class="s2">*</span>
+ <span class="s2">* JS Numbers are IEEE-754 binary double-precision floats, which limits the</span>
+ <span class="s2">* range of values that can be represented with integer precision to:</span>
+ <span class="s2">*</span>
+ <span class="s2">* 2^^53 &lt;= N &lt;= 2^53</span>
+ <span class="s2">*</span>
+ <span class="s2">* Int64 objects wrap a node Buffer that holds the 8-bytes of int64 data.  These</span>
+ <span class="s2">* objects operate directly on the buffer which means that if they are created</span>
+ <span class="s2">* using an existing buffer then setting the value will modify the Buffer, and</span>
+ <span class="s2">* vice-versa.</span>
+ <span class="s2">*</span>
+ <span class="s2">* Internal Representation</span>
+ <span class="s2">*</span>
+ <span class="s2">* The internal buffer format is Big Endian.  I.e. the most-significant byte is</span>
+ <span class="s2">* at buffer[0], the least-significant at buffer[7].  For the purposes of</span>
+ <span class="s2">* converting to/from JS native numbers, the value is assumed to be a signed</span>
+ <span class="s2">* integer stored in 2's complement form.</span>
+ <span class="s2">*</span>
+ <span class="s2">* For details about IEEE-754 see:</span>
+ <span class="s2">* http://en.wikipedia.org/wiki/Double_precision_floating-point_format</span>
+ <span class="s2">*/</span>
+
+<span class="s0">// Useful masks and values for bit twiddling</span>
+<span class="s3">var </span><span class="s1">MASK31 </span><span class="s4">=  </span><span class="s5">0x7fffffff</span><span class="s4">, </span><span class="s1">VAL31 </span><span class="s4">= </span><span class="s5">0x80000000</span><span class="s4">;</span>
+<span class="s3">var </span><span class="s1">MASK32 </span><span class="s4">=  </span><span class="s5">0xffffffff</span><span class="s4">, </span><span class="s1">VAL32 </span><span class="s4">= </span><span class="s5">0x100000000</span><span class="s4">;</span>
+
+<span class="s0">// Map for converting hex octets to strings</span>
+<span class="s3">var </span><span class="s1">_HEX </span><span class="s4">= [];</span>
+<span class="s3">for </span><span class="s4">(</span><span class="s3">var </span><span class="s1">i </span><span class="s4">= </span><span class="s5">0</span><span class="s4">; </span><span class="s1">i </span><span class="s4">&lt; </span><span class="s5">256</span><span class="s4">; </span><span class="s1">i</span><span class="s4">++) {</span>
+  <span class="s1">_HEX</span><span class="s4">[</span><span class="s1">i</span><span class="s4">] = (</span><span class="s1">i </span><span class="s4">&gt; </span><span class="s5">0xF </span><span class="s4">? </span><span class="s6">'' </span><span class="s4">: </span><span class="s6">'0'</span><span class="s4">) + </span><span class="s1">i</span><span class="s4">.</span><span class="s1">toString</span><span class="s4">(</span><span class="s5">16</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">//</span>
+<span class="s0">// Int64</span>
+<span class="s0">//</span>
+
+<span class="s2">/**</span>
+ <span class="s2">* Constructor accepts any of the following argument types:</span>
+ <span class="s2">*</span>
+ <span class="s2">* new Int64(buffer[, offset=0]) - Existing Buffer with byte offset</span>
+ <span class="s2">* new Int64(Uint8Array[, offset=0]) - Existing Uint8Array with a byte offset</span>
+ <span class="s2">* new Int64(string)             - Hex string (throws if n is outside int64 range)</span>
+ <span class="s2">* new Int64(number)             - Number (throws if n is outside int64 range)</span>
+ <span class="s2">* new Int64(hi, lo)             - Raw bits as two 32-bit values</span>
+ <span class="s2">*/</span>
+<span class="s3">var </span><span class="s1">Int64 </span><span class="s4">= </span><span class="s1">module</span><span class="s4">.</span><span class="s1">exports </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s1">a1</span><span class="s4">, </span><span class="s1">a2</span><span class="s4">) {</span>
+  <span class="s3">if </span><span class="s4">(</span><span class="s1">a1 </span><span class="s3">instanceof </span><span class="s1">Buffer</span><span class="s4">) {</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">buffer </span><span class="s4">= </span><span class="s1">a1</span><span class="s4">;</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">offset </span><span class="s4">= </span><span class="s1">a2 </span><span class="s4">|| </span><span class="s5">0</span><span class="s4">;</span>
+  <span class="s4">} </span><span class="s3">else if </span><span class="s4">(</span><span class="s1">Object</span><span class="s4">.</span><span class="s1">prototype</span><span class="s4">.</span><span class="s1">toString</span><span class="s4">.</span><span class="s1">call</span><span class="s4">(</span><span class="s1">a1</span><span class="s4">) == </span><span class="s6">'[object Uint8Array]'</span><span class="s4">) {</span>
+    <span class="s0">// Under Browserify, Buffers can extend Uint8Arrays rather than an</span>
+    <span class="s0">// instance of Buffer. We could assume the passed in Uint8Array is actually</span>
+    <span class="s0">// a buffer but that won't handle the case where a raw Uint8Array is passed</span>
+    <span class="s0">// in. We construct a new Buffer just in case.</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">buffer </span><span class="s4">= </span><span class="s3">new </span><span class="s1">Buffer</span><span class="s4">(</span><span class="s1">a1</span><span class="s4">);</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">offset </span><span class="s4">= </span><span class="s1">a2 </span><span class="s4">|| </span><span class="s5">0</span><span class="s4">;</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">buffer </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer </span><span class="s4">|| </span><span class="s3">new </span><span class="s1">Buffer</span><span class="s4">(</span><span class="s5">8</span><span class="s4">);</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">offset </span><span class="s4">= </span><span class="s5">0</span><span class="s4">;</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">setValue</span><span class="s4">.</span><span class="s1">apply</span><span class="s4">(</span><span class="s3">this</span><span class="s4">, </span><span class="s1">arguments</span><span class="s4">);</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+
+<span class="s0">// Max integer value that JS can accurately represent</span>
+<span class="s1">Int64</span><span class="s4">.</span><span class="s1">MAX_INT </span><span class="s4">= </span><span class="s1">Math</span><span class="s4">.</span><span class="s1">pow</span><span class="s4">(</span><span class="s5">2</span><span class="s4">, </span><span class="s5">53</span><span class="s4">);</span>
+
+<span class="s0">// Min integer value that JS can accurately represent</span>
+<span class="s1">Int64</span><span class="s4">.</span><span class="s1">MIN_INT </span><span class="s4">= -</span><span class="s1">Math</span><span class="s4">.</span><span class="s1">pow</span><span class="s4">(</span><span class="s5">2</span><span class="s4">, </span><span class="s5">53</span><span class="s4">);</span>
+
+<span class="s1">Int64</span><span class="s4">.</span><span class="s1">prototype </span><span class="s4">= {</span>
+
+  <span class="s1">constructor</span><span class="s4">: </span><span class="s1">Int64</span><span class="s4">,</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Do in-place 2's compliment.  See</span>
+   <span class="s2">* http://en.wikipedia.org/wiki/Two's_complement</span>
+   <span class="s2">*/</span>
+  <span class="s1">_2scomp</span><span class="s4">: </span><span class="s3">function</span><span class="s4">() {</span>
+    <span class="s3">var </span><span class="s1">b </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">, </span><span class="s1">o </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">, </span><span class="s1">carry </span><span class="s4">= </span><span class="s5">1</span><span class="s4">;</span>
+    <span class="s3">for </span><span class="s4">(</span><span class="s3">var </span><span class="s1">i </span><span class="s4">= </span><span class="s1">o </span><span class="s4">+ </span><span class="s5">7</span><span class="s4">; </span><span class="s1">i </span><span class="s4">&gt;= </span><span class="s1">o</span><span class="s4">; </span><span class="s1">i</span><span class="s4">--) {</span>
+      <span class="s3">var </span><span class="s1">v </span><span class="s4">= (</span><span class="s1">b</span><span class="s4">[</span><span class="s1">i</span><span class="s4">] ^ </span><span class="s5">0xff</span><span class="s4">) + </span><span class="s1">carry</span><span class="s4">;</span>
+      <span class="s1">b</span><span class="s4">[</span><span class="s1">i</span><span class="s4">] = </span><span class="s1">v </span><span class="s4">&amp; </span><span class="s5">0xff</span><span class="s4">;</span>
+      <span class="s1">carry </span><span class="s4">= </span><span class="s1">v </span><span class="s4">&gt;&gt; </span><span class="s5">8</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Set the value. Takes any of the following arguments:</span>
+   <span class="s2">*</span>
+   <span class="s2">* setValue(string) - A hexidecimal string</span>
+   <span class="s2">* setValue(number) - Number (throws if n is outside int64 range)</span>
+   <span class="s2">* setValue(hi, lo) - Raw bits as two 32-bit values</span>
+   <span class="s2">*/</span>
+  <span class="s1">setValue</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">hi</span><span class="s4">, </span><span class="s1">lo</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s1">negate </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+    <span class="s3">if </span><span class="s4">(</span><span class="s1">arguments</span><span class="s4">.</span><span class="s1">length </span><span class="s4">== </span><span class="s5">1</span><span class="s4">) {</span>
+      <span class="s3">if </span><span class="s4">(</span><span class="s3">typeof</span><span class="s4">(</span><span class="s1">hi</span><span class="s4">) == </span><span class="s6">'number'</span><span class="s4">) {</span>
+        <span class="s0">// Simplify bitfield retrieval by using abs() value.  We restore sign</span>
+        <span class="s0">// later</span>
+        <span class="s1">negate </span><span class="s4">= </span><span class="s1">hi </span><span class="s4">&lt; </span><span class="s5">0</span><span class="s4">;</span>
+        <span class="s1">hi </span><span class="s4">= </span><span class="s1">Math</span><span class="s4">.</span><span class="s1">abs</span><span class="s4">(</span><span class="s1">hi</span><span class="s4">);</span>
+        <span class="s1">lo </span><span class="s4">= </span><span class="s1">hi </span><span class="s4">% </span><span class="s1">VAL32</span><span class="s4">;</span>
+        <span class="s1">hi </span><span class="s4">= </span><span class="s1">hi </span><span class="s4">/ </span><span class="s1">VAL32</span><span class="s4">;</span>
+        <span class="s3">if </span><span class="s4">(</span><span class="s1">hi </span><span class="s4">&gt; </span><span class="s1">VAL32</span><span class="s4">) </span><span class="s3">throw new </span><span class="s1">RangeError</span><span class="s4">(</span><span class="s1">hi  </span><span class="s4">+ </span><span class="s6">' is outside Int64 range'</span><span class="s4">);</span>
+        <span class="s1">hi </span><span class="s4">= </span><span class="s1">hi </span><span class="s4">| </span><span class="s5">0</span><span class="s4">;</span>
+      <span class="s4">} </span><span class="s3">else if </span><span class="s4">(</span><span class="s3">typeof</span><span class="s4">(</span><span class="s1">hi</span><span class="s4">) == </span><span class="s6">'string'</span><span class="s4">) {</span>
+        <span class="s1">hi </span><span class="s4">= (</span><span class="s1">hi </span><span class="s4">+ </span><span class="s6">''</span><span class="s4">).</span><span class="s1">replace</span><span class="s4">(</span><span class="s7">/^0x/</span><span class="s4">, </span><span class="s6">''</span><span class="s4">);</span>
+        <span class="s1">lo </span><span class="s4">= </span><span class="s1">hi</span><span class="s4">.</span><span class="s1">substr</span><span class="s4">(-</span><span class="s5">8</span><span class="s4">);</span>
+        <span class="s1">hi </span><span class="s4">= </span><span class="s1">hi</span><span class="s4">.</span><span class="s1">length </span><span class="s4">&gt; </span><span class="s5">8 </span><span class="s4">? </span><span class="s1">hi</span><span class="s4">.</span><span class="s1">substr</span><span class="s4">(</span><span class="s5">0</span><span class="s4">, </span><span class="s1">hi</span><span class="s4">.</span><span class="s1">length </span><span class="s4">- </span><span class="s5">8</span><span class="s4">) : </span><span class="s6">''</span><span class="s4">;</span>
+        <span class="s1">hi </span><span class="s4">= </span><span class="s1">parseInt</span><span class="s4">(</span><span class="s1">hi</span><span class="s4">, </span><span class="s5">16</span><span class="s4">);</span>
+        <span class="s1">lo </span><span class="s4">= </span><span class="s1">parseInt</span><span class="s4">(</span><span class="s1">lo</span><span class="s4">, </span><span class="s5">16</span><span class="s4">);</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s3">throw new </span><span class="s1">Error</span><span class="s4">(</span><span class="s1">hi </span><span class="s4">+ </span><span class="s6">' must be a Number or String'</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Technically we should throw if hi or lo is outside int32 range here, but</span>
+    <span class="s0">// it's not worth the effort. Anything past the 32'nd bit is ignored.</span>
+
+    <span class="s0">// Copy bytes to buffer</span>
+    <span class="s3">var </span><span class="s1">b </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">, </span><span class="s1">o </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">;</span>
+    <span class="s3">for </span><span class="s4">(</span><span class="s3">var </span><span class="s1">i </span><span class="s4">= </span><span class="s5">7</span><span class="s4">; </span><span class="s1">i </span><span class="s4">&gt;= </span><span class="s5">0</span><span class="s4">; </span><span class="s1">i</span><span class="s4">--) {</span>
+      <span class="s1">b</span><span class="s4">[</span><span class="s1">o</span><span class="s4">+</span><span class="s1">i</span><span class="s4">] = </span><span class="s1">lo </span><span class="s4">&amp; </span><span class="s5">0xff</span><span class="s4">;</span>
+      <span class="s1">lo </span><span class="s4">= </span><span class="s1">i </span><span class="s4">== </span><span class="s5">4 </span><span class="s4">? </span><span class="s1">hi </span><span class="s4">: </span><span class="s1">lo </span><span class="s4">&gt;&gt;&gt; </span><span class="s5">8</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Restore sign of passed argument</span>
+    <span class="s3">if </span><span class="s4">(</span><span class="s1">negate</span><span class="s4">) </span><span class="s3">this</span><span class="s4">.</span><span class="s1">_2scomp</span><span class="s4">();</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Convert to a native JS number.</span>
+   <span class="s2">*</span>
+   <span class="s2">* WARNING: Do not expect this value to be accurate to integer precision for</span>
+   <span class="s2">* large (positive or negative) numbers!</span>
+   <span class="s2">*</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">allowImprecise If true, no check is performed to verify the</span>
+   <span class="s2">* returned value is accurate to integer precision.  If false, imprecise</span>
+   <span class="s2">* numbers (very large positive or negative numbers) will be forced to +/-</span>
+   <span class="s2">* Infinity.</span>
+   <span class="s2">*/</span>
+  <span class="s1">toNumber</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">allowImprecise</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s1">b </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">, </span><span class="s1">o </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">;</span>
+
+    <span class="s0">// Running sum of octets, doing a 2's complement</span>
+    <span class="s3">var </span><span class="s1">negate </span><span class="s4">= </span><span class="s1">b</span><span class="s4">[</span><span class="s1">o</span><span class="s4">] &amp; </span><span class="s5">0x80</span><span class="s4">, </span><span class="s1">x </span><span class="s4">= </span><span class="s5">0</span><span class="s4">, </span><span class="s1">carry </span><span class="s4">= </span><span class="s5">1</span><span class="s4">;</span>
+    <span class="s3">for </span><span class="s4">(</span><span class="s3">var </span><span class="s1">i </span><span class="s4">= </span><span class="s5">7</span><span class="s4">, </span><span class="s1">m </span><span class="s4">= </span><span class="s5">1</span><span class="s4">; </span><span class="s1">i </span><span class="s4">&gt;= </span><span class="s5">0</span><span class="s4">; </span><span class="s1">i</span><span class="s4">--, </span><span class="s1">m </span><span class="s4">*= </span><span class="s5">256</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s1">v </span><span class="s4">= </span><span class="s1">b</span><span class="s4">[</span><span class="s1">o</span><span class="s4">+</span><span class="s1">i</span><span class="s4">];</span>
+
+      <span class="s0">// 2's complement for negative numbers</span>
+      <span class="s3">if </span><span class="s4">(</span><span class="s1">negate</span><span class="s4">) {</span>
+        <span class="s1">v </span><span class="s4">= (</span><span class="s1">v </span><span class="s4">^ </span><span class="s5">0xff</span><span class="s4">) + </span><span class="s1">carry</span><span class="s4">;</span>
+        <span class="s1">carry </span><span class="s4">= </span><span class="s1">v </span><span class="s4">&gt;&gt; </span><span class="s5">8</span><span class="s4">;</span>
+        <span class="s1">v </span><span class="s4">= </span><span class="s1">v </span><span class="s4">&amp; </span><span class="s5">0xff</span><span class="s4">;</span>
+      <span class="s4">}</span>
+
+      <span class="s1">x </span><span class="s4">+= </span><span class="s1">v </span><span class="s4">* </span><span class="s1">m</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Return Infinity if we've lost integer precision</span>
+    <span class="s3">if </span><span class="s4">(!</span><span class="s1">allowImprecise </span><span class="s4">&amp;&amp; </span><span class="s1">x </span><span class="s4">&gt;= </span><span class="s1">Int64</span><span class="s4">.</span><span class="s1">MAX_INT</span><span class="s4">) {</span>
+      <span class="s3">return </span><span class="s1">negate </span><span class="s4">? -</span><span class="s1">Infinity </span><span class="s4">: </span><span class="s1">Infinity</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s1">negate </span><span class="s4">? -</span><span class="s1">x </span><span class="s4">: </span><span class="s1">x</span><span class="s4">;</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Convert to a JS Number. Returns +/-Infinity for values that can't be</span>
+   <span class="s2">* represented to integer precision.</span>
+   <span class="s2">*/</span>
+  <span class="s1">valueOf</span><span class="s4">: </span><span class="s3">function</span><span class="s4">() {</span>
+    <span class="s3">return this</span><span class="s4">.</span><span class="s1">toNumber</span><span class="s4">(</span><span class="s3">false</span><span class="s4">);</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Return string value</span>
+   <span class="s2">*</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">radix Just like Number#toString()'s radix</span>
+   <span class="s2">*/</span>
+  <span class="s1">toString</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">radix</span><span class="s4">) {</span>
+    <span class="s3">return this</span><span class="s4">.</span><span class="s1">valueOf</span><span class="s4">().</span><span class="s1">toString</span><span class="s4">(</span><span class="s1">radix </span><span class="s4">|| </span><span class="s5">10</span><span class="s4">);</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Return a string showing the buffer octets, with MSB on the left.</span>
+   <span class="s2">*</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">sep separator string. default is '' (empty string)</span>
+   <span class="s2">*/</span>
+  <span class="s1">toOctetString</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">sep</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s1">out </span><span class="s4">= </span><span class="s3">new </span><span class="s1">Array</span><span class="s4">(</span><span class="s5">8</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s1">b </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">, </span><span class="s1">o </span><span class="s4">= </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">;</span>
+    <span class="s3">for </span><span class="s4">(</span><span class="s3">var </span><span class="s1">i </span><span class="s4">= </span><span class="s5">0</span><span class="s4">; </span><span class="s1">i </span><span class="s4">&lt; </span><span class="s5">8</span><span class="s4">; </span><span class="s1">i</span><span class="s4">++) {</span>
+      <span class="s1">out</span><span class="s4">[</span><span class="s1">i</span><span class="s4">] = </span><span class="s1">_HEX</span><span class="s4">[</span><span class="s1">b</span><span class="s4">[</span><span class="s1">o</span><span class="s4">+</span><span class="s1">i</span><span class="s4">]];</span>
+    <span class="s4">}</span>
+    <span class="s3">return </span><span class="s1">out</span><span class="s4">.</span><span class="s1">join</span><span class="s4">(</span><span class="s1">sep </span><span class="s4">|| </span><span class="s6">''</span><span class="s4">);</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Returns the int64's 8 bytes in a buffer.</span>
+   <span class="s2">*</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">{bool} [rawBuffer=false]  If no offset and this is true, return the internal buffer.  Should only be used if</span>
+   <span class="s2">*                                  you're discarding the Int64 afterwards, as it breaks encapsulation.</span>
+   <span class="s2">*/</span>
+  <span class="s1">toBuffer</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">rawBuffer</span><span class="s4">) {</span>
+    <span class="s3">if </span><span class="s4">(</span><span class="s1">rawBuffer </span><span class="s4">&amp;&amp; </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset </span><span class="s4">=== </span><span class="s5">0</span><span class="s4">) </span><span class="s3">return this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">;</span>
+
+    <span class="s3">var </span><span class="s1">out </span><span class="s4">= </span><span class="s3">new </span><span class="s1">Buffer</span><span class="s4">(</span><span class="s5">8</span><span class="s4">);</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">.</span><span class="s1">copy</span><span class="s4">(</span><span class="s1">out</span><span class="s4">, </span><span class="s5">0</span><span class="s4">, </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">, </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset </span><span class="s4">+ </span><span class="s5">8</span><span class="s4">);</span>
+    <span class="s3">return </span><span class="s1">out</span><span class="s4">;</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Copy 8 bytes of int64 into target buffer at target offset.</span>
+   <span class="s2">*</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">{Buffer} targetBuffer       Buffer to copy into.</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">{number} [targetOffset=0]   Offset into target buffer.</span>
+   <span class="s2">*/</span>
+  <span class="s1">copy</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">targetBuffer</span><span class="s4">, </span><span class="s1">targetOffset</span><span class="s4">) {</span>
+    <span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">.</span><span class="s1">copy</span><span class="s4">(</span><span class="s1">targetBuffer</span><span class="s4">, </span><span class="s1">targetOffset </span><span class="s4">|| </span><span class="s5">0</span><span class="s4">, </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">, </span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset </span><span class="s4">+ </span><span class="s5">8</span><span class="s4">);</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Returns a number indicating whether this comes before or after or is the</span>
+   <span class="s2">* same as the other in sort order.</span>
+   <span class="s2">*</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">{Int64} other  Other Int64 to compare.</span>
+   <span class="s2">*/</span>
+  <span class="s1">compare</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">other</span><span class="s4">) {</span>
+
+    <span class="s0">// If sign bits differ ...</span>
+    <span class="s3">if </span><span class="s4">((</span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">] &amp; </span><span class="s5">0x80</span><span class="s4">) != (</span><span class="s1">other</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s1">other</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">] &amp; </span><span class="s5">0x80</span><span class="s4">)) {</span>
+      <span class="s3">return </span><span class="s1">other</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s1">other</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">] - </span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">];</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// otherwise, compare bytes lexicographically</span>
+    <span class="s3">for </span><span class="s4">(</span><span class="s3">var </span><span class="s1">i </span><span class="s4">= </span><span class="s5">0</span><span class="s4">; </span><span class="s1">i </span><span class="s4">&lt; </span><span class="s5">8</span><span class="s4">; </span><span class="s1">i</span><span class="s4">++) {</span>
+      <span class="s3">if </span><span class="s4">(</span><span class="s3">this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">+</span><span class="s1">i</span><span class="s4">] !== </span><span class="s1">other</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s1">other</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">+</span><span class="s1">i</span><span class="s4">]) {</span>
+        <span class="s3">return this</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s3">this</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">+</span><span class="s1">i</span><span class="s4">] - </span><span class="s1">other</span><span class="s4">.</span><span class="s1">buffer</span><span class="s4">[</span><span class="s1">other</span><span class="s4">.</span><span class="s1">offset</span><span class="s4">+</span><span class="s1">i</span><span class="s4">];</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s3">return </span><span class="s5">0</span><span class="s4">;</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Returns a boolean indicating if this integer is equal to other.</span>
+   <span class="s2">*</span>
+   <span class="s2">* </span><span class="s8">@param </span><span class="s2">{Int64} other  Other Int64 to compare.</span>
+   <span class="s2">*/</span>
+  <span class="s1">equals</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s1">other</span><span class="s4">) {</span>
+    <span class="s3">return this</span><span class="s4">.</span><span class="s1">compare</span><span class="s4">(</span><span class="s1">other</span><span class="s4">) === </span><span class="s5">0</span><span class="s4">;</span>
+  <span class="s4">},</span>
+
+  <span class="s2">/**</span>
+   <span class="s2">* Pretty output in console.log</span>
+   <span class="s2">*/</span>
+  <span class="s1">inspect</span><span class="s4">: </span><span class="s3">function</span><span class="s4">() {</span>
+    <span class="s3">return </span><span class="s6">'[Int64 value:' </span><span class="s4">+ </span><span class="s3">this </span><span class="s4">+ </span><span class="s6">' octets:' </span><span class="s4">+ </span><span class="s3">this</span><span class="s4">.</span><span class="s1">toOctetString</span><span class="s4">(</span><span class="s6">' '</span><span class="s4">) + </span><span class="s6">']'</span><span class="s4">;</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

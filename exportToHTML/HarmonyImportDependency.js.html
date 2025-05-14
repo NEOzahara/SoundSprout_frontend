@@ -1,0 +1,408 @@
+<html>
+<head>
+<title>HarmonyImportDependency.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+HarmonyImportDependency.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">ConditionalInitFragment </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ConditionalInitFragment&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Dependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Dependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyLinkingError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../HarmonyLinkingError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">InitFragment </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../InitFragment&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Template </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Template&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">AwaitDependenciesInitFragment </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../async-modules/AwaitDependenciesInitFragment&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">filterRuntime</span><span class="s3">, </span><span class="s1">mergeRuntime </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/runtime&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleDependency&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).ReplaceSource} ReplaceSource */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).ReferencedExport} ReferencedExport */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).UpdateHashContext} UpdateHashContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../DependencyTemplate&quot;).DependencyTemplateContext} DependencyTemplateContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ExportsInfo&quot;)} ExportsInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;).BuildMeta} BuildMeta */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../RuntimeTemplate&quot;)} RuntimeTemplate */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../WebpackError&quot;)} WebpackError */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).ImportAttributes} ImportAttributes */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../serialization/ObjectMiddleware&quot;).ObjectDeserializerContext} ObjectDeserializerContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../serialization/ObjectMiddleware&quot;).ObjectSerializerContext} ObjectSerializerContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/Hash&quot;)} Hash */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{0 | 1 | 2 | 3 | false} ExportPresenceMode */</span>
+
+<span class="s4">const </span><span class="s1">ExportPresenceModes </span><span class="s3">= {</span>
+	<span class="s1">NONE</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportPresenceMode} */ </span><span class="s3">(</span><span class="s7">0</span><span class="s3">),</span>
+	<span class="s1">WARN</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportPresenceMode} */ </span><span class="s3">(</span><span class="s7">1</span><span class="s3">),</span>
+	<span class="s1">AUTO</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportPresenceMode} */ </span><span class="s3">(</span><span class="s7">2</span><span class="s3">),</span>
+	<span class="s1">ERROR</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportPresenceMode} */ </span><span class="s3">(</span><span class="s7">3</span><span class="s3">),</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | false} str param</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ExportPresenceMode} result</span>
+	 <span class="s5">*/</span>
+	<span class="s1">fromUserOption</span><span class="s3">(</span><span class="s1">str</span><span class="s3">) {</span>
+		<span class="s4">switch </span><span class="s3">(</span><span class="s1">str</span><span class="s3">) {</span>
+			<span class="s4">case </span><span class="s2">&quot;error&quot;</span><span class="s3">:</span>
+				<span class="s4">return </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">ERROR</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;warn&quot;</span><span class="s3">:</span>
+				<span class="s4">return </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">WARN</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;auto&quot;</span><span class="s3">:</span>
+				<span class="s4">return </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">AUTO</span><span class="s3">;</span>
+			<span class="s4">case false</span><span class="s3">:</span>
+				<span class="s4">return </span><span class="s1">ExportPresenceModes</span><span class="s3">.</span><span class="s1">NONE</span><span class="s3">;</span>
+			<span class="s4">default</span><span class="s3">:</span>
+				<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">`Invalid export presence value </span><span class="s1">$</span><span class="s3">{</span><span class="s1">str</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">HarmonyImportDependency </span><span class="s4">extends </span><span class="s1">ModuleDependency </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} request request string</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} sourceOrder source order</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ImportAttributes=} attributes import attributes</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">request</span><span class="s3">, </span><span class="s1">sourceOrder</span><span class="s3">, </span><span class="s1">attributes</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">(</span><span class="s1">request</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">sourceOrder </span><span class="s3">= </span><span class="s1">sourceOrder</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">assertions </span><span class="s3">= </span><span class="s1">attributes</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get category</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s2">&quot;esm&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Returns list of exports referenced by this dependency</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime the runtime for which the module is analysed</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(string[] | ReferencedExport)[]} referenced exports</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getReferencedExports</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">Dependency</span><span class="s3">.</span><span class="s1">NO_EXPORTS_REFERENCED</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph the module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} name of the variable for the import</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getImportVar</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getParentModule</span><span class="s3">(</span><span class="s4">this</span><span class="s3">));</span>
+		<span class="s4">const </span><span class="s1">meta </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getMeta</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">let </span><span class="s1">importVarMap </span><span class="s3">= </span><span class="s1">meta</span><span class="s3">.</span><span class="s1">importVarMap</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">importVarMap</span><span class="s3">) </span><span class="s1">meta</span><span class="s3">.</span><span class="s1">importVarMap </span><span class="s3">= </span><span class="s1">importVarMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">let </span><span class="s1">importVar </span><span class="s3">= </span><span class="s1">importVarMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s4">this</span><span class="s3">))</span>
+		<span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">importVar</span><span class="s3">) </span><span class="s4">return </span><span class="s1">importVar</span><span class="s3">;</span>
+		<span class="s1">importVar </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Template</span><span class="s3">.</span><span class="s1">toIdentifier</span><span class="s3">(</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">}</span><span class="s2">`</span>
+		<span class="s3">)}</span><span class="s2">__WEBPACK_IMPORTED_MODULE_</span><span class="s1">$</span><span class="s3">{</span><span class="s1">importVarMap</span><span class="s3">.</span><span class="s1">size</span><span class="s3">}</span><span class="s2">__`</span><span class="s3">;</span>
+		<span class="s1">importVarMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s4">this</span><span class="s3">)),</span>
+			<span class="s1">importVar</span>
+		<span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">importVar</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} update create new variables or update existing one</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependencyTemplateContext} templateContext the template context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{[string, string]} the import statement and the compat statement</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getImportStatement</span><span class="s3">(</span>
+		<span class="s1">update</span><span class="s3">,</span>
+		<span class="s3">{ </span><span class="s1">runtimeTemplate</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">runtimeRequirements </span><span class="s3">}</span>
+	<span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">importStatement</span><span class="s3">({</span>
+			<span class="s1">update</span><span class="s3">,</span>
+			<span class="s1">module</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s4">this</span><span class="s3">)),</span>
+			<span class="s1">chunkGraph</span><span class="s3">,</span>
+			<span class="s1">importVar</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getImportVar</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">),</span>
+			<span class="s1">request</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">request</span><span class="s3">,</span>
+			<span class="s1">originModule</span><span class="s3">: </span><span class="s1">module</span><span class="s3">,</span>
+			<span class="s1">runtimeRequirements</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} ids imported ids</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} additionalMessage extra info included in the error message</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{WebpackError[] | undefined} errors</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getLinkingErrors</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">ids</span><span class="s3">, </span><span class="s1">additionalMessage</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">importedModule </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+		<span class="s0">// ignore errors for missing or failed modules</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">importedModule </span><span class="s3">|| </span><span class="s1">importedModule</span><span class="s3">.</span><span class="s1">getNumberOfErrors</span><span class="s3">() &gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">const </span><span class="s1">parentModule </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */</span>
+			<span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getParentModule</span><span class="s3">(</span><span class="s4">this</span><span class="s3">));</span>
+		<span class="s4">const </span><span class="s1">exportsType </span><span class="s3">= </span><span class="s1">importedModule</span><span class="s3">.</span><span class="s1">getExportsType</span><span class="s3">(</span>
+			<span class="s1">moduleGraph</span><span class="s3">,</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildMeta} */ </span><span class="s3">(</span><span class="s1">parentModule</span><span class="s3">.</span><span class="s1">buildMeta</span><span class="s3">).</span><span class="s1">strictHarmonyModule</span>
+		<span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">exportsType </span><span class="s3">=== </span><span class="s2">&quot;namespace&quot; </span><span class="s3">|| </span><span class="s1">exportsType </span><span class="s3">=== </span><span class="s2">&quot;default-with-named&quot;</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">ids</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s4">return</span><span class="s3">;</span>
+			<span class="s3">}</span>
+
+			<span class="s4">if </span><span class="s3">(</span>
+				<span class="s3">(</span><span class="s1">exportsType </span><span class="s3">!== </span><span class="s2">&quot;default-with-named&quot; </span><span class="s3">|| </span><span class="s1">ids</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] !== </span><span class="s2">&quot;default&quot;</span><span class="s3">) &amp;&amp;</span>
+				<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">isExportProvided</span><span class="s3">(</span><span class="s1">importedModule</span><span class="s3">, </span><span class="s1">ids</span><span class="s3">) === </span><span class="s4">false</span>
+			<span class="s3">) {</span>
+				<span class="s0">// We are sure that it's not provided</span>
+
+				<span class="s0">// Try to provide detailed info in the error message</span>
+				<span class="s4">let </span><span class="s1">pos </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+				<span class="s4">let </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">importedModule</span><span class="s3">);</span>
+				<span class="s4">while </span><span class="s3">(</span><span class="s1">pos </span><span class="s3">&lt; </span><span class="s1">ids</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&amp;&amp; </span><span class="s1">exportsInfo</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">id </span><span class="s3">= </span><span class="s1">ids</span><span class="s3">[</span><span class="s1">pos</span><span class="s3">++];</span>
+					<span class="s4">const </span><span class="s1">exportInfo </span><span class="s3">= </span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getReadOnlyExportInfo</span><span class="s3">(</span><span class="s1">id</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">provided </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+						<span class="s0">// We are sure that it's not provided</span>
+						<span class="s4">const </span><span class="s1">providedExports </span><span class="s3">= </span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getProvidedExports</span><span class="s3">();</span>
+						<span class="s4">const </span><span class="s1">moreInfo </span><span class="s3">= !</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">providedExports</span><span class="s3">)</span>
+							<span class="s3">? </span><span class="s2">&quot; (possible exports unknown)&quot;</span>
+							<span class="s3">: </span><span class="s1">providedExports</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span>
+								<span class="s3">? </span><span class="s2">&quot; (module has no exports)&quot;</span>
+								<span class="s3">: </span><span class="s2">` (possible exports: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">providedExports</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">)`</span><span class="s3">;</span>
+						<span class="s4">return </span><span class="s3">[</span>
+							<span class="s4">new </span><span class="s1">HarmonyLinkingError</span><span class="s3">(</span>
+								<span class="s2">`export </span><span class="s1">$</span><span class="s3">{</span><span class="s1">ids</span>
+									<span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s1">pos</span><span class="s3">)</span>
+									<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">id </span><span class="s3">=&gt; </span><span class="s2">`'</span><span class="s1">$</span><span class="s3">{</span><span class="s1">id</span><span class="s3">}</span><span class="s2">'`</span><span class="s3">)</span>
+									<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">)} </span><span class="s1">$</span><span class="s3">{</span><span class="s1">additionalMessage</span><span class="s3">} </span><span class="s2">was not found in '</span><span class="s1">$</span><span class="s3">{</span>
+									<span class="s4">this</span><span class="s3">.</span><span class="s1">userRequest</span>
+								<span class="s3">}</span><span class="s2">'</span><span class="s1">$</span><span class="s3">{</span><span class="s1">moreInfo</span><span class="s3">}</span><span class="s2">`</span>
+							<span class="s3">)</span>
+						<span class="s3">];</span>
+					<span class="s3">}</span>
+					<span class="s1">exportsInfo </span><span class="s3">=</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportsInfo} */</span>
+						<span class="s3">(</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">getNestedExportsInfo</span><span class="s3">());</span>
+				<span class="s3">}</span>
+
+				<span class="s0">// General error message</span>
+				<span class="s4">return </span><span class="s3">[</span>
+					<span class="s4">new </span><span class="s1">HarmonyLinkingError</span><span class="s3">(</span>
+						<span class="s2">`export </span><span class="s1">$</span><span class="s3">{</span><span class="s1">ids</span>
+							<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">id </span><span class="s3">=&gt; </span><span class="s2">`'</span><span class="s1">$</span><span class="s3">{</span><span class="s1">id</span><span class="s3">}</span><span class="s2">'`</span><span class="s3">)</span>
+							<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">)} </span><span class="s1">$</span><span class="s3">{</span><span class="s1">additionalMessage</span><span class="s3">} </span><span class="s2">was not found in '</span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s4">this</span><span class="s3">.</span><span class="s1">userRequest</span>
+						<span class="s3">}</span><span class="s2">'`</span>
+					<span class="s3">)</span>
+				<span class="s3">];</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">switch </span><span class="s3">(</span><span class="s1">exportsType</span><span class="s3">) {</span>
+			<span class="s4">case </span><span class="s2">&quot;default-only&quot;</span><span class="s3">:</span>
+				<span class="s0">// It's has only a default export</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">ids</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">&amp;&amp; </span><span class="s1">ids</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] !== </span><span class="s2">&quot;default&quot;</span><span class="s3">) {</span>
+					<span class="s0">// In strict harmony modules we only support the default export</span>
+					<span class="s4">return </span><span class="s3">[</span>
+						<span class="s4">new </span><span class="s1">HarmonyLinkingError</span><span class="s3">(</span>
+							<span class="s2">`Can't import the named export </span><span class="s1">$</span><span class="s3">{</span><span class="s1">ids</span>
+								<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">id </span><span class="s3">=&gt; </span><span class="s2">`'</span><span class="s1">$</span><span class="s3">{</span><span class="s1">id</span><span class="s3">}</span><span class="s2">'`</span><span class="s3">)</span>
+								<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span>
+									<span class="s2">&quot;.&quot;</span>
+								<span class="s3">)} </span><span class="s1">$</span><span class="s3">{</span><span class="s1">additionalMessage</span><span class="s3">} </span><span class="s2">from default-exporting module (only default export is available)`</span>
+						<span class="s3">)</span>
+					<span class="s3">];</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;default-with-named&quot;</span><span class="s3">:</span>
+				<span class="s0">// It has a default export and named properties redirect</span>
+				<span class="s0">// In some cases we still want to warn here</span>
+				<span class="s4">if </span><span class="s3">(</span>
+					<span class="s1">ids</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">&amp;&amp;</span>
+					<span class="s1">ids</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] !== </span><span class="s2">&quot;default&quot; </span><span class="s3">&amp;&amp;</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildMeta} */</span>
+					<span class="s3">(</span><span class="s1">importedModule</span><span class="s3">.</span><span class="s1">buildMeta</span><span class="s3">).</span><span class="s1">defaultObject </span><span class="s3">=== </span><span class="s2">&quot;redirect-warn&quot;</span>
+				<span class="s3">) {</span>
+					<span class="s0">// For these modules only the default export is supported</span>
+					<span class="s4">return </span><span class="s3">[</span>
+						<span class="s4">new </span><span class="s1">HarmonyLinkingError</span><span class="s3">(</span>
+							<span class="s2">`Should not import the named export </span><span class="s1">$</span><span class="s3">{</span><span class="s1">ids</span>
+								<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">id </span><span class="s3">=&gt; </span><span class="s2">`'</span><span class="s1">$</span><span class="s3">{</span><span class="s1">id</span><span class="s3">}</span><span class="s2">'`</span><span class="s3">)</span>
+								<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span>
+									<span class="s2">&quot;.&quot;</span>
+								<span class="s3">)} </span><span class="s1">$</span><span class="s3">{</span><span class="s1">additionalMessage</span><span class="s3">} </span><span class="s2">from default-exporting module (only default export is available soon)`</span>
+						<span class="s3">)</span>
+					<span class="s3">];</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectSerializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">serialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">write </span><span class="s3">} = </span><span class="s1">context</span><span class="s3">;</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">assertions</span><span class="s3">);</span>
+		<span class="s4">super</span><span class="s3">.</span><span class="s1">serialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectDeserializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">deserialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">read </span><span class="s3">} = </span><span class="s1">context</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">sourceOrder </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">assertions </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">super</span><span class="s3">.</span><span class="s1">deserialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">HarmonyImportDependency</span><span class="s3">;</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Module, WeakMap&lt;Module, RuntimeSpec | boolean&gt;&gt;} */</span>
+<span class="s4">const </span><span class="s1">importEmittedMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s1">HarmonyImportDependency</span><span class="s3">.</span><span class="s1">Template </span><span class="s3">= </span><span class="s4">class </span><span class="s1">HarmonyImportDependencyTemplate </span><span class="s4">extends </span><span class="s3">(</span>
+	<span class="s1">ModuleDependency</span><span class="s3">.</span><span class="s1">Template</span>
+<span class="s3">) {</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency for which the template should be applied</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ReplaceSource} source the current replace source which can be modified</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependencyTemplateContext} templateContext the context object</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, </span><span class="s1">templateContext</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HarmonyImportDependency} */ </span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">} = </span><span class="s1">templateContext</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">connection </span><span class="s3">&amp;&amp; !</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">isTargetActive</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">referencedModule </span><span class="s3">= </span><span class="s1">connection </span><span class="s3">&amp;&amp; </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+
+		<span class="s4">if </span><span class="s3">(</span>
+			<span class="s1">connection </span><span class="s3">&amp;&amp;</span>
+			<span class="s1">connection</span><span class="s3">.</span><span class="s1">weak </span><span class="s3">&amp;&amp;</span>
+			<span class="s1">referencedModule </span><span class="s3">&amp;&amp;</span>
+			<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">referencedModule</span><span class="s3">) === </span><span class="s4">null</span>
+		<span class="s3">) {</span>
+			<span class="s0">// in weak references, module might not be in any chunk</span>
+			<span class="s0">// but that's ok, we don't need that logic in this case</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">const </span><span class="s1">moduleKey </span><span class="s3">= </span><span class="s1">referencedModule</span>
+			<span class="s3">? </span><span class="s1">referencedModule</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()</span>
+			<span class="s3">: </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">request</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s2">`harmony import </span><span class="s1">$</span><span class="s3">{</span><span class="s1">moduleKey</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">runtimeCondition </span><span class="s3">= </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">weak</span>
+			<span class="s3">? </span><span class="s4">false</span>
+			<span class="s3">: </span><span class="s1">connection</span>
+				<span class="s3">? </span><span class="s1">filterRuntime</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">r </span><span class="s3">=&gt; </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">isTargetActive</span><span class="s3">(</span><span class="s1">r</span><span class="s3">))</span>
+				<span class="s3">: </span><span class="s4">true</span><span class="s3">;</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">module </span><span class="s3">&amp;&amp; </span><span class="s1">referencedModule</span><span class="s3">) {</span>
+			<span class="s4">let </span><span class="s1">emittedModules </span><span class="s3">= </span><span class="s1">importEmittedMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">emittedModules </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">emittedModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+				<span class="s1">importEmittedMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">emittedModules</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">let </span><span class="s1">mergedRuntimeCondition </span><span class="s3">= </span><span class="s1">runtimeCondition</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">oldRuntimeCondition </span><span class="s3">= </span><span class="s1">emittedModules</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">referencedModule</span><span class="s3">) || </span><span class="s4">false</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">oldRuntimeCondition </span><span class="s3">!== </span><span class="s4">false </span><span class="s3">&amp;&amp; </span><span class="s1">mergedRuntimeCondition </span><span class="s3">!== </span><span class="s4">true</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">mergedRuntimeCondition </span><span class="s3">=== </span><span class="s4">false </span><span class="s3">|| </span><span class="s1">oldRuntimeCondition </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+					<span class="s1">mergedRuntimeCondition </span><span class="s3">= </span><span class="s1">oldRuntimeCondition</span><span class="s3">;</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">mergedRuntimeCondition </span><span class="s3">= </span><span class="s1">mergeRuntime</span><span class="s3">(</span>
+						<span class="s1">oldRuntimeCondition</span><span class="s3">,</span>
+						<span class="s1">mergedRuntimeCondition</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s1">emittedModules</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">referencedModule</span><span class="s3">, </span><span class="s1">mergedRuntimeCondition</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">const </span><span class="s1">importStatement </span><span class="s3">= </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">getImportStatement</span><span class="s3">(</span><span class="s4">false</span><span class="s3">, </span><span class="s1">templateContext</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span>
+			<span class="s1">referencedModule </span><span class="s3">&amp;&amp;</span>
+			<span class="s1">templateContext</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">isAsync</span><span class="s3">(</span><span class="s1">referencedModule</span><span class="s3">)</span>
+		<span class="s3">) {</span>
+			<span class="s1">templateContext</span><span class="s3">.</span><span class="s1">initFragments</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+				<span class="s4">new </span><span class="s1">ConditionalInitFragment</span><span class="s3">(</span>
+					<span class="s1">importStatement</span><span class="s3">[</span><span class="s7">0</span><span class="s3">],</span>
+					<span class="s1">InitFragment</span><span class="s3">.</span><span class="s1">STAGE_HARMONY_IMPORTS</span><span class="s3">,</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">,</span>
+					<span class="s1">key</span><span class="s3">,</span>
+					<span class="s1">runtimeCondition</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s1">templateContext</span><span class="s3">.</span><span class="s1">initFragments</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+				<span class="s4">new </span><span class="s1">AwaitDependenciesInitFragment</span><span class="s3">(</span>
+					<span class="s4">new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">dep</span><span class="s3">.</span><span class="s1">getImportVar</span><span class="s3">(</span><span class="s1">templateContext</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">)])</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s1">templateContext</span><span class="s3">.</span><span class="s1">initFragments</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+				<span class="s4">new </span><span class="s1">ConditionalInitFragment</span><span class="s3">(</span>
+					<span class="s1">importStatement</span><span class="s3">[</span><span class="s7">1</span><span class="s3">],</span>
+					<span class="s1">InitFragment</span><span class="s3">.</span><span class="s1">STAGE_ASYNC_HARMONY_IMPORTS</span><span class="s3">,</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">,</span>
+					<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">} </span><span class="s2">compat`</span><span class="s3">,</span>
+					<span class="s1">runtimeCondition</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">templateContext</span><span class="s3">.</span><span class="s1">initFragments</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+				<span class="s4">new </span><span class="s1">ConditionalInitFragment</span><span class="s3">(</span>
+					<span class="s1">importStatement</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] + </span><span class="s1">importStatement</span><span class="s3">[</span><span class="s7">1</span><span class="s3">],</span>
+					<span class="s1">InitFragment</span><span class="s3">.</span><span class="s1">STAGE_HARMONY_IMPORTS</span><span class="s3">,</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">sourceOrder</span><span class="s3">,</span>
+					<span class="s1">key</span><span class="s3">,</span>
+					<span class="s1">runtimeCondition</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} referencedModule the referenced module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuntimeSpec | boolean} runtimeCondition in which this import has been emitted</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">getImportEmittedRuntime</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">referencedModule</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">emittedModules </span><span class="s3">= </span><span class="s1">importEmittedMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">emittedModules </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return false</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">emittedModules</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">referencedModule</span><span class="s3">) || </span><span class="s4">false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">ExportPresenceModes </span><span class="s3">= </span><span class="s1">ExportPresenceModes</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

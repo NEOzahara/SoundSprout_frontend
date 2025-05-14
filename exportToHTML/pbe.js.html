@@ -1,0 +1,1047 @@
+<html>
+<head>
+<title>pbe.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #bcbec4;}
+.s5 { color: #6aab73;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+pbe.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* Password-based encryption functions.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Dave Longley</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Stefan Siegl &lt;stesie@brokenpipe.de&gt;</span>
+ <span class="s0">*</span>
+ <span class="s0">* Copyright (c) 2010-2013 Digital Bazaar, Inc.</span>
+ <span class="s0">* Copyright (c) 2012 Stefan Siegl &lt;stesie@brokenpipe.de&gt;</span>
+ <span class="s0">*</span>
+ <span class="s0">* An EncryptedPrivateKeyInfo:</span>
+ <span class="s0">*</span>
+ <span class="s0">* EncryptedPrivateKeyInfo ::= SEQUENCE {</span>
+ <span class="s0">*   encryptionAlgorithm  EncryptionAlgorithmIdentifier,</span>
+ <span class="s0">*   encryptedData        EncryptedData }</span>
+ <span class="s0">*</span>
+ <span class="s0">* EncryptionAlgorithmIdentifier ::= AlgorithmIdentifier</span>
+ <span class="s0">*</span>
+ <span class="s0">* EncryptedData ::= OCTET STRING</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">forge </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s5">'./forge'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./aes'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./asn1'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./des'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./md'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./oids'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./pbkdf2'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./pem'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./random'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./rc2'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./rsa'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./util'</span><span class="s4">);</span>
+
+<span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">BigInteger </span><span class="s4">=== </span><span class="s5">'undefined'</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">BigInteger </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">jsbn</span><span class="s4">.</span><span class="s2">BigInteger</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s6">// shortcut for asn.1 API</span>
+<span class="s3">var </span><span class="s2">asn1 </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">;</span>
+
+<span class="s6">/* Password-based encryption implementation. */</span>
+<span class="s3">var </span><span class="s2">pki </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki </span><span class="s4">|| {};</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pbe </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pbe </span><span class="s4">|| {};</span>
+<span class="s3">var </span><span class="s2">oids </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">;</span>
+
+<span class="s6">// validator for an EncryptedPrivateKeyInfo structure</span>
+<span class="s6">// Note: Currently only works w/algorithm params</span>
+<span class="s3">var </span><span class="s2">encryptedPrivateKeyValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'EncryptedPrivateKeyInfo'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'EncryptedPrivateKeyInfo.encryptionAlgorithm'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">value</span><span class="s4">: [{</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'AlgorithmIdentifier.algorithm'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">capture</span><span class="s4">: </span><span class="s5">'encryptionOid'</span>
+    <span class="s4">}, {</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'AlgorithmIdentifier.parameters'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+      <span class="s2">captureAsn1</span><span class="s4">: </span><span class="s5">'encryptionParams'</span>
+    <span class="s4">}]</span>
+  <span class="s4">}, {</span>
+    <span class="s6">// encryptedData</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'EncryptedPrivateKeyInfo.encryptedData'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'encryptedData'</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s6">// validator for a PBES2Algorithms structure</span>
+<span class="s6">// Note: Currently only works w/PBKDF2 + AES encryption schemes</span>
+<span class="s3">var </span><span class="s2">PBES2AlgorithmsValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.keyDerivationFunc'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">value</span><span class="s4">: [{</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.keyDerivationFunc.oid'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">capture</span><span class="s4">: </span><span class="s5">'kdfOid'</span>
+    <span class="s4">}, {</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.params'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+      <span class="s2">value</span><span class="s4">: [{</span>
+        <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.params.salt'</span><span class="s4">,</span>
+        <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+        <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">capture</span><span class="s4">: </span><span class="s5">'kdfSalt'</span>
+      <span class="s4">}, {</span>
+        <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.params.iterationCount'</span><span class="s4">,</span>
+        <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">,</span>
+        <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">capture</span><span class="s4">: </span><span class="s5">'kdfIterationCount'</span>
+      <span class="s4">}, {</span>
+        <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.params.keyLength'</span><span class="s4">,</span>
+        <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">,</span>
+        <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">optional</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+        <span class="s2">capture</span><span class="s4">: </span><span class="s5">'keyLength'</span>
+      <span class="s4">}, {</span>
+        <span class="s6">// prf</span>
+        <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.params.prf'</span><span class="s4">,</span>
+        <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+        <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+        <span class="s2">optional</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+        <span class="s2">value</span><span class="s4">: [{</span>
+          <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.params.prf.algorithm'</span><span class="s4">,</span>
+          <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+          <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+          <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">capture</span><span class="s4">: </span><span class="s5">'prfOid'</span>
+        <span class="s4">}]</span>
+      <span class="s4">}]</span>
+    <span class="s4">}]</span>
+  <span class="s4">}, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.encryptionScheme'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">value</span><span class="s4">: [{</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.encryptionScheme.oid'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">capture</span><span class="s4">: </span><span class="s5">'encOid'</span>
+    <span class="s4">}, {</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'PBES2Algorithms.encryptionScheme.iv'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">capture</span><span class="s4">: </span><span class="s5">'encIv'</span>
+    <span class="s4">}]</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s3">var </span><span class="s2">pkcs12PbeParamsValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'pkcs-12PbeParams'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'pkcs-12PbeParams.salt'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'salt'</span>
+  <span class="s4">}, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'pkcs-12PbeParams.iterations'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'iterations'</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Encrypts a ASN.1 PrivateKeyInfo object, producing an EncryptedPrivateKeyInfo.</span>
+ <span class="s0">*</span>
+ <span class="s0">* PBES2Algorithms ALGORITHM-IDENTIFIER ::=</span>
+ <span class="s0">*   { {PBES2-params IDENTIFIED BY id-PBES2}, ...}</span>
+ <span class="s0">*</span>
+ <span class="s0">* id-PBES2 OBJECT IDENTIFIER ::= {pkcs-5 13}</span>
+ <span class="s0">*</span>
+ <span class="s0">* PBES2-params ::= SEQUENCE {</span>
+ <span class="s0">*   keyDerivationFunc AlgorithmIdentifier {{PBES2-KDFs}},</span>
+ <span class="s0">*   encryptionScheme AlgorithmIdentifier {{PBES2-Encs}}</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* PBES2-KDFs ALGORITHM-IDENTIFIER ::=</span>
+ <span class="s0">*   { {PBKDF2-params IDENTIFIED BY id-PBKDF2}, ... }</span>
+ <span class="s0">*</span>
+ <span class="s0">* PBES2-Encs ALGORITHM-IDENTIFIER ::= { ... }</span>
+ <span class="s0">*</span>
+ <span class="s0">* PBKDF2-params ::= SEQUENCE {</span>
+ <span class="s0">*   salt CHOICE {</span>
+ <span class="s0">*     specified OCTET STRING,</span>
+ <span class="s0">*     otherSource AlgorithmIdentifier {{PBKDF2-SaltSources}}</span>
+ <span class="s0">*   },</span>
+ <span class="s0">*   iterationCount INTEGER (1..MAX),</span>
+ <span class="s0">*   keyLength INTEGER (1..MAX) OPTIONAL,</span>
+ <span class="s0">*   prf AlgorithmIdentifier {{PBKDF2-PRFs}} DEFAULT algid-hmacWithSHA1</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the ASN.1 PrivateKeyInfo object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to encrypt with.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">options:</span>
+ <span class="s0">*          algorithm the encryption algorithm to use</span>
+ <span class="s0">*            ('aes128', 'aes192', 'aes256', '3des'), defaults to 'aes128'.</span>
+ <span class="s0">*          count the iteration count to use.</span>
+ <span class="s0">*          saltSize the salt size to use.</span>
+ <span class="s0">*          prfAlgorithm the PRF message digest algorithm to use</span>
+ <span class="s0">*            ('sha1', 'sha224', 'sha256', 'sha384', 'sha512')</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the ASN.1 EncryptedPrivateKeyInfo.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">encryptPrivateKeyInfo </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">password</span><span class="s4">, </span><span class="s2">options</span><span class="s4">) {</span>
+  <span class="s6">// set default options</span>
+  <span class="s2">options </span><span class="s4">= </span><span class="s2">options </span><span class="s4">|| {};</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">saltSize </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">saltSize </span><span class="s4">|| </span><span class="s7">8</span><span class="s4">;</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">count </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">count </span><span class="s4">|| </span><span class="s7">2048</span><span class="s4">;</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">|| </span><span class="s5">'aes128'</span><span class="s4">;</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">prfAlgorithm </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">prfAlgorithm </span><span class="s4">|| </span><span class="s5">'sha1'</span><span class="s4">;</span>
+
+  <span class="s6">// generate PBE params</span>
+  <span class="s3">var </span><span class="s2">salt </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytesSync</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">saltSize</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">count </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">count</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">countBytes </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">integerToDer</span><span class="s4">(</span><span class="s2">count</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">dkLen</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">encryptionAlgorithm</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">encryptedData</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">.</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s5">'aes'</span><span class="s4">) === </span><span class="s7">0 </span><span class="s4">|| </span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">=== </span><span class="s5">'des'</span><span class="s4">) {</span>
+    <span class="s6">// do PBES2</span>
+    <span class="s3">var </span><span class="s2">ivLen</span><span class="s4">, </span><span class="s2">encOid</span><span class="s4">, </span><span class="s2">cipherFn</span><span class="s4">;</span>
+    <span class="s3">switch</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">) {</span>
+    <span class="s3">case </span><span class="s5">'aes128'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+      <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+      <span class="s2">encOid </span><span class="s4">= </span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes128-CBC'</span><span class="s4">];</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'aes192'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+      <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+      <span class="s2">encOid </span><span class="s4">= </span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes192-CBC'</span><span class="s4">];</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'aes256'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">32</span><span class="s4">;</span>
+      <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+      <span class="s2">encOid </span><span class="s4">= </span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes256-CBC'</span><span class="s4">];</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'des'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+      <span class="s2">ivLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+      <span class="s2">encOid </span><span class="s4">= </span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'desCBC'</span><span class="s4">];</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">default</span><span class="s4">:</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot encrypt private key. Unknown encryption algorithm.'</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">;</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// get PRF message digest</span>
+    <span class="s3">var </span><span class="s2">prfAlgorithm </span><span class="s4">= </span><span class="s5">'hmacWith' </span><span class="s4">+ </span><span class="s2">options</span><span class="s4">.</span><span class="s2">prfAlgorithm</span><span class="s4">.</span><span class="s2">toUpperCase</span><span class="s4">();</span>
+    <span class="s3">var </span><span class="s2">md </span><span class="s4">= </span><span class="s2">prfAlgorithmToMessageDigest</span><span class="s4">(</span><span class="s2">prfAlgorithm</span><span class="s4">);</span>
+
+    <span class="s6">// encrypt private key using pbe SHA-1 and AES/DES</span>
+    <span class="s3">var </span><span class="s2">dk </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pkcs5</span><span class="s4">.</span><span class="s2">pbkdf2</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">, </span><span class="s2">count</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">, </span><span class="s2">md</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">iv </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytesSync</span><span class="s4">(</span><span class="s2">ivLen</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">cipherFn</span><span class="s4">(</span><span class="s2">dk</span><span class="s4">);</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">iv</span><span class="s4">);</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">));</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">();</span>
+    <span class="s2">encryptedData </span><span class="s4">= </span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">output</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">();</span>
+
+    <span class="s6">// get PBKDF2-params</span>
+    <span class="s3">var </span><span class="s2">params </span><span class="s4">= </span><span class="s2">createPbkdf2Params</span><span class="s4">(</span><span class="s2">salt</span><span class="s4">, </span><span class="s2">countBytes</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">, </span><span class="s2">prfAlgorithm</span><span class="s4">);</span>
+
+    <span class="s2">encryptionAlgorithm </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pkcs5PBES2'</span><span class="s4">]).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// keyDerivationFunc</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pkcs5PBKDF2'</span><span class="s4">]).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+          <span class="s6">// PBKDF2-params</span>
+          <span class="s2">params</span>
+        <span class="s4">]),</span>
+        <span class="s6">// encryptionScheme</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">encOid</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+          <span class="s6">// iv</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s2">iv</span><span class="s4">)</span>
+        <span class="s4">])</span>
+      <span class="s4">])</span>
+    <span class="s4">]);</span>
+  <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">=== </span><span class="s5">'3des'</span><span class="s4">) {</span>
+    <span class="s6">// Do PKCS12 PBE</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+
+    <span class="s3">var </span><span class="s2">saltBytes </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">(</span><span class="s2">salt</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">dk </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">generatePkcs12Key</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">saltBytes</span><span class="s4">, </span><span class="s7">1</span><span class="s4">, </span><span class="s2">count</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">iv </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">generatePkcs12Key</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">saltBytes</span><span class="s4">, </span><span class="s7">2</span><span class="s4">, </span><span class="s2">count</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">(</span><span class="s2">dk</span><span class="s4">);</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">iv</span><span class="s4">);</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">));</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">();</span>
+    <span class="s2">encryptedData </span><span class="s4">= </span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">output</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">();</span>
+
+    <span class="s2">encryptionAlgorithm </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pbeWithSHAAnd3-KeyTripleDES-CBC'</span><span class="s4">]).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+      <span class="s6">// pkcs-12PbeParams</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// salt</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">),</span>
+        <span class="s6">// iteration count</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">countBytes</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">())</span>
+      <span class="s4">])</span>
+    <span class="s4">]);</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot encrypt private key. Unknown encryption algorithm.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// EncryptedPrivateKeyInfo</span>
+  <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+    <span class="s6">// encryptionAlgorithm</span>
+    <span class="s2">encryptionAlgorithm</span><span class="s4">,</span>
+    <span class="s6">// encryptedData</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s2">encryptedData</span><span class="s4">)</span>
+  <span class="s4">]);</span>
+  <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decrypts a ASN.1 PrivateKeyInfo object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj the ASN.1 EncryptedPrivateKeyInfo object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to decrypt with.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the ASN.1 PrivateKeyInfo on success, null on failure.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">decryptPrivateKeyInfo </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+
+  <span class="s6">// get PBE params</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">encryptedPrivateKeyValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read encrypted private key. ' </span><span class="s4">+</span>
+      <span class="s5">'ASN.1 object is not a supported EncryptedPrivateKeyInfo.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// get cipher</span>
+  <span class="s3">var </span><span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptionOid</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">getCipher</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptionParams</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+
+  <span class="s6">// get encrypted data</span>
+  <span class="s3">var </span><span class="s2">encrypted </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedData</span><span class="s4">);</span>
+
+  <span class="s2">cipher</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">encrypted</span><span class="s4">);</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">()) {</span>
+    <span class="s2">rval </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">output</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a EncryptedPrivateKeyInfo to PEM format.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">epki the EncryptedPrivateKeyInfo.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">maxline the maximum characters per line, defaults to 64.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the PEM-formatted encrypted private key.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">encryptedPrivateKeyToPem </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">epki</span><span class="s4">, </span><span class="s2">maxline</span><span class="s4">) {</span>
+  <span class="s6">// convert to DER, then PEM-encode</span>
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s5">'ENCRYPTED PRIVATE KEY'</span><span class="s4">,</span>
+    <span class="s2">body</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">epki</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()</span>
+  <span class="s4">};</span>
+  <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pem</span><span class="s4">.</span><span class="s2">encode</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">, {</span><span class="s2">maxline</span><span class="s4">: </span><span class="s2">maxline</span><span class="s4">});</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a PEM-encoded EncryptedPrivateKeyInfo to ASN.1 format. Decryption</span>
+ <span class="s0">* is not performed.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">pem the EncryptedPrivateKeyInfo in PEM-format.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the ASN.1 EncryptedPrivateKeyInfo.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">encryptedPrivateKeyFromPem </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">pem</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pem</span><span class="s4">.</span><span class="s2">decode</span><span class="s4">(</span><span class="s2">pem</span><span class="s4">)[</span><span class="s7">0</span><span class="s4">];</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s5">'ENCRYPTED PRIVATE KEY'</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Could not convert encrypted private key from PEM; ' </span><span class="s4">+</span>
+      <span class="s5">'PEM header type is &quot;ENCRYPTED PRIVATE KEY&quot;.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">headerType </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">procType </span><span class="s4">&amp;&amp; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">procType</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s5">'ENCRYPTED'</span><span class="s4">) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Could not convert encrypted private key from PEM; ' </span><span class="s4">+</span>
+      <span class="s5">'PEM is encrypted.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// convert DER to ASN.1 object</span>
+  <span class="s3">return </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">body</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Encrypts an RSA private key. By default, the key will be wrapped in</span>
+ <span class="s0">* a PrivateKeyInfo and encrypted to produce a PKCS#8 EncryptedPrivateKeyInfo.</span>
+ <span class="s0">* This is the standard, preferred way to encrypt a private key.</span>
+ <span class="s0">*</span>
+ <span class="s0">* To produce a non-standard PEM-encrypted private key that uses encapsulated</span>
+ <span class="s0">* headers to indicate the encryption algorithm (old-style non-PKCS#8 OpenSSL</span>
+ <span class="s0">* private key encryption), set the 'legacy' option to true. Note: Using this</span>
+ <span class="s0">* option will cause the iteration count to be forced to 1.</span>
+ <span class="s0">*</span>
+ <span class="s0">* Note: The 'des' algorithm is supported, but it is not considered to be</span>
+ <span class="s0">* secure because it only uses a single 56-bit key. If possible, it is highly</span>
+ <span class="s0">* recommended that a different algorithm be used.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">rsaKey the RSA key to encrypt.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to use.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">options:</span>
+ <span class="s0">*          algorithm: the encryption algorithm to use</span>
+ <span class="s0">*            ('aes128', 'aes192', 'aes256', '3des', 'des').</span>
+ <span class="s0">*          count: the iteration count to use.</span>
+ <span class="s0">*          saltSize: the salt size to use.</span>
+ <span class="s0">*          legacy: output an old non-PKCS#8 PEM-encrypted+encapsulated</span>
+ <span class="s0">*            headers (DEK-Info) private key.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the PEM-encoded ASN.1 EncryptedPrivateKeyInfo.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">encryptRsaPrivateKey </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">rsaKey</span><span class="s4">, </span><span class="s2">password</span><span class="s4">, </span><span class="s2">options</span><span class="s4">) {</span>
+  <span class="s6">// standard PKCS#8</span>
+  <span class="s2">options </span><span class="s4">= </span><span class="s2">options </span><span class="s4">|| {};</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">options</span><span class="s4">.</span><span class="s2">legacy</span><span class="s4">) {</span>
+    <span class="s6">// encrypt PrivateKeyInfo</span>
+    <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">wrapRsaPrivateKey</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">privateKeyToAsn1</span><span class="s4">(</span><span class="s2">rsaKey</span><span class="s4">));</span>
+    <span class="s2">rval </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">encryptPrivateKeyInfo</span><span class="s4">(</span><span class="s2">rval</span><span class="s4">, </span><span class="s2">password</span><span class="s4">, </span><span class="s2">options</span><span class="s4">);</span>
+    <span class="s3">return </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">encryptedPrivateKeyToPem</span><span class="s4">(</span><span class="s2">rval</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// legacy non-PKCS#8</span>
+  <span class="s3">var </span><span class="s2">algorithm</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">iv</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">dkLen</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">cipherFn</span><span class="s4">;</span>
+  <span class="s3">switch</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">) {</span>
+  <span class="s3">case </span><span class="s5">'aes128'</span><span class="s4">:</span>
+    <span class="s2">algorithm </span><span class="s4">= </span><span class="s5">'AES-128-CBC'</span><span class="s4">;</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+    <span class="s2">iv </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytesSync</span><span class="s4">(</span><span class="s7">16</span><span class="s4">);</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'aes192'</span><span class="s4">:</span>
+    <span class="s2">algorithm </span><span class="s4">= </span><span class="s5">'AES-192-CBC'</span><span class="s4">;</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+    <span class="s2">iv </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytesSync</span><span class="s4">(</span><span class="s7">16</span><span class="s4">);</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'aes256'</span><span class="s4">:</span>
+    <span class="s2">algorithm </span><span class="s4">= </span><span class="s5">'AES-256-CBC'</span><span class="s4">;</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">32</span><span class="s4">;</span>
+    <span class="s2">iv </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytesSync</span><span class="s4">(</span><span class="s7">16</span><span class="s4">);</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'3des'</span><span class="s4">:</span>
+    <span class="s2">algorithm </span><span class="s4">= </span><span class="s5">'DES-EDE3-CBC'</span><span class="s4">;</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+    <span class="s2">iv </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytesSync</span><span class="s4">(</span><span class="s7">8</span><span class="s4">);</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'des'</span><span class="s4">:</span>
+    <span class="s2">algorithm </span><span class="s4">= </span><span class="s5">'DES-CBC'</span><span class="s4">;</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+    <span class="s2">iv </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytesSync</span><span class="s4">(</span><span class="s7">8</span><span class="s4">);</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createEncryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">default</span><span class="s4">:</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Could not encrypt RSA private key; unsupported ' </span><span class="s4">+</span>
+      <span class="s5">'encryption algorithm &quot;' </span><span class="s4">+ </span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">+ </span><span class="s5">'&quot;.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// encrypt private key using OpenSSL legacy key derivation</span>
+  <span class="s3">var </span><span class="s2">dk </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">opensslDeriveBytes</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">iv</span><span class="s4">.</span><span class="s2">substr</span><span class="s4">(</span><span class="s7">0</span><span class="s4">, </span><span class="s7">8</span><span class="s4">), </span><span class="s2">dkLen</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">cipherFn</span><span class="s4">(</span><span class="s2">dk</span><span class="s4">);</span>
+  <span class="s2">cipher</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">iv</span><span class="s4">);</span>
+  <span class="s2">cipher</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">privateKeyToAsn1</span><span class="s4">(</span><span class="s2">rsaKey</span><span class="s4">)));</span>
+  <span class="s2">cipher</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">();</span>
+
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= {</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s5">'RSA PRIVATE KEY'</span><span class="s4">,</span>
+    <span class="s2">procType</span><span class="s4">: {</span>
+      <span class="s2">version</span><span class="s4">: </span><span class="s5">'4'</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s5">'ENCRYPTED'</span>
+    <span class="s4">},</span>
+    <span class="s2">dekInfo</span><span class="s4">: {</span>
+      <span class="s2">algorithm</span><span class="s4">: </span><span class="s2">algorithm</span><span class="s4">,</span>
+      <span class="s2">parameters</span><span class="s4">: </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">bytesToHex</span><span class="s4">(</span><span class="s2">iv</span><span class="s4">).</span><span class="s2">toUpperCase</span><span class="s4">()</span>
+    <span class="s4">},</span>
+    <span class="s2">body</span><span class="s4">: </span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">output</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">()</span>
+  <span class="s4">};</span>
+  <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pem</span><span class="s4">.</span><span class="s2">encode</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decrypts an RSA private key.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">pem the PEM-formatted EncryptedPrivateKeyInfo to decrypt.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to use.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the RSA key on success, null on failure.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">decryptRsaPrivateKey </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">pem</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+
+  <span class="s3">var </span><span class="s2">msg </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pem</span><span class="s4">.</span><span class="s2">decode</span><span class="s4">(</span><span class="s2">pem</span><span class="s4">)[</span><span class="s7">0</span><span class="s4">];</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s5">'ENCRYPTED PRIVATE KEY' </span><span class="s4">&amp;&amp;</span>
+    <span class="s2">msg</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s5">'PRIVATE KEY' </span><span class="s4">&amp;&amp;</span>
+    <span class="s2">msg</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s5">'RSA PRIVATE KEY'</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Could not convert private key from PEM; PEM header type ' </span><span class="s4">+</span>
+      <span class="s5">'is not &quot;ENCRYPTED PRIVATE KEY&quot;, &quot;PRIVATE KEY&quot;, or &quot;RSA PRIVATE KEY&quot;.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">headerType </span><span class="s4">= </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">procType </span><span class="s4">&amp;&amp; </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">procType</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s5">'ENCRYPTED'</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">dkLen</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">cipherFn</span><span class="s4">;</span>
+    <span class="s3">switch</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">dekInfo</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">) {</span>
+    <span class="s3">case </span><span class="s5">'DES-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'DES-EDE3-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'AES-128-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'AES-192-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'AES-256-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">32</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'RC2-40-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">5</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">key</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">rc2</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s7">40</span><span class="s4">);</span>
+      <span class="s4">};</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'RC2-64-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">key</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">rc2</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s7">64</span><span class="s4">);</span>
+      <span class="s4">};</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s5">'RC2-128-CBC'</span><span class="s4">:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">key</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">rc2</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s7">128</span><span class="s4">);</span>
+      <span class="s4">};</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">default</span><span class="s4">:</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Could not decrypt private key; unsupported ' </span><span class="s4">+</span>
+        <span class="s5">'encryption algorithm &quot;' </span><span class="s4">+ </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">dekInfo</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">+ </span><span class="s5">'&quot;.'</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">dekInfo</span><span class="s4">.</span><span class="s2">algorithm</span><span class="s4">;</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// use OpenSSL legacy key derivation</span>
+    <span class="s3">var </span><span class="s2">iv </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">hexToBytes</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">dekInfo</span><span class="s4">.</span><span class="s2">parameters</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">dk </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">opensslDeriveBytes</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">iv</span><span class="s4">.</span><span class="s2">substr</span><span class="s4">(</span><span class="s7">0</span><span class="s4">, </span><span class="s7">8</span><span class="s4">), </span><span class="s2">dkLen</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">cipherFn</span><span class="s4">(</span><span class="s2">dk</span><span class="s4">);</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">iv</span><span class="s4">);</span>
+    <span class="s2">cipher</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">body</span><span class="s4">));</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">()) {</span>
+      <span class="s2">rval </span><span class="s4">= </span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">output</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">();</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s2">rval </span><span class="s4">= </span><span class="s2">msg</span><span class="s4">.</span><span class="s2">body</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">msg</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s5">'ENCRYPTED PRIVATE KEY'</span><span class="s4">) {</span>
+    <span class="s2">rval </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">decryptPrivateKeyInfo</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">rval</span><span class="s4">), </span><span class="s2">password</span><span class="s4">);</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s6">// decryption already performed above</span>
+    <span class="s2">rval </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">rval</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">rval </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s2">rval </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">privateKeyFromAsn1</span><span class="s4">(</span><span class="s2">rval</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Derives a PKCS#12 key.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to derive the key material from, null or</span>
+ <span class="s0">*          undefined for none.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">salt the salt, as a ByteBuffer, to use.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">id the PKCS#12 ID byte (1 = key material, 2 = IV, 3 = MAC).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">iter the iteration count.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">n the number of bytes to derive from the password.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">md the message digest to use, defaults to SHA-1.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">a ByteBuffer with the bytes derived from the password.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">generatePkcs12Key </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">, </span><span class="s2">id</span><span class="s4">, </span><span class="s2">iter</span><span class="s4">, </span><span class="s2">n</span><span class="s4">, </span><span class="s2">md</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">j</span><span class="s4">, </span><span class="s2">l</span><span class="s4">;</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">md </span><span class="s4">=== </span><span class="s5">'undefined' </span><span class="s4">|| </span><span class="s2">md </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s3">if</span><span class="s4">(!(</span><span class="s5">'sha1' </span><span class="s3">in </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">)) {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'&quot;sha1&quot; hash algorithm unavailable.'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">u </span><span class="s4">= </span><span class="s2">md</span><span class="s4">.</span><span class="s2">digestLength</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">v </span><span class="s4">= </span><span class="s2">md</span><span class="s4">.</span><span class="s2">blockLength</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">result </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+
+  <span class="s6">/* Convert password to Unicode byte buffer + trailing 0-byte. */</span>
+  <span class="s3">var </span><span class="s2">passBuf </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">password </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">password </span><span class="s4">!== </span><span class="s2">undefined</span><span class="s4">) {</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s2">l </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">l </span><span class="s4">&lt; </span><span class="s2">password</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; </span><span class="s2">l</span><span class="s4">++) {</span>
+      <span class="s2">passBuf</span><span class="s4">.</span><span class="s2">putInt16</span><span class="s4">(</span><span class="s2">password</span><span class="s4">.</span><span class="s2">charCodeAt</span><span class="s4">(</span><span class="s2">l</span><span class="s4">));</span>
+    <span class="s4">}</span>
+    <span class="s2">passBuf</span><span class="s4">.</span><span class="s2">putInt16</span><span class="s4">(</span><span class="s7">0</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">/* Length of salt and password in BYTES. */</span>
+  <span class="s3">var </span><span class="s2">p </span><span class="s4">= </span><span class="s2">passBuf</span><span class="s4">.</span><span class="s2">length</span><span class="s4">();</span>
+  <span class="s3">var </span><span class="s2">s </span><span class="s4">= </span><span class="s2">salt</span><span class="s4">.</span><span class="s2">length</span><span class="s4">();</span>
+
+  <span class="s6">/* 1. Construct a string, D (the &quot;diversifier&quot;), by concatenating 
+        v copies of ID. */</span>
+  <span class="s3">var </span><span class="s2">D </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+  <span class="s2">D</span><span class="s4">.</span><span class="s2">fillWithByte</span><span class="s4">(</span><span class="s2">id</span><span class="s4">, </span><span class="s2">v</span><span class="s4">);</span>
+
+  <span class="s6">/* 2. Concatenate copies of the salt together to create a string S of length 
+        v * ceil(s / v) bytes (the final copy of the salt may be trunacted 
+        to create S). 
+        Note that if the salt is the empty string, then so is S. */</span>
+  <span class="s3">var </span><span class="s2">Slen </span><span class="s4">= </span><span class="s2">v </span><span class="s4">* </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">ceil</span><span class="s4">(</span><span class="s2">s </span><span class="s4">/ </span><span class="s2">v</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">S </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s2">l </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">l </span><span class="s4">&lt; </span><span class="s2">Slen</span><span class="s4">; </span><span class="s2">l</span><span class="s4">++) {</span>
+    <span class="s2">S</span><span class="s4">.</span><span class="s2">putByte</span><span class="s4">(</span><span class="s2">salt</span><span class="s4">.</span><span class="s2">at</span><span class="s4">(</span><span class="s2">l </span><span class="s4">% </span><span class="s2">s</span><span class="s4">));</span>
+  <span class="s4">}</span>
+
+  <span class="s6">/* 3. Concatenate copies of the password together to create a string P of 
+        length v * ceil(p / v) bytes (the final copy of the password may be 
+        truncated to create P). 
+        Note that if the password is the empty string, then so is P. */</span>
+  <span class="s3">var </span><span class="s2">Plen </span><span class="s4">= </span><span class="s2">v </span><span class="s4">* </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">ceil</span><span class="s4">(</span><span class="s2">p </span><span class="s4">/ </span><span class="s2">v</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">P </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s2">l </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">l </span><span class="s4">&lt; </span><span class="s2">Plen</span><span class="s4">; </span><span class="s2">l</span><span class="s4">++) {</span>
+    <span class="s2">P</span><span class="s4">.</span><span class="s2">putByte</span><span class="s4">(</span><span class="s2">passBuf</span><span class="s4">.</span><span class="s2">at</span><span class="s4">(</span><span class="s2">l </span><span class="s4">% </span><span class="s2">p</span><span class="s4">));</span>
+  <span class="s4">}</span>
+
+  <span class="s6">/* 4. Set I=S||P to be the concatenation of S and P. */</span>
+  <span class="s3">var </span><span class="s2">I </span><span class="s4">= </span><span class="s2">S</span><span class="s4">;</span>
+  <span class="s2">I</span><span class="s4">.</span><span class="s2">putBuffer</span><span class="s4">(</span><span class="s2">P</span><span class="s4">);</span>
+
+  <span class="s6">/* 5. Set c=ceil(n / u). */</span>
+  <span class="s3">var </span><span class="s2">c </span><span class="s4">= </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">ceil</span><span class="s4">(</span><span class="s2">n </span><span class="s4">/ </span><span class="s2">u</span><span class="s4">);</span>
+
+  <span class="s6">/* 6. For i=1, 2, ..., c, do the following: */</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">1</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt;= </span><span class="s2">c</span><span class="s4">; </span><span class="s2">i</span><span class="s4">++) {</span>
+    <span class="s6">/* a) Set Ai=H^r(D||I). (l.e. the rth hash of D||I, H(H(H(...H(D||I)))) */</span>
+    <span class="s3">var </span><span class="s2">buf </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+    <span class="s2">buf</span><span class="s4">.</span><span class="s2">putBytes</span><span class="s4">(</span><span class="s2">D</span><span class="s4">.</span><span class="s2">bytes</span><span class="s4">());</span>
+    <span class="s2">buf</span><span class="s4">.</span><span class="s2">putBytes</span><span class="s4">(</span><span class="s2">I</span><span class="s4">.</span><span class="s2">bytes</span><span class="s4">());</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">round </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">round </span><span class="s4">&lt; </span><span class="s2">iter</span><span class="s4">; </span><span class="s2">round</span><span class="s4">++) {</span>
+      <span class="s2">md</span><span class="s4">.</span><span class="s2">start</span><span class="s4">();</span>
+      <span class="s2">md</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">buf</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">());</span>
+      <span class="s2">buf </span><span class="s4">= </span><span class="s2">md</span><span class="s4">.</span><span class="s2">digest</span><span class="s4">();</span>
+    <span class="s4">}</span>
+
+    <span class="s6">/* b) Concatenate copies of Ai to create a string B of length v bytes (the 
+          final copy of Ai may be truncated to create B). */</span>
+    <span class="s3">var </span><span class="s2">B </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s2">l </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">l </span><span class="s4">&lt; </span><span class="s2">v</span><span class="s4">; </span><span class="s2">l</span><span class="s4">++) {</span>
+      <span class="s2">B</span><span class="s4">.</span><span class="s2">putByte</span><span class="s4">(</span><span class="s2">buf</span><span class="s4">.</span><span class="s2">at</span><span class="s4">(</span><span class="s2">l </span><span class="s4">% </span><span class="s2">u</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s6">/* c) Treating I as a concatenation I0, I1, ..., Ik-1 of v-byte blocks, 
+          where k=ceil(s / v) + ceil(p / v), modify I by setting 
+          Ij=(Ij+B+1) mod 2v for each j.  */</span>
+    <span class="s3">var </span><span class="s2">k </span><span class="s4">= </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">ceil</span><span class="s4">(</span><span class="s2">s </span><span class="s4">/ </span><span class="s2">v</span><span class="s4">) + </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">ceil</span><span class="s4">(</span><span class="s2">p </span><span class="s4">/ </span><span class="s2">v</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">Inew </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">();</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s2">j </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">j </span><span class="s4">&lt; </span><span class="s2">k</span><span class="s4">; </span><span class="s2">j</span><span class="s4">++) {</span>
+      <span class="s3">var </span><span class="s2">chunk </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">(</span><span class="s2">I</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">v</span><span class="s4">));</span>
+      <span class="s3">var </span><span class="s2">x </span><span class="s4">= </span><span class="s7">0x1ff</span><span class="s4">;</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s2">l </span><span class="s4">= </span><span class="s2">B</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() - </span><span class="s7">1</span><span class="s4">; </span><span class="s2">l </span><span class="s4">&gt;= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">l</span><span class="s4">--) {</span>
+        <span class="s2">x </span><span class="s4">= </span><span class="s2">x </span><span class="s4">&gt;&gt; </span><span class="s7">8</span><span class="s4">;</span>
+        <span class="s2">x </span><span class="s4">+= </span><span class="s2">B</span><span class="s4">.</span><span class="s2">at</span><span class="s4">(</span><span class="s2">l</span><span class="s4">) + </span><span class="s2">chunk</span><span class="s4">.</span><span class="s2">at</span><span class="s4">(</span><span class="s2">l</span><span class="s4">);</span>
+        <span class="s2">chunk</span><span class="s4">.</span><span class="s2">setAt</span><span class="s4">(</span><span class="s2">l</span><span class="s4">, </span><span class="s2">x </span><span class="s4">&amp; </span><span class="s7">0xff</span><span class="s4">);</span>
+      <span class="s4">}</span>
+      <span class="s2">Inew</span><span class="s4">.</span><span class="s2">putBuffer</span><span class="s4">(</span><span class="s2">chunk</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s2">I </span><span class="s4">= </span><span class="s2">Inew</span><span class="s4">;</span>
+
+    <span class="s6">/* Add Ai to A. */</span>
+    <span class="s2">result</span><span class="s4">.</span><span class="s2">putBuffer</span><span class="s4">(</span><span class="s2">buf</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s2">result</span><span class="s4">.</span><span class="s2">truncate</span><span class="s4">(</span><span class="s2">result</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() - </span><span class="s2">n</span><span class="s4">);</span>
+  <span class="s3">return </span><span class="s2">result</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Get new Forge cipher object instance.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">oid the OID (in string notation).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">params the ASN.1 params object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to decrypt with.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">new cipher object instance.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">getCipher </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">, </span><span class="s2">params</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s3">switch</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">) {</span>
+  <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pkcs5PBES2'</span><span class="s4">]:</span>
+    <span class="s3">return </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">getCipherForPBES2</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">, </span><span class="s2">params</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+
+  <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pbeWithSHAAnd3-KeyTripleDES-CBC'</span><span class="s4">]:</span>
+  <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pbewithSHAAnd40BitRC2-CBC'</span><span class="s4">]:</span>
+    <span class="s3">return </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">getCipherForPKCS12PBE</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">, </span><span class="s2">params</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+
+  <span class="s3">default</span><span class="s4">:</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read encrypted PBE data block. Unsupported OID.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">oid</span><span class="s4">;</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">supportedOids </span><span class="s4">= [</span>
+      <span class="s5">'pkcs5PBES2'</span><span class="s4">,</span>
+      <span class="s5">'pbeWithSHAAnd3-KeyTripleDES-CBC'</span><span class="s4">,</span>
+      <span class="s5">'pbewithSHAAnd40BitRC2-CBC'</span>
+    <span class="s4">];</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Get new Forge cipher object instance according to PBES2 params block.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The returned cipher instance is already started using the IV</span>
+ <span class="s0">* from PBES2 parameter block.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">oid the PKCS#5 PBKDF2 OID (in string notation).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">params the ASN.1 PBES2-params object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to decrypt with.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">new cipher object instance.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">getCipherForPBES2 </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">, </span><span class="s2">params</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s6">// get PBE params</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">params</span><span class="s4">, </span><span class="s2">PBES2AlgorithmsValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read password-based-encryption algorithm ' </span><span class="s4">+</span>
+      <span class="s5">'parameters. ASN.1 object is not a supported EncryptedPrivateKeyInfo.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// check oids</span>
+  <span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">kdfOid</span><span class="s4">);</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">oid </span><span class="s4">!== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pkcs5PBKDF2'</span><span class="s4">]) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read encrypted private key. ' </span><span class="s4">+</span>
+      <span class="s5">'Unsupported key derivation function OID.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">oid</span><span class="s4">;</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">supportedOids </span><span class="s4">= [</span><span class="s5">'pkcs5PBKDF2'</span><span class="s4">];</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+  <span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encOid</span><span class="s4">);</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">oid </span><span class="s4">!== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes128-CBC'</span><span class="s4">] &amp;&amp;</span>
+    <span class="s2">oid </span><span class="s4">!== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes192-CBC'</span><span class="s4">] &amp;&amp;</span>
+    <span class="s2">oid </span><span class="s4">!== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'aes256-CBC'</span><span class="s4">] &amp;&amp;</span>
+    <span class="s2">oid </span><span class="s4">!== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'des-EDE3-CBC'</span><span class="s4">] &amp;&amp;</span>
+    <span class="s2">oid </span><span class="s4">!== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'desCBC'</span><span class="s4">]) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read encrypted private key. ' </span><span class="s4">+</span>
+      <span class="s5">'Unsupported encryption scheme OID.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">oid</span><span class="s4">;</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">supportedOids </span><span class="s4">= [</span>
+      <span class="s5">'aes128-CBC'</span><span class="s4">, </span><span class="s5">'aes192-CBC'</span><span class="s4">, </span><span class="s5">'aes256-CBC'</span><span class="s4">, </span><span class="s5">'des-EDE3-CBC'</span><span class="s4">, </span><span class="s5">'desCBC'</span><span class="s4">];</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// set PBE params</span>
+  <span class="s3">var </span><span class="s2">salt </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">kdfSalt</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">count </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">kdfIterationCount</span><span class="s4">);</span>
+  <span class="s2">count </span><span class="s4">= </span><span class="s2">count</span><span class="s4">.</span><span class="s2">getInt</span><span class="s4">(</span><span class="s2">count</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &lt;&lt; </span><span class="s7">3</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">dkLen</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">cipherFn</span><span class="s4">;</span>
+  <span class="s3">switch</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">]) {</span>
+  <span class="s3">case </span><span class="s5">'aes128-CBC'</span><span class="s4">:</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'aes192-CBC'</span><span class="s4">:</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'aes256-CBC'</span><span class="s4">:</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">32</span><span class="s4">;</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">aes</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'des-EDE3-CBC'</span><span class="s4">:</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'desCBC'</span><span class="s4">:</span>
+    <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+    <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">;</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// get PRF message digest</span>
+  <span class="s3">var </span><span class="s2">md </span><span class="s4">= </span><span class="s2">prfOidToMessageDigest</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">prfOid</span><span class="s4">);</span>
+
+  <span class="s6">// decrypt private key using pbe with chosen PRF and AES/DES</span>
+  <span class="s3">var </span><span class="s2">dk </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pkcs5</span><span class="s4">.</span><span class="s2">pbkdf2</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">, </span><span class="s2">count</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">, </span><span class="s2">md</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">iv </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encIv</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">cipherFn</span><span class="s4">(</span><span class="s2">dk</span><span class="s4">);</span>
+  <span class="s2">cipher</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">iv</span><span class="s4">);</span>
+
+  <span class="s3">return </span><span class="s2">cipher</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Get new Forge cipher object instance for PKCS#12 PBE.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The returned cipher instance is already started using the key &amp; IV</span>
+ <span class="s0">* derived from the provided password and PKCS#12 PBE salt.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">oid The PKCS#12 PBE OID (in string notation).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">params The ASN.1 PKCS#12 PBE-params object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password The password to decrypt with.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the new cipher object instance.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">getCipherForPKCS12PBE </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">, </span><span class="s2">params</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s6">// get PBE params</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">params</span><span class="s4">, </span><span class="s2">pkcs12PbeParamsValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read password-based-encryption algorithm ' </span><span class="s4">+</span>
+      <span class="s5">'parameters. ASN.1 object is not a supported EncryptedPrivateKeyInfo.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">salt </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">salt</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">count </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">iterations</span><span class="s4">);</span>
+  <span class="s2">count </span><span class="s4">= </span><span class="s2">count</span><span class="s4">.</span><span class="s2">getInt</span><span class="s4">(</span><span class="s2">count</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &lt;&lt; </span><span class="s7">3</span><span class="s4">);</span>
+
+  <span class="s3">var </span><span class="s2">dkLen</span><span class="s4">, </span><span class="s2">dIvLen</span><span class="s4">, </span><span class="s2">cipherFn</span><span class="s4">;</span>
+  <span class="s3">switch</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">) {</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pbeWithSHAAnd3-KeyTripleDES-CBC'</span><span class="s4">]:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">24</span><span class="s4">;</span>
+      <span class="s2">dIvLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">des</span><span class="s4">.</span><span class="s2">startDecrypting</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s5">'pbewithSHAAnd40BitRC2-CBC'</span><span class="s4">]:</span>
+      <span class="s2">dkLen </span><span class="s4">= </span><span class="s7">5</span><span class="s4">;</span>
+      <span class="s2">dIvLen </span><span class="s4">= </span><span class="s7">8</span><span class="s4">;</span>
+      <span class="s2">cipherFn </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s2">iv</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">rc2</span><span class="s4">.</span><span class="s2">createDecryptionCipher</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s7">40</span><span class="s4">);</span>
+        <span class="s2">cipher</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">iv</span><span class="s4">, </span><span class="s3">null</span><span class="s4">);</span>
+        <span class="s3">return </span><span class="s2">cipher</span><span class="s4">;</span>
+      <span class="s4">};</span>
+      <span class="s3">break</span><span class="s4">;</span>
+
+    <span class="s3">default</span><span class="s4">:</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS #12 PBE data block. Unsupported OID.'</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">oid</span><span class="s4">;</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// get PRF message digest</span>
+  <span class="s3">var </span><span class="s2">md </span><span class="s4">= </span><span class="s2">prfOidToMessageDigest</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">prfOid</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">key </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">generatePkcs12Key</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">, </span><span class="s7">1</span><span class="s4">, </span><span class="s2">count</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">, </span><span class="s2">md</span><span class="s4">);</span>
+  <span class="s2">md</span><span class="s4">.</span><span class="s2">start</span><span class="s4">();</span>
+  <span class="s3">var </span><span class="s2">iv </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">generatePkcs12Key</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">, </span><span class="s7">2</span><span class="s4">, </span><span class="s2">count</span><span class="s4">, </span><span class="s2">dIvLen</span><span class="s4">, </span><span class="s2">md</span><span class="s4">);</span>
+
+  <span class="s3">return </span><span class="s2">cipherFn</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s2">iv</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* OpenSSL's legacy key derivation function.</span>
+ <span class="s0">*</span>
+ <span class="s0">* See: http://www.openssl.org/docs/crypto/EVP_BytesToKey.html</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to derive the key from.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">salt the salt to use, null for none.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">dkLen the number of bytes needed for the derived key.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">[options] the options to use:</span>
+ <span class="s0">*          [md] an optional message digest object to use.</span>
+ <span class="s0">*/</span>
+<span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">opensslDeriveBytes </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">, </span><span class="s2">md</span><span class="s4">) {</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">md </span><span class="s4">=== </span><span class="s5">'undefined' </span><span class="s4">|| </span><span class="s2">md </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s3">if</span><span class="s4">(!(</span><span class="s5">'md5' </span><span class="s3">in </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">)) {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'&quot;md5&quot; hash algorithm unavailable.'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">md5</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+  <span class="s4">}</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">salt </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s2">salt </span><span class="s4">= </span><span class="s5">''</span><span class="s4">;</span>
+  <span class="s4">}</span>
+  <span class="s3">var </span><span class="s2">digests </span><span class="s4">= [</span><span class="s2">hash</span><span class="s4">(</span><span class="s2">md</span><span class="s4">, </span><span class="s2">password </span><span class="s4">+ </span><span class="s2">salt</span><span class="s4">)];</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">length </span><span class="s4">= </span><span class="s7">16</span><span class="s4">, </span><span class="s2">i </span><span class="s4">= </span><span class="s7">1</span><span class="s4">; </span><span class="s2">length </span><span class="s4">&lt; </span><span class="s2">dkLen</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">, </span><span class="s2">length </span><span class="s4">+= </span><span class="s7">16</span><span class="s4">) {</span>
+    <span class="s2">digests</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">hash</span><span class="s4">(</span><span class="s2">md</span><span class="s4">, </span><span class="s2">digests</span><span class="s4">[</span><span class="s2">i </span><span class="s4">- </span><span class="s7">1</span><span class="s4">] + </span><span class="s2">password </span><span class="s4">+ </span><span class="s2">salt</span><span class="s4">));</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">digests</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s5">''</span><span class="s4">).</span><span class="s2">substr</span><span class="s4">(</span><span class="s7">0</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s3">function </span><span class="s2">hash</span><span class="s4">(</span><span class="s2">md</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">) {</span>
+  <span class="s3">return </span><span class="s2">md</span><span class="s4">.</span><span class="s2">start</span><span class="s4">().</span><span class="s2">update</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">).</span><span class="s2">digest</span><span class="s4">().</span><span class="s2">getBytes</span><span class="s4">();</span>
+<span class="s4">}</span>
+
+<span class="s3">function </span><span class="s2">prfOidToMessageDigest</span><span class="s4">(</span><span class="s2">prfOid</span><span class="s4">) {</span>
+  <span class="s6">// get PRF algorithm, default to SHA-1</span>
+  <span class="s3">var </span><span class="s2">prfAlgorithm</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">prfOid</span><span class="s4">) {</span>
+    <span class="s2">prfAlgorithm </span><span class="s4">= </span><span class="s5">'hmacWithSHA1'</span><span class="s4">;</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s2">prfAlgorithm </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">prfOid</span><span class="s4">)];</span>
+    <span class="s3">if</span><span class="s4">(!</span><span class="s2">prfAlgorithm</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported PRF OID.'</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">prfOid</span><span class="s4">;</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">supported </span><span class="s4">= [</span>
+        <span class="s5">'hmacWithSHA1'</span><span class="s4">, </span><span class="s5">'hmacWithSHA224'</span><span class="s4">, </span><span class="s5">'hmacWithSHA256'</span><span class="s4">, </span><span class="s5">'hmacWithSHA384'</span><span class="s4">,</span>
+        <span class="s5">'hmacWithSHA512'</span><span class="s4">];</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">prfAlgorithmToMessageDigest</span><span class="s4">(</span><span class="s2">prfAlgorithm</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s3">function </span><span class="s2">prfAlgorithmToMessageDigest</span><span class="s4">(</span><span class="s2">prfAlgorithm</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">factory </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">;</span>
+  <span class="s3">switch</span><span class="s4">(</span><span class="s2">prfAlgorithm</span><span class="s4">) {</span>
+  <span class="s3">case </span><span class="s5">'hmacWithSHA224'</span><span class="s4">:</span>
+    <span class="s2">factory </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha512</span><span class="s4">;</span>
+  <span class="s3">case </span><span class="s5">'hmacWithSHA1'</span><span class="s4">:</span>
+  <span class="s3">case </span><span class="s5">'hmacWithSHA256'</span><span class="s4">:</span>
+  <span class="s3">case </span><span class="s5">'hmacWithSHA384'</span><span class="s4">:</span>
+  <span class="s3">case </span><span class="s5">'hmacWithSHA512'</span><span class="s4">:</span>
+    <span class="s2">prfAlgorithm </span><span class="s4">= </span><span class="s2">prfAlgorithm</span><span class="s4">.</span><span class="s2">substr</span><span class="s4">(</span><span class="s7">8</span><span class="s4">).</span><span class="s2">toLowerCase</span><span class="s4">();</span>
+    <span class="s3">break</span><span class="s4">;</span>
+  <span class="s3">default</span><span class="s4">:</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported PRF algorithm.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">prfAlgorithm</span><span class="s4">;</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">supported </span><span class="s4">= [</span>
+      <span class="s5">'hmacWithSHA1'</span><span class="s4">, </span><span class="s5">'hmacWithSHA224'</span><span class="s4">, </span><span class="s5">'hmacWithSHA256'</span><span class="s4">, </span><span class="s5">'hmacWithSHA384'</span><span class="s4">,</span>
+      <span class="s5">'hmacWithSHA512'</span><span class="s4">];</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">factory </span><span class="s4">|| !(</span><span class="s2">prfAlgorithm </span><span class="s3">in </span><span class="s2">factory</span><span class="s4">)) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unknown hash algorithm: ' </span><span class="s4">+ </span><span class="s2">prfAlgorithm</span><span class="s4">);</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">factory</span><span class="s4">[</span><span class="s2">prfAlgorithm</span><span class="s4">].</span><span class="s2">create</span><span class="s4">();</span>
+<span class="s4">}</span>
+
+<span class="s3">function </span><span class="s2">createPbkdf2Params</span><span class="s4">(</span><span class="s2">salt</span><span class="s4">, </span><span class="s2">countBytes</span><span class="s4">, </span><span class="s2">dkLen</span><span class="s4">, </span><span class="s2">prfAlgorithm</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">params </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+    <span class="s6">// salt</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s2">salt</span><span class="s4">),</span>
+    <span class="s6">// iteration count</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">countBytes</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">())</span>
+  <span class="s4">]);</span>
+  <span class="s6">// when PRF algorithm is not SHA-1 default, add key length and PRF algorithm</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">prfAlgorithm </span><span class="s4">!== </span><span class="s5">'hmacWithSHA1'</span><span class="s4">) {</span>
+    <span class="s2">params</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+      <span class="s6">// key length</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">hexToBytes</span><span class="s4">(</span><span class="s2">dkLen</span><span class="s4">.</span><span class="s2">toString</span><span class="s4">(</span><span class="s7">16</span><span class="s4">))),</span>
+      <span class="s6">// AlgorithmIdentifier</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// algorithm</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">prfAlgorithm</span><span class="s4">]).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// parameters (null)</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">NULL</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s5">''</span><span class="s4">)</span>
+      <span class="s4">]));</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">params</span><span class="s4">;</span>
+<span class="s4">}</span>
+</pre>
+</body>
+</html>

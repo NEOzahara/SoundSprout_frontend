@@ -1,0 +1,375 @@
+<html>
+<head>
+<title>ModuleChunkLoadingRuntimeModule.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ModuleChunkLoadingRuntimeModule.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">SyncWaterfallHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Compilation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Compilation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">RuntimeGlobals </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../RuntimeGlobals&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">RuntimeModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../RuntimeModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Template </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Template&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">getChunkFilenameTemplate</span><span class="s3">,</span>
+	<span class="s1">chunkHasJs</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../javascript/JavascriptModulesPlugin&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">getInitialChunkIds </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../javascript/StartupHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">compileBooleanMatcher </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/compileBooleanMatcher&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">getUndoPath </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/identifier&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).Environment} Environment */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;).ReadOnlyRuntimeRequirements} ReadOnlyRuntimeRequirements */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} JsonpCompilationPluginHooks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SyncWaterfallHook&lt;[string, Chunk]&gt;} linkPreload</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SyncWaterfallHook&lt;[string, Chunk]&gt;} linkPrefetch</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Compilation, JsonpCompilationPluginHooks&gt;} */</span>
+<span class="s4">const </span><span class="s1">compilationHooksMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s4">class </span><span class="s1">ModuleChunkLoadingRuntimeModule </span><span class="s4">extends </span><span class="s1">RuntimeModule </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{JsonpCompilationPluginHooks} hooks</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!(</span><span class="s1">compilation </span><span class="s4">instanceof </span><span class="s1">Compilation</span><span class="s3">)) {</span>
+			<span class="s4">throw new </span><span class="s1">TypeError</span><span class="s3">(</span>
+				<span class="s2">&quot;The 'compilation' argument must be an instance of Compilation&quot;</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hooks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">hooks </span><span class="s3">= {</span>
+				<span class="s1">linkPreload</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncWaterfallHook</span><span class="s3">([</span><span class="s2">&quot;source&quot;</span><span class="s3">, </span><span class="s2">&quot;chunk&quot;</span><span class="s3">]),</span>
+				<span class="s1">linkPrefetch</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncWaterfallHook</span><span class="s3">([</span><span class="s2">&quot;source&quot;</span><span class="s3">, </span><span class="s2">&quot;chunk&quot;</span><span class="s3">])</span>
+			<span class="s3">};</span>
+			<span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">hooks</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">hooks</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ReadOnlyRuntimeRequirements} runtimeRequirements runtime requirements</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">runtimeRequirements</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">(</span><span class="s2">&quot;import chunk loading&quot;</span><span class="s3">, </span><span class="s1">RuntimeModule</span><span class="s3">.</span><span class="s1">STAGE_ATTACH</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements </span><span class="s3">= </span><span class="s1">runtimeRequirements</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@private</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} chunk chunk</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} rootOutputDir root output directory</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} generated code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_generateBaseUri</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">rootOutputDir</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">options </span><span class="s3">= </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">getEntryOptions</span><span class="s3">();</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">options </span><span class="s3">&amp;&amp; </span><span class="s1">options</span><span class="s3">.</span><span class="s1">baseUri</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">baseURI</span><span class="s3">} </span><span class="s2">= </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">baseUri</span><span class="s3">)}</span><span class="s2">;`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">compilation </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Compilation} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s3">{</span>
+			<span class="s1">outputOptions</span><span class="s3">: { </span><span class="s1">importMetaName </span><span class="s3">}</span>
+		<span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">baseURI</span><span class="s3">} </span><span class="s2">= new URL(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+			<span class="s1">rootOutputDir</span>
+		<span class="s3">)}</span><span class="s2">, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">importMetaName</span><span class="s3">}</span><span class="s2">.url);`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | null} runtime code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">generate</span><span class="s3">() {</span>
+		<span class="s4">const </span><span class="s1">compilation </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Compilation} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGraph} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">chunk </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Chunk} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">chunk</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">environment </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Environment} */</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">environment</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s3">{</span>
+			<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+			<span class="s1">outputOptions</span><span class="s3">: { </span><span class="s1">importFunctionName</span><span class="s3">, </span><span class="s1">crossOriginLoading</span><span class="s3">, </span><span class="s1">charset </span><span class="s3">}</span>
+		<span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">ensureChunkHandlers</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">withBaseURI </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">baseURI</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">withExternalInstallChunk </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span>
+			<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">externalInstallChunk</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">withLoading </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span>
+			<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">ensureChunkHandlers</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">withOnChunkLoad </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span>
+			<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">onChunksLoaded</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">withHmr </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span>
+			<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hmrDownloadUpdateHandlers</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">linkPreload</span><span class="s3">, </span><span class="s1">linkPrefetch </span><span class="s3">} =</span>
+			<span class="s1">ModuleChunkLoadingRuntimeModule</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">isNeutralPlatform </span><span class="s3">= </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">isNeutralPlatform</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">withPrefetch </span><span class="s3">=</span>
+			<span class="s3">(</span><span class="s1">environment</span><span class="s3">.</span><span class="s1">document </span><span class="s3">|| </span><span class="s1">isNeutralPlatform</span><span class="s3">) &amp;&amp;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">prefetchChunkHandlers</span><span class="s3">) &amp;&amp;</span>
+			<span class="s1">chunk</span><span class="s3">.</span><span class="s1">hasChildByOrder</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s2">&quot;prefetch&quot;</span><span class="s3">, </span><span class="s4">true</span><span class="s3">, </span><span class="s1">chunkHasJs</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">withPreload </span><span class="s3">=</span>
+			<span class="s3">(</span><span class="s1">environment</span><span class="s3">.</span><span class="s1">document </span><span class="s3">|| </span><span class="s1">isNeutralPlatform</span><span class="s3">) &amp;&amp;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_runtimeRequirements</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">preloadChunkHandlers</span><span class="s3">) &amp;&amp;</span>
+			<span class="s1">chunk</span><span class="s3">.</span><span class="s1">hasChildByOrder</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s2">&quot;preload&quot;</span><span class="s3">, </span><span class="s4">true</span><span class="s3">, </span><span class="s1">chunkHasJs</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">conditionMap </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkConditionMap</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">chunkHasJs</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">hasJsMatcher </span><span class="s3">= </span><span class="s1">compileBooleanMatcher</span><span class="s3">(</span><span class="s1">conditionMap</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">initialChunkIds </span><span class="s3">= </span><span class="s1">getInitialChunkIds</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">chunkHasJs</span><span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">outputName </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span>
+			<span class="s1">getChunkFilenameTemplate</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">),</span>
+			<span class="s3">{</span>
+				<span class="s1">chunk</span><span class="s3">,</span>
+				<span class="s1">contentHashType</span><span class="s3">: </span><span class="s2">&quot;javascript&quot;</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">rootOutputDir </span><span class="s3">= </span><span class="s1">getUndoPath</span><span class="s3">(</span>
+			<span class="s1">outputName</span><span class="s3">,</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">path</span><span class="s3">),</span>
+			<span class="s4">true</span>
+		<span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">stateExpression </span><span class="s3">= </span><span class="s1">withHmr</span>
+			<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hmrRuntimeStatePrefix</span><span class="s3">}</span><span class="s2">_module`</span>
+			<span class="s3">: </span><span class="s1">undefined</span><span class="s3">;</span>
+
+		<span class="s4">return </span><span class="s1">Template</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">([</span>
+			<span class="s1">withBaseURI</span>
+				<span class="s3">? </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_generateBaseUri</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">rootOutputDir</span><span class="s3">)</span>
+				<span class="s3">: </span><span class="s2">&quot;// no baseURI&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;// object to store loaded and loading chunks&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;// undefined = chunk not loaded, null = chunk preloaded/prefetched&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;// [resolve, Promise] = chunk loading, 0 = chunk loaded&quot;</span><span class="s3">,</span>
+			<span class="s2">`var installedChunks = </span><span class="s1">$</span><span class="s3">{</span>
+				<span class="s1">stateExpression </span><span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">stateExpression</span><span class="s3">} </span><span class="s2">= </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stateExpression</span><span class="s3">} </span><span class="s2">|| ` </span><span class="s3">: </span><span class="s2">&quot;&quot;</span>
+			<span class="s3">}</span><span class="s2">{`</span><span class="s3">,</span>
+			<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">(</span>
+				<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">initialChunkIds</span><span class="s3">, </span><span class="s1">id </span><span class="s3">=&gt; </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">: 0`</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span>
+					<span class="s2">&quot;,</span><span class="s4">\n</span><span class="s2">&quot;</span>
+				<span class="s3">)</span>
+			<span class="s3">),</span>
+			<span class="s2">&quot;};&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s1">withLoading </span><span class="s3">|| </span><span class="s1">withExternalInstallChunk</span>
+				<span class="s3">? </span><span class="s2">`var installChunk = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">basicFunction</span><span class="s3">(</span><span class="s2">&quot;data&quot;</span><span class="s3">, [</span>
+						<span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">destructureObject</span><span class="s3">(</span>
+							<span class="s3">[</span><span class="s2">&quot;__webpack_ids__&quot;</span><span class="s3">, </span><span class="s2">&quot;__webpack_modules__&quot;</span><span class="s3">, </span><span class="s2">&quot;__webpack_runtime__&quot;</span><span class="s3">],</span>
+							<span class="s2">&quot;data&quot;</span>
+						<span class="s3">),</span>
+						<span class="s2">'// add &quot;modules&quot; to the modules object,'</span><span class="s3">,</span>
+						<span class="s2">'// then flag all &quot;ids&quot; as loaded and fire callback'</span><span class="s3">,</span>
+						<span class="s2">&quot;var moduleId, chunkId, i = 0;&quot;</span><span class="s3">,</span>
+						<span class="s2">&quot;for(moduleId in __webpack_modules__) {&quot;</span><span class="s3">,</span>
+						<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+							<span class="s2">`if(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(__webpack_modules__, moduleId)) {`</span><span class="s3">,</span>
+							<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">(</span>
+								<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">moduleFactories</span><span class="s3">}</span><span class="s2">[moduleId] = __webpack_modules__[moduleId];`</span>
+							<span class="s3">),</span>
+							<span class="s2">&quot;}&quot;</span>
+						<span class="s3">]),</span>
+						<span class="s2">&quot;}&quot;</span><span class="s3">,</span>
+						<span class="s2">`if(__webpack_runtime__) __webpack_runtime__(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span><span class="s3">}</span><span class="s2">);`</span><span class="s3">,</span>
+						<span class="s2">&quot;for(;i &lt; __webpack_ids__.length; i++) {&quot;</span><span class="s3">,</span>
+						<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+							<span class="s2">&quot;chunkId = __webpack_ids__[i];&quot;</span><span class="s3">,</span>
+							<span class="s2">`if(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(installedChunks, chunkId) &amp;&amp; installedChunks[chunkId]) {`</span><span class="s3">,</span>
+							<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">(</span><span class="s2">&quot;installedChunks[chunkId][0]();&quot;</span><span class="s3">),</span>
+							<span class="s2">&quot;}&quot;</span><span class="s3">,</span>
+							<span class="s2">&quot;installedChunks[__webpack_ids__[i]] = 0;&quot;</span>
+						<span class="s3">]),</span>
+						<span class="s2">&quot;}&quot;</span><span class="s3">,</span>
+						<span class="s1">withOnChunkLoad </span><span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">onChunksLoaded</span><span class="s3">}</span><span class="s2">();` </span><span class="s3">: </span><span class="s2">&quot;&quot;</span>
+					<span class="s3">])}</span><span class="s2">`</span>
+				<span class="s3">: </span><span class="s2">&quot;// no install chunk&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s1">withLoading</span>
+				<span class="s3">? </span><span class="s1">Template</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">([</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">fn</span><span class="s3">}</span><span class="s2">.j = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">basicFunction</span><span class="s3">(</span>
+							<span class="s2">&quot;chunkId, promises&quot;</span><span class="s3">,</span>
+							<span class="s1">hasJsMatcher </span><span class="s3">!== </span><span class="s4">false</span>
+								<span class="s3">? </span><span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+										<span class="s2">&quot;// import() chunk loading for javascript&quot;</span><span class="s3">,</span>
+										<span class="s2">`var installedChunkData = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(installedChunks, chunkId) ? installedChunks[chunkId] : undefined;`</span><span class="s3">,</span>
+										<span class="s2">'if(installedChunkData !== 0) { // 0 means &quot;already installed&quot;.'</span><span class="s3">,</span>
+										<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+											<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+											<span class="s2">'// a Promise means &quot;currently loading&quot;.'</span><span class="s3">,</span>
+											<span class="s2">&quot;if(installedChunkData) {&quot;</span><span class="s3">,</span>
+											<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+												<span class="s2">&quot;promises.push(installedChunkData[1]);&quot;</span>
+											<span class="s3">]),</span>
+											<span class="s2">&quot;} else {&quot;</span><span class="s3">,</span>
+											<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+												<span class="s1">hasJsMatcher </span><span class="s3">=== </span><span class="s4">true</span>
+													<span class="s3">? </span><span class="s2">&quot;if(true) { // all chunks have JS&quot;</span>
+													<span class="s3">: </span><span class="s2">`if(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">hasJsMatcher</span><span class="s3">(</span><span class="s2">&quot;chunkId&quot;</span><span class="s3">)}</span><span class="s2">) {`</span><span class="s3">,</span>
+												<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+													<span class="s2">&quot;// setup Promise in chunk cache&quot;</span><span class="s3">,</span>
+													<span class="s2">`var promise = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">importFunctionName</span><span class="s3">}</span><span class="s2">(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+														<span class="s1">rootOutputDir</span>
+													<span class="s3">)} </span><span class="s2">+ </span><span class="s1">$</span><span class="s3">{</span>
+														<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">getChunkScriptFilename</span>
+													<span class="s3">}</span><span class="s2">(chunkId)).then(installChunk, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">basicFunction</span><span class="s3">(</span>
+														<span class="s2">&quot;e&quot;</span><span class="s3">,</span>
+														<span class="s3">[</span>
+															<span class="s2">&quot;if(installedChunks[chunkId] !== 0) installedChunks[chunkId] = undefined;&quot;</span><span class="s3">,</span>
+															<span class="s2">&quot;throw e;&quot;</span>
+														<span class="s3">]</span>
+													<span class="s3">)}</span><span class="s2">);`</span><span class="s3">,</span>
+													<span class="s2">`var promise = Promise.race([promise, new Promise(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">expressionFunction</span><span class="s3">(</span>
+														<span class="s2">&quot;installedChunkData = installedChunks[chunkId] = [resolve]&quot;</span><span class="s3">,</span>
+														<span class="s2">&quot;resolve&quot;</span>
+													<span class="s3">)}</span><span class="s2">)])`</span><span class="s3">,</span>
+													<span class="s2">&quot;promises.push(installedChunkData[1] = promise);&quot;</span>
+												<span class="s3">]),</span>
+												<span class="s1">hasJsMatcher </span><span class="s3">=== </span><span class="s4">true</span>
+													<span class="s3">? </span><span class="s2">&quot;}&quot;</span>
+													<span class="s3">: </span><span class="s2">&quot;} else installedChunks[chunkId] = 0;&quot;</span>
+											<span class="s3">]),</span>
+											<span class="s2">&quot;}&quot;</span>
+										<span class="s3">]),</span>
+										<span class="s2">&quot;}&quot;</span>
+									<span class="s3">])</span>
+								<span class="s3">: </span><span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span><span class="s2">&quot;installedChunks[chunkId] = 0;&quot;</span><span class="s3">])</span>
+						<span class="s3">)}</span><span class="s2">;`</span>
+					<span class="s3">])</span>
+				<span class="s3">: </span><span class="s2">&quot;// no chunk on demand loading&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s1">withPrefetch </span><span class="s3">&amp;&amp; </span><span class="s1">hasJsMatcher </span><span class="s3">!== </span><span class="s4">false</span>
+				<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+						<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">prefetchChunkHandlers</span>
+					<span class="s3">}</span><span class="s2">.j = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">basicFunction</span><span class="s3">(</span><span class="s2">&quot;chunkId&quot;</span><span class="s3">, [</span>
+						<span class="s2">`if((!</span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span>
+						<span class="s3">}</span><span class="s2">(installedChunks, chunkId) || installedChunks[chunkId] === undefined) &amp;&amp; </span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s1">hasJsMatcher </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">? </span><span class="s2">&quot;true&quot; </span><span class="s3">: </span><span class="s1">hasJsMatcher</span><span class="s3">(</span><span class="s2">&quot;chunkId&quot;</span><span class="s3">)</span>
+						<span class="s3">}</span><span class="s2">) {`</span><span class="s3">,</span>
+						<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+							<span class="s2">&quot;installedChunks[chunkId] = null;&quot;</span><span class="s3">,</span>
+							<span class="s1">isNeutralPlatform</span>
+								<span class="s3">? </span><span class="s2">&quot;if (typeof document === 'undefined') return;&quot;</span>
+								<span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+							<span class="s1">linkPrefetch</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span>
+								<span class="s1">Template</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">([</span>
+									<span class="s2">&quot;var link = document.createElement('link');&quot;</span><span class="s3">,</span>
+									<span class="s1">charset </span><span class="s3">? </span><span class="s2">&quot;link.charset = 'utf-8';&quot; </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+									<span class="s1">crossOriginLoading</span>
+										<span class="s3">? </span><span class="s2">`link.crossOrigin = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+												<span class="s1">crossOriginLoading</span>
+											<span class="s3">)}</span><span class="s2">;`</span>
+										<span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+									<span class="s2">`if (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">scriptNonce</span><span class="s3">}</span><span class="s2">) {`</span><span class="s3">,</span>
+									<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">(</span>
+										<span class="s2">`link.setAttribute(&quot;nonce&quot;, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">scriptNonce</span><span class="s3">}</span><span class="s2">);`</span>
+									<span class="s3">),</span>
+									<span class="s2">&quot;}&quot;</span><span class="s3">,</span>
+									<span class="s2">'link.rel = &quot;prefetch&quot;;'</span><span class="s3">,</span>
+									<span class="s2">'link.as = &quot;script&quot;;'</span><span class="s3">,</span>
+									<span class="s2">`link.href = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">publicPath</span><span class="s3">} </span><span class="s2">+ </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">getChunkScriptFilename</span><span class="s3">}</span><span class="s2">(chunkId);`</span>
+								<span class="s3">]),</span>
+								<span class="s1">chunk</span>
+							<span class="s3">),</span>
+							<span class="s2">&quot;document.head.appendChild(link);&quot;</span>
+						<span class="s3">]),</span>
+						<span class="s2">&quot;}&quot;</span>
+					<span class="s3">])}</span><span class="s2">;`</span>
+				<span class="s3">: </span><span class="s2">&quot;// no prefetching&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s1">withPreload </span><span class="s3">&amp;&amp; </span><span class="s1">hasJsMatcher </span><span class="s3">!== </span><span class="s4">false</span>
+				<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+						<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">preloadChunkHandlers</span>
+					<span class="s3">}</span><span class="s2">.j = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">basicFunction</span><span class="s3">(</span><span class="s2">&quot;chunkId&quot;</span><span class="s3">, [</span>
+						<span class="s2">`if((!</span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span>
+						<span class="s3">}</span><span class="s2">(installedChunks, chunkId) || installedChunks[chunkId] === undefined) &amp;&amp; </span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s1">hasJsMatcher </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">? </span><span class="s2">&quot;true&quot; </span><span class="s3">: </span><span class="s1">hasJsMatcher</span><span class="s3">(</span><span class="s2">&quot;chunkId&quot;</span><span class="s3">)</span>
+						<span class="s3">}</span><span class="s2">) {`</span><span class="s3">,</span>
+						<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">([</span>
+							<span class="s2">&quot;installedChunks[chunkId] = null;&quot;</span><span class="s3">,</span>
+							<span class="s1">isNeutralPlatform</span>
+								<span class="s3">? </span><span class="s2">&quot;if (typeof document === 'undefined') return;&quot;</span>
+								<span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+							<span class="s1">linkPreload</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span>
+								<span class="s1">Template</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">([</span>
+									<span class="s2">&quot;var link = document.createElement('link');&quot;</span><span class="s3">,</span>
+									<span class="s1">charset </span><span class="s3">? </span><span class="s2">&quot;link.charset = 'utf-8';&quot; </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+									<span class="s2">`if (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">scriptNonce</span><span class="s3">}</span><span class="s2">) {`</span><span class="s3">,</span>
+									<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">(</span>
+										<span class="s2">`link.setAttribute(&quot;nonce&quot;, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">scriptNonce</span><span class="s3">}</span><span class="s2">);`</span>
+									<span class="s3">),</span>
+									<span class="s2">&quot;}&quot;</span><span class="s3">,</span>
+									<span class="s2">'link.rel = &quot;modulepreload&quot;;'</span><span class="s3">,</span>
+									<span class="s2">`link.href = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">publicPath</span><span class="s3">} </span><span class="s2">+ </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">getChunkScriptFilename</span><span class="s3">}</span><span class="s2">(chunkId);`</span><span class="s3">,</span>
+									<span class="s1">crossOriginLoading</span>
+										<span class="s3">? </span><span class="s1">crossOriginLoading </span><span class="s3">=== </span><span class="s2">&quot;use-credentials&quot;</span>
+											<span class="s3">? </span><span class="s2">'link.crossOrigin = &quot;use-credentials&quot;;'</span>
+											<span class="s3">: </span><span class="s1">Template</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">([</span>
+													<span class="s2">&quot;if (link.href.indexOf(window.location.origin + '/') !== 0) {&quot;</span><span class="s3">,</span>
+													<span class="s1">Template</span><span class="s3">.</span><span class="s1">indent</span><span class="s3">(</span>
+														<span class="s2">`link.crossOrigin = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+															<span class="s1">crossOriginLoading</span>
+														<span class="s3">)}</span><span class="s2">;`</span>
+													<span class="s3">),</span>
+													<span class="s2">&quot;}&quot;</span>
+												<span class="s3">])</span>
+										<span class="s3">: </span><span class="s2">&quot;&quot;</span>
+								<span class="s3">]),</span>
+								<span class="s1">chunk</span>
+							<span class="s3">),</span>
+							<span class="s2">&quot;document.head.appendChild(link);&quot;</span>
+						<span class="s3">]),</span>
+						<span class="s2">&quot;}&quot;</span>
+					<span class="s3">])}</span><span class="s2">;`</span>
+				<span class="s3">: </span><span class="s2">&quot;// no preloaded&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s1">withExternalInstallChunk</span>
+				<span class="s3">? </span><span class="s1">Template</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">([</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">externalInstallChunk</span><span class="s3">} </span><span class="s2">= installChunk;`</span>
+					<span class="s3">])</span>
+				<span class="s3">: </span><span class="s2">&quot;// no external install chunk&quot;</span><span class="s3">,</span>
+			<span class="s2">&quot;&quot;</span><span class="s3">,</span>
+			<span class="s1">withOnChunkLoad</span>
+				<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+						<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">onChunksLoaded</span>
+					<span class="s3">}</span><span class="s2">.j = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">returningFunction</span><span class="s3">(</span>
+						<span class="s2">&quot;installedChunks[chunkId] === 0&quot;</span><span class="s3">,</span>
+						<span class="s2">&quot;chunkId&quot;</span>
+					<span class="s3">)}</span><span class="s2">;`</span>
+				<span class="s3">: </span><span class="s2">&quot;// no on chunks loaded&quot;</span>
+		<span class="s3">]);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ModuleChunkLoadingRuntimeModule</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

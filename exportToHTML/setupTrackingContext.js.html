@@ -1,0 +1,191 @@
+<html>
+<head>
+<title>setupTrackingContext.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #cf8e6d;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+setupTrackingContext.js</font>
+</center></td></tr></table>
+<pre><span class="s0">// @ts-check</span>
+
+<span class="s2">import </span><span class="s1">fs from </span><span class="s3">'fs'</span>
+<span class="s2">import </span><span class="s1">LRU from </span><span class="s3">'@alloc/quick-lru'</span>
+
+<span class="s2">import </span><span class="s1">hash from </span><span class="s3">'../util/hashConfig'</span>
+<span class="s2">import </span><span class="s1">resolveConfig from </span><span class="s3">'../public/resolve-config'</span>
+<span class="s2">import </span><span class="s1">resolveConfigPath from </span><span class="s3">'../util/resolveConfigPath'</span>
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">getContext</span><span class="s4">, </span><span class="s1">getFileModifiedMap </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'./setupContextUtils'</span>
+<span class="s2">import </span><span class="s1">parseDependency from </span><span class="s3">'../util/parseDependency'</span>
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">validateConfig </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'../util/validateConfig.js'</span>
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">parseCandidateFiles</span><span class="s4">, </span><span class="s1">resolvedChangedContent </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'./content.js'</span>
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">loadConfig </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'../lib/load-config'</span>
+<span class="s2">import </span><span class="s1">getModuleDependencies from </span><span class="s3">'./getModuleDependencies'</span>
+
+<span class="s2">let </span><span class="s1">configPathCache </span><span class="s4">= </span><span class="s2">new </span><span class="s1">LRU</span><span class="s4">({ </span><span class="s1">maxSize</span><span class="s4">: </span><span class="s5">100 </span><span class="s4">})</span>
+
+<span class="s2">let </span><span class="s1">candidateFilesCache </span><span class="s4">= </span><span class="s2">new </span><span class="s1">WeakMap</span><span class="s4">()</span>
+
+<span class="s2">function </span><span class="s1">getCandidateFiles</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">tailwindConfig</span><span class="s4">) {</span>
+  <span class="s2">if </span><span class="s4">(</span><span class="s1">candidateFilesCache</span><span class="s4">.</span><span class="s1">has</span><span class="s4">(</span><span class="s1">context</span><span class="s4">)) {</span>
+    <span class="s2">return </span><span class="s1">candidateFilesCache</span><span class="s4">.</span><span class="s1">get</span><span class="s4">(</span><span class="s1">context</span><span class="s4">)</span>
+  <span class="s4">}</span>
+
+  <span class="s2">let </span><span class="s1">candidateFiles </span><span class="s4">= </span><span class="s1">parseCandidateFiles</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">tailwindConfig</span><span class="s4">)</span>
+
+  <span class="s2">return </span><span class="s1">candidateFilesCache</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">candidateFiles</span><span class="s4">).</span><span class="s1">get</span><span class="s4">(</span><span class="s1">context</span><span class="s4">)</span>
+<span class="s4">}</span>
+
+<span class="s0">// Get the config object based on a path</span>
+<span class="s2">function </span><span class="s1">getTailwindConfig</span><span class="s4">(</span><span class="s1">configOrPath</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">userConfigPath </span><span class="s4">= </span><span class="s1">resolveConfigPath</span><span class="s4">(</span><span class="s1">configOrPath</span><span class="s4">)</span>
+
+  <span class="s2">if </span><span class="s4">(</span><span class="s1">userConfigPath </span><span class="s4">!== </span><span class="s2">null</span><span class="s4">) {</span>
+    <span class="s2">let </span><span class="s4">[</span><span class="s1">prevConfig</span><span class="s4">, </span><span class="s1">prevConfigHash</span><span class="s4">, </span><span class="s1">prevDeps</span><span class="s4">, </span><span class="s1">prevModified</span><span class="s4">] =</span>
+      <span class="s1">configPathCache</span><span class="s4">.</span><span class="s1">get</span><span class="s4">(</span><span class="s1">userConfigPath</span><span class="s4">) || []</span>
+
+    <span class="s2">let </span><span class="s1">newDeps </span><span class="s4">= </span><span class="s1">getModuleDependencies</span><span class="s4">(</span><span class="s1">userConfigPath</span><span class="s4">)</span>
+
+    <span class="s2">let </span><span class="s1">modified </span><span class="s4">= </span><span class="s2">false</span>
+    <span class="s2">let </span><span class="s1">newModified </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Map</span><span class="s4">()</span>
+    <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">file of newDeps</span><span class="s4">) {</span>
+      <span class="s2">let </span><span class="s1">time </span><span class="s4">= </span><span class="s1">fs</span><span class="s4">.</span><span class="s1">statSync</span><span class="s4">(</span><span class="s1">file</span><span class="s4">).</span><span class="s1">mtimeMs</span>
+      <span class="s1">newModified</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">file</span><span class="s4">, </span><span class="s1">time</span><span class="s4">)</span>
+      <span class="s2">if </span><span class="s4">(!</span><span class="s1">prevModified </span><span class="s4">|| !</span><span class="s1">prevModified</span><span class="s4">.</span><span class="s1">has</span><span class="s4">(</span><span class="s1">file</span><span class="s4">) || </span><span class="s1">time </span><span class="s4">&gt; </span><span class="s1">prevModified</span><span class="s4">.</span><span class="s1">get</span><span class="s4">(</span><span class="s1">file</span><span class="s4">)) {</span>
+        <span class="s1">modified </span><span class="s4">= </span><span class="s2">true</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// It hasn't changed (based on timestamps)</span>
+    <span class="s2">if </span><span class="s4">(!</span><span class="s1">modified</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s4">[</span><span class="s1">prevConfig</span><span class="s4">, </span><span class="s1">userConfigPath</span><span class="s4">, </span><span class="s1">prevConfigHash</span><span class="s4">, </span><span class="s1">prevDeps</span><span class="s4">]</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// It has changed (based on timestamps), or first run</span>
+    <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">file of newDeps</span><span class="s4">) {</span>
+      <span class="s2">delete </span><span class="s1">require</span><span class="s4">.</span><span class="s1">cache</span><span class="s4">[</span><span class="s1">file</span><span class="s4">]</span>
+    <span class="s4">}</span>
+    <span class="s2">let </span><span class="s1">newConfig </span><span class="s4">= </span><span class="s1">validateConfig</span><span class="s4">(</span><span class="s1">resolveConfig</span><span class="s4">(</span><span class="s1">loadConfig</span><span class="s4">(</span><span class="s1">userConfigPath</span><span class="s4">)))</span>
+    <span class="s2">let </span><span class="s1">newHash </span><span class="s4">= </span><span class="s1">hash</span><span class="s4">(</span><span class="s1">newConfig</span><span class="s4">)</span>
+    <span class="s1">configPathCache</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">userConfigPath</span><span class="s4">, [</span><span class="s1">newConfig</span><span class="s4">, </span><span class="s1">newHash</span><span class="s4">, </span><span class="s1">newDeps</span><span class="s4">, </span><span class="s1">newModified</span><span class="s4">])</span>
+    <span class="s2">return </span><span class="s4">[</span><span class="s1">newConfig</span><span class="s4">, </span><span class="s1">userConfigPath</span><span class="s4">, </span><span class="s1">newHash</span><span class="s4">, </span><span class="s1">newDeps</span><span class="s4">]</span>
+  <span class="s4">}</span>
+
+  <span class="s0">// It's a plain object, not a path</span>
+  <span class="s2">let </span><span class="s1">newConfig </span><span class="s4">= </span><span class="s1">resolveConfig</span><span class="s4">(</span><span class="s1">configOrPath</span><span class="s4">?.</span><span class="s1">config </span><span class="s4">?? </span><span class="s1">configOrPath </span><span class="s4">?? {})</span>
+
+  <span class="s1">newConfig </span><span class="s4">= </span><span class="s1">validateConfig</span><span class="s4">(</span><span class="s1">newConfig</span><span class="s4">)</span>
+
+  <span class="s2">return </span><span class="s4">[</span><span class="s1">newConfig</span><span class="s4">, </span><span class="s2">null</span><span class="s4">, </span><span class="s1">hash</span><span class="s4">(</span><span class="s1">newConfig</span><span class="s4">), []]</span>
+<span class="s4">}</span>
+
+<span class="s0">// DISABLE_TOUCH = TRUE</span>
+
+<span class="s0">// Retrieve an existing context from cache if possible (since contexts are unique per</span>
+<span class="s0">// source path), or set up a new one (including setting up watchers and registering</span>
+<span class="s0">// plugins) then return it</span>
+<span class="s2">export default function </span><span class="s1">setupTrackingContext</span><span class="s4">(</span><span class="s1">configOrPath</span><span class="s4">) {</span>
+  <span class="s2">return </span><span class="s4">({ </span><span class="s1">tailwindDirectives</span><span class="s4">, </span><span class="s1">registerDependency </span><span class="s4">}) =&gt; {</span>
+    <span class="s2">return </span><span class="s4">(</span><span class="s1">root</span><span class="s4">, </span><span class="s1">result</span><span class="s4">) =&gt; {</span>
+      <span class="s2">let </span><span class="s4">[</span><span class="s1">tailwindConfig</span><span class="s4">, </span><span class="s1">userConfigPath</span><span class="s4">, </span><span class="s1">tailwindConfigHash</span><span class="s4">, </span><span class="s1">configDependencies</span><span class="s4">] =</span>
+        <span class="s1">getTailwindConfig</span><span class="s4">(</span><span class="s1">configOrPath</span><span class="s4">)</span>
+
+      <span class="s2">let </span><span class="s1">contextDependencies </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Set</span><span class="s4">(</span><span class="s1">configDependencies</span><span class="s4">)</span>
+
+      <span class="s0">// If there are no @tailwind or @apply rules, we don't consider this CSS</span>
+      <span class="s0">// file or its dependencies to be dependencies of the context. Can reuse</span>
+      <span class="s0">// the context even if they change. We may want to think about `@layer`</span>
+      <span class="s0">// being part of this trigger too, but it's tough because it's impossible</span>
+      <span class="s0">// for a layer in one file to end up in the actual @tailwind rule in</span>
+      <span class="s0">// another file since independent sources are effectively isolated.</span>
+      <span class="s2">if </span><span class="s4">(</span><span class="s1">tailwindDirectives</span><span class="s4">.</span><span class="s1">size </span><span class="s4">&gt; </span><span class="s5">0</span><span class="s4">) {</span>
+        <span class="s0">// Add current css file as a context dependencies.</span>
+        <span class="s1">contextDependencies</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">result</span><span class="s4">.</span><span class="s1">opts</span><span class="s4">.</span><span class="s1">from</span><span class="s4">)</span>
+
+        <span class="s0">// Add all css @import dependencies as context dependencies.</span>
+        <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">message of result</span><span class="s4">.</span><span class="s1">messages</span><span class="s4">) {</span>
+          <span class="s2">if </span><span class="s4">(</span><span class="s1">message</span><span class="s4">.</span><span class="s1">type </span><span class="s4">=== </span><span class="s3">'dependency'</span><span class="s4">) {</span>
+            <span class="s1">contextDependencies</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">message</span><span class="s4">.</span><span class="s1">file</span><span class="s4">)</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+
+      <span class="s2">let </span><span class="s4">[</span><span class="s1">context</span><span class="s4">, , </span><span class="s1">mTimesToCommit</span><span class="s4">] = </span><span class="s1">getContext</span><span class="s4">(</span>
+        <span class="s1">root</span><span class="s4">,</span>
+        <span class="s1">result</span><span class="s4">,</span>
+        <span class="s1">tailwindConfig</span><span class="s4">,</span>
+        <span class="s1">userConfigPath</span><span class="s4">,</span>
+        <span class="s1">tailwindConfigHash</span><span class="s4">,</span>
+        <span class="s1">contextDependencies</span>
+      <span class="s4">)</span>
+
+      <span class="s2">let </span><span class="s1">fileModifiedMap </span><span class="s4">= </span><span class="s1">getFileModifiedMap</span><span class="s4">(</span><span class="s1">context</span><span class="s4">)</span>
+
+      <span class="s2">let </span><span class="s1">candidateFiles </span><span class="s4">= </span><span class="s1">getCandidateFiles</span><span class="s4">(</span><span class="s1">context</span><span class="s4">, </span><span class="s1">tailwindConfig</span><span class="s4">)</span>
+
+      <span class="s0">// If there are no @tailwind or @apply rules, we don't consider this CSS file or it's</span>
+      <span class="s0">// dependencies to be dependencies of the context. Can reuse the context even if they change.</span>
+      <span class="s0">// We may want to think about `@layer` being part of this trigger too, but it's tough</span>
+      <span class="s0">// because it's impossible for a layer in one file to end up in the actual @tailwind rule</span>
+      <span class="s0">// in another file since independent sources are effectively isolated.</span>
+      <span class="s2">if </span><span class="s4">(</span><span class="s1">tailwindDirectives</span><span class="s4">.</span><span class="s1">size </span><span class="s4">&gt; </span><span class="s5">0</span><span class="s4">) {</span>
+        <span class="s0">// Add template paths as postcss dependencies.</span>
+        <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">contentPath of candidateFiles</span><span class="s4">) {</span>
+          <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">dependency of parseDependency</span><span class="s4">(</span><span class="s1">contentPath</span><span class="s4">)) {</span>
+            <span class="s1">registerDependency</span><span class="s4">(</span><span class="s1">dependency</span><span class="s4">)</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s2">let </span><span class="s4">[</span><span class="s1">changedContent</span><span class="s4">, </span><span class="s1">contentMTimesToCommit</span><span class="s4">] = </span><span class="s1">resolvedChangedContent</span><span class="s4">(</span>
+          <span class="s1">context</span><span class="s4">,</span>
+          <span class="s1">candidateFiles</span><span class="s4">,</span>
+          <span class="s1">fileModifiedMap</span>
+        <span class="s4">)</span>
+
+        <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">content of changedContent</span><span class="s4">) {</span>
+          <span class="s1">context</span><span class="s4">.</span><span class="s1">changedContent</span><span class="s4">.</span><span class="s1">push</span><span class="s4">(</span><span class="s1">content</span><span class="s4">)</span>
+        <span class="s4">}</span>
+
+        <span class="s0">// Add the mtimes of the content files to the commit list</span>
+        <span class="s0">// We can overwrite the existing values because unconditionally</span>
+        <span class="s0">// This is because:</span>
+        <span class="s0">// 1. Most of the files here won't be in the map yet</span>
+        <span class="s0">// 2. If they are that means it's a context dependency</span>
+        <span class="s0">// and we're reading this after the context. This means</span>
+        <span class="s0">// that the mtime we just read is strictly &gt;= the context</span>
+        <span class="s0">// mtime. Unless the user / os is doing something weird</span>
+        <span class="s0">// in which the mtime would be going backwards. If that</span>
+        <span class="s0">// happens there's already going to be problems.</span>
+        <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s4">[</span><span class="s1">path</span><span class="s4">, </span><span class="s1">mtime</span><span class="s4">] </span><span class="s1">of contentMTimesToCommit</span><span class="s4">.</span><span class="s1">entries</span><span class="s4">()) {</span>
+          <span class="s1">mTimesToCommit</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">path</span><span class="s4">, </span><span class="s1">mtime</span><span class="s4">)</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+
+      <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">file of configDependencies</span><span class="s4">) {</span>
+        <span class="s1">registerDependency</span><span class="s4">({ </span><span class="s1">type</span><span class="s4">: </span><span class="s3">'dependency'</span><span class="s4">, </span><span class="s1">file </span><span class="s4">})</span>
+      <span class="s4">}</span>
+
+      <span class="s0">// &quot;commit&quot; the new modified time for all context deps</span>
+      <span class="s0">// We do this here because we want content tracking to</span>
+      <span class="s0">// read the &quot;old&quot; mtime even when it's a context dependency.</span>
+      <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s4">[</span><span class="s1">path</span><span class="s4">, </span><span class="s1">mtime</span><span class="s4">] </span><span class="s1">of mTimesToCommit</span><span class="s4">.</span><span class="s1">entries</span><span class="s4">()) {</span>
+        <span class="s1">fileModifiedMap</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">path</span><span class="s4">, </span><span class="s1">mtime</span><span class="s4">)</span>
+      <span class="s4">}</span>
+
+      <span class="s2">return </span><span class="s1">context</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+<span class="s4">}</span>
+</pre>
+</body>
+</html>

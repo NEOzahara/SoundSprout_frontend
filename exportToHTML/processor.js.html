@@ -1,0 +1,733 @@
+<html>
+<head>
+<title>processor.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #42c3d4;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+processor.js</font>
+</center></td></tr></table>
+<pre><span class="s0">let </span><span class="s1">parser </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'postcss-value-parser'</span><span class="s2">)</span>
+
+<span class="s0">let </span><span class="s1">Value </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'./value'</span><span class="s2">)</span>
+<span class="s0">let </span><span class="s1">insertAreas </span><span class="s2">= </span><span class="s1">require</span><span class="s2">(</span><span class="s3">'./hacks/grid-utils'</span><span class="s2">).</span><span class="s1">insertAreas</span>
+
+<span class="s0">const </span><span class="s1">OLD_LINEAR </span><span class="s2">= </span><span class="s4">/(^|[^-])linear-gradient\(\s*(top|left|right|bottom)/i</span>
+<span class="s0">const </span><span class="s1">OLD_RADIAL </span><span class="s2">= </span><span class="s4">/(^|[^-])radial-gradient\(\s*\d+(\w*|%)\s+\d+(\w*|%)\s*,/i</span>
+<span class="s0">const </span><span class="s1">IGNORE_NEXT </span><span class="s2">= </span><span class="s4">/(!\s*)?autoprefixer:\s*ignore\s+next/i</span>
+<span class="s0">const </span><span class="s1">GRID_REGEX </span><span class="s2">= </span><span class="s4">/(!\s*)?autoprefixer\s*grid:\s*(on|off|(no-)?autoplace)/i</span>
+
+<span class="s0">const </span><span class="s1">SIZES </span><span class="s2">= [</span>
+  <span class="s3">'width'</span><span class="s2">,</span>
+  <span class="s3">'height'</span><span class="s2">,</span>
+  <span class="s3">'min-width'</span><span class="s2">,</span>
+  <span class="s3">'max-width'</span><span class="s2">,</span>
+  <span class="s3">'min-height'</span><span class="s2">,</span>
+  <span class="s3">'max-height'</span><span class="s2">,</span>
+  <span class="s3">'inline-size'</span><span class="s2">,</span>
+  <span class="s3">'min-inline-size'</span><span class="s2">,</span>
+  <span class="s3">'max-inline-size'</span><span class="s2">,</span>
+  <span class="s3">'block-size'</span><span class="s2">,</span>
+  <span class="s3">'min-block-size'</span><span class="s2">,</span>
+  <span class="s3">'max-block-size'</span>
+<span class="s2">]</span>
+
+<span class="s0">function </span><span class="s1">hasGridTemplate</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">) {</span>
+  <span class="s0">return </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span>
+    <span class="s1">i </span><span class="s2">=&gt; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-template' </span><span class="s2">|| </span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-template-areas'</span>
+  <span class="s2">)</span>
+<span class="s2">}</span>
+
+<span class="s0">function </span><span class="s1">hasRowsAndColumns</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">) {</span>
+  <span class="s0">let </span><span class="s1">hasRows </span><span class="s2">= </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-template-rows'</span><span class="s2">)</span>
+  <span class="s0">let </span><span class="s1">hasColumns </span><span class="s2">= </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-template-columns'</span><span class="s2">)</span>
+  <span class="s0">return </span><span class="s1">hasRows </span><span class="s2">&amp;&amp; </span><span class="s1">hasColumns</span>
+<span class="s2">}</span>
+
+<span class="s0">class </span><span class="s1">Processor </span><span class="s2">{</span>
+  <span class="s1">constructor</span><span class="s2">(</span><span class="s1">prefixes</span><span class="s2">) {</span>
+    <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes </span><span class="s2">= </span><span class="s1">prefixes</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Add necessary prefixes</span>
+   <span class="s5">*/</span>
+  <span class="s1">add</span><span class="s2">(</span><span class="s1">css</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) {</span>
+    <span class="s6">// At-rules</span>
+    <span class="s0">let </span><span class="s1">resolution </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'@resolution'</span><span class="s2">]</span>
+    <span class="s0">let </span><span class="s1">keyframes </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'@keyframes'</span><span class="s2">]</span>
+    <span class="s0">let </span><span class="s1">viewport </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'@viewport'</span><span class="s2">]</span>
+    <span class="s0">let </span><span class="s1">supports </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'@supports'</span><span class="s2">]</span>
+
+    <span class="s1">css</span><span class="s2">.</span><span class="s1">walkAtRules</span><span class="s2">(</span><span class="s1">rule </span><span class="s2">=&gt; {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">rule</span><span class="s2">.</span><span class="s1">name </span><span class="s2">=== </span><span class="s3">'keyframes'</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) {</span>
+          <span class="s0">return </span><span class="s1">keyframes </span><span class="s2">&amp;&amp; </span><span class="s1">keyframes</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">rule</span><span class="s2">.</span><span class="s1">name </span><span class="s2">=== </span><span class="s3">'viewport'</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) {</span>
+          <span class="s0">return </span><span class="s1">viewport </span><span class="s2">&amp;&amp; </span><span class="s1">viewport</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">rule</span><span class="s2">.</span><span class="s1">name </span><span class="s2">=== </span><span class="s3">'supports'</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span>
+          <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">options</span><span class="s2">.</span><span class="s1">supports </span><span class="s2">!== </span><span class="s0">false </span><span class="s2">&amp;&amp;</span>
+          <span class="s2">!</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+        <span class="s2">) {</span>
+          <span class="s0">return </span><span class="s1">supports</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">rule</span><span class="s2">.</span><span class="s1">name </span><span class="s2">=== </span><span class="s3">'media' </span><span class="s2">&amp;&amp; </span><span class="s1">rule</span><span class="s2">.</span><span class="s1">params</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'-resolution'</span><span class="s2">)) {</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) {</span>
+          <span class="s0">return </span><span class="s1">resolution </span><span class="s2">&amp;&amp; </span><span class="s1">resolution</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+
+      <span class="s0">return </span><span class="s1">undefined</span>
+    <span class="s2">})</span>
+
+    <span class="s6">// Selectors</span>
+    <span class="s1">css</span><span class="s2">.</span><span class="s1">walkRules</span><span class="s2">(</span><span class="s1">rule </span><span class="s2">=&gt; {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) </span><span class="s0">return </span><span class="s1">undefined</span>
+
+      <span class="s0">return this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">.</span><span class="s1">selectors</span><span class="s2">.</span><span class="s1">map</span><span class="s2">(</span><span class="s1">selector </span><span class="s2">=&gt; {</span>
+        <span class="s0">return </span><span class="s1">selector</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+      <span class="s2">})</span>
+    <span class="s2">})</span>
+
+    <span class="s0">function </span><span class="s1">insideGrid</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">nodes</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">node </span><span class="s2">=&gt; {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">type </span><span class="s2">!== </span><span class="s3">'decl'</span><span class="s2">) </span><span class="s0">return false</span>
+        <span class="s0">let </span><span class="s1">displayGrid </span><span class="s2">=</span>
+          <span class="s1">node</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'display' </span><span class="s2">&amp;&amp; </span><span class="s4">/(inline-)?grid/</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">value</span><span class="s2">)</span>
+        <span class="s0">let </span><span class="s1">gridTemplate </span><span class="s2">= </span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">.</span><span class="s1">startsWith</span><span class="s2">(</span><span class="s3">'grid-template'</span><span class="s2">)</span>
+        <span class="s0">let </span><span class="s1">gridGap </span><span class="s2">= </span><span class="s4">/^grid-([A-z]+-)?gap/</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">)</span>
+        <span class="s0">return </span><span class="s1">displayGrid </span><span class="s2">|| </span><span class="s1">gridTemplate </span><span class="s2">|| </span><span class="s1">gridGap</span>
+      <span class="s2">})</span>
+    <span class="s2">}</span>
+
+    <span class="s0">let </span><span class="s1">gridPrefixes </span><span class="s2">=</span>
+      <span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">css</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) &amp;&amp;</span>
+      <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'grid-area'</span><span class="s2">] &amp;&amp;</span>
+      <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'grid-area'</span><span class="s2">].</span><span class="s1">prefixes</span>
+
+    <span class="s1">css</span><span class="s2">.</span><span class="s1">walkDecls</span><span class="s2">(</span><span class="s1">decl </span><span class="s2">=&gt; {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabledDecl</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) </span><span class="s0">return </span><span class="s1">undefined</span>
+
+      <span class="s0">let </span><span class="s1">parent </span><span class="s2">= </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span>
+      <span class="s0">let </span><span class="s1">prop </span><span class="s2">= </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span>
+      <span class="s0">let </span><span class="s1">value </span><span class="s2">= </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'color-adjust'</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">every</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">!== </span><span class="s3">'print-color-adjust'</span><span class="s2">)) {</span>
+          <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+            <span class="s3">'Replace color-adjust to print-color-adjust. ' </span><span class="s2">+</span>
+              <span class="s3">'The color-adjust shorthand is currently deprecated.'</span><span class="s2">,</span>
+            <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+          <span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-row-span'</span><span class="s2">) {</span>
+        <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+          <span class="s3">'grid-row-span is not part of final Grid Layout. Use grid-row.'</span><span class="s2">,</span>
+          <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+        <span class="s2">)</span>
+        <span class="s0">return </span><span class="s1">undefined</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-column-span'</span><span class="s2">) {</span>
+        <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+          <span class="s3">'grid-column-span is not part of final Grid Layout. Use grid-column.'</span><span class="s2">,</span>
+          <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+        <span class="s2">)</span>
+        <span class="s0">return </span><span class="s1">undefined</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'display' </span><span class="s2">&amp;&amp; </span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'box'</span><span class="s2">) {</span>
+        <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+          <span class="s3">'You should write display: flex by final spec ' </span><span class="s2">+</span>
+            <span class="s3">'instead of display: box'</span><span class="s2">,</span>
+          <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+        <span class="s2">)</span>
+        <span class="s0">return </span><span class="s1">undefined</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'text-emphasis-position'</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'under' </span><span class="s2">|| </span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'over'</span><span class="s2">) {</span>
+          <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+            <span class="s3">'You should use 2 values for text-emphasis-position ' </span><span class="s2">+</span>
+              <span class="s3">'For example, `under left` instead of just `under`.'</span><span class="s2">,</span>
+            <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+          <span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'text-decoration-skip' </span><span class="s2">&amp;&amp; </span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'ink'</span><span class="s2">) {</span>
+        <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+          <span class="s3">'Replace text-decoration-skip: ink to ' </span><span class="s2">+</span>
+            <span class="s3">'text-decoration-skip-ink: auto, because spec had been changed'</span><span class="s2">,</span>
+          <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+        <span class="s2">)</span>
+      <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">gridPrefixes </span><span class="s2">&amp;&amp; </span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) {</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'subgrid'</span><span class="s2">) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">'IE does not support subgrid'</span><span class="s2">, { </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">})</span>
+          <span class="s2">}</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s4">/^(align|justify|place)-items$/</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">prop</span><span class="s2">) &amp;&amp; </span><span class="s1">insideGrid</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)) {</span>
+            <span class="s0">let </span><span class="s1">fixed </span><span class="s2">= </span><span class="s1">prop</span><span class="s2">.</span><span class="s1">replace</span><span class="s2">(</span><span class="s3">'-items'</span><span class="s2">, </span><span class="s3">'-self'</span><span class="s2">)</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">`IE does not support </span><span class="s1">$</span><span class="s2">{</span><span class="s1">prop</span><span class="s2">} </span><span class="s3">on grid containers. ` </span><span class="s2">+</span>
+                <span class="s3">`Try using </span><span class="s1">$</span><span class="s2">{</span><span class="s1">fixed</span><span class="s2">} </span><span class="s3">on child elements instead: ` </span><span class="s2">+</span>
+                <span class="s3">`</span><span class="s1">$</span><span class="s2">{</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">selector</span><span class="s2">} </span><span class="s3">&gt; * { </span><span class="s1">$</span><span class="s2">{</span><span class="s1">fixed</span><span class="s2">}</span><span class="s3">: </span><span class="s1">$</span><span class="s2">{</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value</span><span class="s2">} </span><span class="s3">}`</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+            <span class="s2">)</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span>
+            <span class="s4">/^(align|justify|place)-content$/</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">prop</span><span class="s2">) &amp;&amp;</span>
+            <span class="s1">insideGrid</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)</span>
+          <span class="s2">) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">`IE does not support </span><span class="s1">$</span><span class="s2">{</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">} </span><span class="s3">on grid containers`</span><span class="s2">, {</span>
+              <span class="s1">node</span><span class="s2">: </span><span class="s1">decl</span>
+            <span class="s2">})</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'display' </span><span class="s2">&amp;&amp; </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'contents'</span><span class="s2">) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">'Please do not use display: contents; ' </span><span class="s2">+</span>
+                <span class="s3">'if you have grid setting enabled'</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+            <span class="s2">)</span>
+            <span class="s0">return </span><span class="s1">undefined</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-gap'</span><span class="s2">) {</span>
+            <span class="s0">let </span><span class="s1">status </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s2">(</span>
+              <span class="s1">status </span><span class="s2">=== </span><span class="s3">'autoplace' </span><span class="s2">&amp;&amp;</span>
+              <span class="s2">!</span><span class="s1">hasRowsAndColumns</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">) &amp;&amp;</span>
+              <span class="s2">!</span><span class="s1">hasGridTemplate</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)</span>
+            <span class="s2">) {</span>
+              <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+                <span class="s3">'grid-gap only works if grid-template(-areas) is being ' </span><span class="s2">+</span>
+                  <span class="s3">'used or both rows and columns have been declared ' </span><span class="s2">+</span>
+                  <span class="s3">'and cells have not been manually ' </span><span class="s2">+</span>
+                  <span class="s3">'placed inside the explicit grid'</span><span class="s2">,</span>
+                <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+              <span class="s2">)</span>
+            <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span>
+              <span class="s2">(</span><span class="s1">status </span><span class="s2">=== </span><span class="s0">true </span><span class="s2">|| </span><span class="s1">status </span><span class="s2">=== </span><span class="s3">'no-autoplace'</span><span class="s2">) &amp;&amp;</span>
+              <span class="s2">!</span><span class="s1">hasGridTemplate</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)</span>
+            <span class="s2">) {</span>
+              <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+                <span class="s3">'grid-gap only works if grid-template(-areas) is being used'</span><span class="s2">,</span>
+                <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+              <span class="s2">)</span>
+            <span class="s2">}</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-auto-columns'</span><span class="s2">) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">'grid-auto-columns is not supported by IE'</span><span class="s2">, {</span>
+              <span class="s1">node</span><span class="s2">: </span><span class="s1">decl</span>
+            <span class="s2">})</span>
+            <span class="s0">return </span><span class="s1">undefined</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-auto-rows'</span><span class="s2">) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">'grid-auto-rows is not supported by IE'</span><span class="s2">, { </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">})</span>
+            <span class="s0">return </span><span class="s1">undefined</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-auto-flow'</span><span class="s2">) {</span>
+            <span class="s0">let </span><span class="s1">hasRows </span><span class="s2">= </span><span class="s1">parent</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-template-rows'</span><span class="s2">)</span>
+            <span class="s0">let </span><span class="s1">hasCols </span><span class="s2">= </span><span class="s1">parent</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'grid-template-columns'</span><span class="s2">)</span>
+
+            <span class="s0">if </span><span class="s2">(</span><span class="s1">hasGridTemplate</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)) {</span>
+              <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">'grid-auto-flow is not supported by IE'</span><span class="s2">, {</span>
+                <span class="s1">node</span><span class="s2">: </span><span class="s1">decl</span>
+              <span class="s2">})</span>
+            <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'dense'</span><span class="s2">)) {</span>
+              <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">'grid-auto-flow: dense is not supported by IE'</span><span class="s2">, {</span>
+                <span class="s1">node</span><span class="s2">: </span><span class="s1">decl</span>
+              <span class="s2">})</span>
+            <span class="s2">} </span><span class="s0">else if </span><span class="s2">(!</span><span class="s1">hasRows </span><span class="s2">&amp;&amp; !</span><span class="s1">hasCols</span><span class="s2">) {</span>
+              <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+                <span class="s3">'grid-auto-flow works only if grid-template-rows and ' </span><span class="s2">+</span>
+                  <span class="s3">'grid-template-columns are present in the same rule'</span><span class="s2">,</span>
+                <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+              <span class="s2">)</span>
+            <span class="s2">}</span>
+            <span class="s0">return </span><span class="s1">undefined</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'auto-fit'</span><span class="s2">)) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">'auto-fit value is not supported by IE'</span><span class="s2">, {</span>
+              <span class="s1">node</span><span class="s2">: </span><span class="s1">decl</span><span class="s2">,</span>
+              <span class="s1">word</span><span class="s2">: </span><span class="s3">'auto-fit'</span>
+            <span class="s2">})</span>
+            <span class="s0">return </span><span class="s1">undefined</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'auto-fill'</span><span class="s2">)) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span><span class="s3">'auto-fill value is not supported by IE'</span><span class="s2">, {</span>
+              <span class="s1">node</span><span class="s2">: </span><span class="s1">decl</span><span class="s2">,</span>
+              <span class="s1">word</span><span class="s2">: </span><span class="s3">'auto-fill'</span>
+            <span class="s2">})</span>
+            <span class="s0">return </span><span class="s1">undefined</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">prop</span><span class="s2">.</span><span class="s1">startsWith</span><span class="s2">(</span><span class="s3">'grid-template'</span><span class="s2">) &amp;&amp; </span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'['</span><span class="s2">)) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">'Autoprefixer currently does not support line names. ' </span><span class="s2">+</span>
+                <span class="s3">'Try using grid-template-areas instead.'</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl</span><span class="s2">, </span><span class="s1">word</span><span class="s2">: </span><span class="s3">'[' </span><span class="s2">}</span>
+            <span class="s2">)</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'radial-gradient'</span><span class="s2">)) {</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">OLD_RADIAL</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value</span><span class="s2">)) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">'Gradient has outdated direction syntax. ' </span><span class="s2">+</span>
+                <span class="s3">'New syntax is like `closest-side at 0 0` ' </span><span class="s2">+</span>
+                <span class="s3">'instead of `0 0, closest-side`.'</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+            <span class="s2">)</span>
+          <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+            <span class="s0">let </span><span class="s1">ast </span><span class="s2">= </span><span class="s1">parser</span><span class="s2">(</span><span class="s1">value</span><span class="s2">)</span>
+
+            <span class="s0">for </span><span class="s2">(</span><span class="s0">let </span><span class="s1">i of ast</span><span class="s2">.</span><span class="s1">nodes</span><span class="s2">) {</span>
+              <span class="s0">if </span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'function' </span><span class="s2">&amp;&amp; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'radial-gradient'</span><span class="s2">) {</span>
+                <span class="s0">for </span><span class="s2">(</span><span class="s0">let </span><span class="s1">word of i</span><span class="s2">.</span><span class="s1">nodes</span><span class="s2">) {</span>
+                  <span class="s0">if </span><span class="s2">(</span><span class="s1">word</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'word'</span><span class="s2">) {</span>
+                    <span class="s0">if </span><span class="s2">(</span><span class="s1">word</span><span class="s2">.</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'cover'</span><span class="s2">) {</span>
+                      <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+                        <span class="s3">'Gradient has outdated direction syntax. ' </span><span class="s2">+</span>
+                          <span class="s3">'Replace `cover` to `farthest-corner`.'</span><span class="s2">,</span>
+                        <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+                      <span class="s2">)</span>
+                    <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">word</span><span class="s2">.</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'contain'</span><span class="s2">) {</span>
+                      <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+                        <span class="s3">'Gradient has outdated direction syntax. ' </span><span class="s2">+</span>
+                          <span class="s3">'Replace `contain` to `closest-side`.'</span><span class="s2">,</span>
+                        <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+                      <span class="s2">)</span>
+                    <span class="s2">}</span>
+                  <span class="s2">}</span>
+                <span class="s2">}</span>
+              <span class="s2">}</span>
+            <span class="s2">}</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'linear-gradient'</span><span class="s2">)) {</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">OLD_LINEAR</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">value</span><span class="s2">)) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">'Gradient has outdated direction syntax. ' </span><span class="s2">+</span>
+                <span class="s3">'New syntax is like `to left` instead of `right`.'</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+            <span class="s2">)</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">SIZES</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">)) {</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'-fill-available'</span><span class="s2">)) {</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'fill-available'</span><span class="s2">)) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">'Replace fill-available to stretch, ' </span><span class="s2">+</span>
+                <span class="s3">'because spec had been changed'</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+            <span class="s2">)</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'fill'</span><span class="s2">)) {</span>
+            <span class="s0">let </span><span class="s1">ast </span><span class="s2">= </span><span class="s1">parser</span><span class="s2">(</span><span class="s1">value</span><span class="s2">)</span>
+            <span class="s0">if </span><span class="s2">(</span><span class="s1">ast</span><span class="s2">.</span><span class="s1">nodes</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'word' </span><span class="s2">&amp;&amp; </span><span class="s1">i</span><span class="s2">.</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'fill'</span><span class="s2">)) {</span>
+              <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+                <span class="s3">'Replace fill to stretch, because spec had been changed'</span><span class="s2">,</span>
+                <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">decl </span><span class="s2">}</span>
+              <span class="s2">)</span>
+            <span class="s2">}</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+
+      <span class="s0">let </span><span class="s1">prefixer</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'transition' </span><span class="s2">|| </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'transition-property'</span><span class="s2">) {</span>
+        <span class="s6">// Transition</span>
+        <span class="s0">return this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">transition</span><span class="s2">.</span><span class="s1">add</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'align-self'</span><span class="s2">) {</span>
+        <span class="s6">// align-self flexbox or grid</span>
+        <span class="s0">let </span><span class="s1">display </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">displayType</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">display </span><span class="s2">!== </span><span class="s3">'grid' </span><span class="s2">&amp;&amp; </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">options</span><span class="s2">.</span><span class="s1">flexbox </span><span class="s2">!== </span><span class="s0">false</span><span class="s2">) {</span>
+          <span class="s1">prefixer </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'align-self'</span><span class="s2">]</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">prefixer </span><span class="s2">&amp;&amp; </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">) {</span>
+            <span class="s1">prefixer</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) !== </span><span class="s0">false</span><span class="s2">) {</span>
+          <span class="s1">prefixer </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'grid-row-align'</span><span class="s2">]</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">prefixer </span><span class="s2">&amp;&amp; </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">) {</span>
+            <span class="s0">return </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'justify-self'</span><span class="s2">) {</span>
+        <span class="s6">// justify-self flexbox or grid</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) !== </span><span class="s0">false</span><span class="s2">) {</span>
+          <span class="s1">prefixer </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'grid-column-align'</span><span class="s2">]</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">prefixer </span><span class="s2">&amp;&amp; </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">) {</span>
+            <span class="s0">return </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'place-self'</span><span class="s2">) {</span>
+        <span class="s1">prefixer </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s3">'place-self'</span><span class="s2">]</span>
+        <span class="s0">if </span><span class="s2">(</span>
+          <span class="s1">prefixer </span><span class="s2">&amp;&amp;</span>
+          <span class="s1">prefixer</span><span class="s2">.</span><span class="s1">prefixes </span><span class="s2">&amp;&amp;</span>
+          <span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) !== </span><span class="s0">false</span>
+        <span class="s2">) {</span>
+          <span class="s0">return </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+        <span class="s6">// Properties</span>
+        <span class="s1">prefixer </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">add</span><span class="s2">[</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">]</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">prefixer </span><span class="s2">&amp;&amp; </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">) {</span>
+          <span class="s0">return </span><span class="s1">prefixer</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+
+      <span class="s0">return </span><span class="s1">undefined</span>
+    <span class="s2">})</span>
+
+    <span class="s6">// Insert grid-area prefixes. We need to be able to store the different</span>
+    <span class="s6">// rules as a data and hack API is not enough for this</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">css</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) {</span>
+      <span class="s1">insertAreas</span><span class="s2">(</span><span class="s1">css</span><span class="s2">, </span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">)</span>
+    <span class="s2">}</span>
+
+    <span class="s6">// Values</span>
+    <span class="s0">return </span><span class="s1">css</span><span class="s2">.</span><span class="s1">walkDecls</span><span class="s2">(</span><span class="s1">decl </span><span class="s2">=&gt; {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabledValue</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) </span><span class="s0">return</span>
+
+      <span class="s0">let </span><span class="s1">unprefixed </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">unprefixed</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">)</span>
+      <span class="s0">let </span><span class="s1">list </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">values</span><span class="s2">(</span><span class="s3">'add'</span><span class="s2">, </span><span class="s1">unprefixed</span><span class="s2">)</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">Array</span><span class="s2">.</span><span class="s1">isArray</span><span class="s2">(</span><span class="s1">list</span><span class="s2">)) {</span>
+        <span class="s0">for </span><span class="s2">(</span><span class="s0">let </span><span class="s1">value of list</span><span class="s2">) {</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">value</span><span class="s2">.</span><span class="s1">process</span><span class="s2">) </span><span class="s1">value</span><span class="s2">.</span><span class="s1">process</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+      <span class="s1">Value</span><span class="s2">.</span><span class="s1">save</span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">, </span><span class="s1">decl</span><span class="s2">)</span>
+    <span class="s2">})</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Check for control comment and global options</span>
+   <span class="s5">*/</span>
+  <span class="s1">disabled</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(!</span><span class="s1">node</span><span class="s2">) </span><span class="s0">return false</span>
+
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerDisabled </span><span class="s2">!== </span><span class="s1">undefined</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerDisabled</span>
+    <span class="s2">}</span>
+
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">) {</span>
+      <span class="s0">let </span><span class="s1">p </span><span class="s2">= </span><span class="s1">node</span><span class="s2">.</span><span class="s1">prev</span><span class="s2">()</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">p </span><span class="s2">&amp;&amp; </span><span class="s1">p</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'comment' </span><span class="s2">&amp;&amp; </span><span class="s1">IGNORE_NEXT</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">p</span><span class="s2">.</span><span class="s1">text</span><span class="s2">)) {</span>
+        <span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerDisabled </span><span class="s2">= </span><span class="s0">true</span>
+        <span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerSelfDisabled </span><span class="s2">= </span><span class="s0">true</span>
+        <span class="s0">return true</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+
+    <span class="s0">let </span><span class="s1">value </span><span class="s2">= </span><span class="s0">null</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">nodes</span><span class="s2">) {</span>
+      <span class="s0">let </span><span class="s1">status</span>
+      <span class="s1">node</span><span class="s2">.</span><span class="s1">each</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">type </span><span class="s2">!== </span><span class="s3">'comment'</span><span class="s2">) </span><span class="s0">return</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s4">/(!\s*)?autoprefixer:\s*(off|on)/i</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">text</span><span class="s2">)) {</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">status </span><span class="s2">!== </span><span class="s3">'undefined'</span><span class="s2">) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">'Second Autoprefixer control comment ' </span><span class="s2">+</span>
+                <span class="s3">'was ignored. Autoprefixer applies control ' </span><span class="s2">+</span>
+                <span class="s3">'comment to whole block, not to next rules.'</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">i </span><span class="s2">}</span>
+            <span class="s2">)</span>
+          <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+            <span class="s1">status </span><span class="s2">= </span><span class="s4">/on/i</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">text</span><span class="s2">)</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+      <span class="s2">})</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">status </span><span class="s2">!== </span><span class="s1">undefined</span><span class="s2">) {</span>
+        <span class="s1">value </span><span class="s2">= !</span><span class="s1">status</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+    <span class="s0">if </span><span class="s2">(!</span><span class="s1">node</span><span class="s2">.</span><span class="s1">nodes </span><span class="s2">|| </span><span class="s1">value </span><span class="s2">=== </span><span class="s0">null</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">) {</span>
+        <span class="s0">let </span><span class="s1">isParentDisabled </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">_autoprefixerSelfDisabled </span><span class="s2">=== </span><span class="s0">true</span><span class="s2">) {</span>
+          <span class="s1">value </span><span class="s2">= </span><span class="s0">false</span>
+        <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+          <span class="s1">value </span><span class="s2">= </span><span class="s1">isParentDisabled</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+        <span class="s1">value </span><span class="s2">= </span><span class="s0">false</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+    <span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerDisabled </span><span class="s2">= </span><span class="s1">value</span>
+    <span class="s0">return </span><span class="s1">value</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Check for grid/flexbox options.</span>
+   <span class="s5">*/</span>
+  <span class="s1">disabledDecl</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'decl' </span><span class="s2">&amp;&amp; </span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) === </span><span class="s0">false</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'grid'</span><span class="s2">) || </span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'justify-items'</span><span class="s2">) {</span>
+        <span class="s0">return true</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'decl' </span><span class="s2">&amp;&amp; </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">options</span><span class="s2">.</span><span class="s1">flexbox </span><span class="s2">=== </span><span class="s0">false</span><span class="s2">) {</span>
+      <span class="s0">let </span><span class="s1">other </span><span class="s2">= [</span><span class="s3">'order'</span><span class="s2">, </span><span class="s3">'justify-content'</span><span class="s2">, </span><span class="s3">'align-items'</span><span class="s2">, </span><span class="s3">'align-content'</span><span class="s2">]</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'flex'</span><span class="s2">) || </span><span class="s1">other</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">)) {</span>
+        <span class="s0">return true</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+
+    <span class="s0">return this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Check for grid/flexbox options.</span>
+   <span class="s5">*/</span>
+  <span class="s1">disabledValue</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) === </span><span class="s0">false </span><span class="s2">&amp;&amp; </span><span class="s1">node</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'decl'</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'display' </span><span class="s2">&amp;&amp; </span><span class="s1">node</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'grid'</span><span class="s2">)) {</span>
+        <span class="s0">return true</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">options</span><span class="s2">.</span><span class="s1">flexbox </span><span class="s2">=== </span><span class="s0">false </span><span class="s2">&amp;&amp; </span><span class="s1">node</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'decl'</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'display' </span><span class="s2">&amp;&amp; </span><span class="s1">node</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'flex'</span><span class="s2">)) {</span>
+        <span class="s0">return true</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'decl' </span><span class="s2">&amp;&amp; </span><span class="s1">node</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'content'</span><span class="s2">) {</span>
+      <span class="s0">return true</span>
+    <span class="s2">}</span>
+
+    <span class="s0">return this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Is it flebox or grid rule</span>
+   <span class="s5">*/</span>
+  <span class="s1">displayType</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">) {</span>
+    <span class="s0">for </span><span class="s2">(</span><span class="s0">let </span><span class="s1">i of decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">nodes</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">!== </span><span class="s3">'display'</span><span class="s2">) {</span>
+        <span class="s0">continue</span>
+      <span class="s2">}</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'flex'</span><span class="s2">)) {</span>
+        <span class="s0">return </span><span class="s3">'flex'</span>
+      <span class="s2">}</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'grid'</span><span class="s2">)) {</span>
+        <span class="s0">return </span><span class="s3">'grid'</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+
+    <span class="s0">return false</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Set grid option via control comment</span>
+   <span class="s5">*/</span>
+  <span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">node</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) {</span>
+    <span class="s0">if </span><span class="s2">(!</span><span class="s1">node</span><span class="s2">) </span><span class="s0">return false</span>
+
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerGridStatus </span><span class="s2">!== </span><span class="s1">undefined</span><span class="s2">) {</span>
+      <span class="s0">return </span><span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerGridStatus</span>
+    <span class="s2">}</span>
+
+    <span class="s0">let </span><span class="s1">value </span><span class="s2">= </span><span class="s0">null</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">nodes</span><span class="s2">) {</span>
+      <span class="s0">let </span><span class="s1">status</span>
+      <span class="s1">node</span><span class="s2">.</span><span class="s1">each</span><span class="s2">(</span><span class="s1">i </span><span class="s2">=&gt; {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">type </span><span class="s2">!== </span><span class="s3">'comment'</span><span class="s2">) </span><span class="s0">return</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">GRID_REGEX</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">text</span><span class="s2">)) {</span>
+          <span class="s0">let </span><span class="s1">hasAutoplace </span><span class="s2">= </span><span class="s4">/:\s*autoplace/i</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">text</span><span class="s2">)</span>
+          <span class="s0">let </span><span class="s1">noAutoplace </span><span class="s2">= </span><span class="s4">/no-autoplace/i</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">text</span><span class="s2">)</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">status </span><span class="s2">!== </span><span class="s3">'undefined'</span><span class="s2">) {</span>
+            <span class="s1">result</span><span class="s2">.</span><span class="s1">warn</span><span class="s2">(</span>
+              <span class="s3">'Second Autoprefixer grid control comment was ' </span><span class="s2">+</span>
+                <span class="s3">'ignored. Autoprefixer applies control comments to the whole ' </span><span class="s2">+</span>
+                <span class="s3">'block, not to the next rules.'</span><span class="s2">,</span>
+              <span class="s2">{ </span><span class="s1">node</span><span class="s2">: </span><span class="s1">i </span><span class="s2">}</span>
+            <span class="s2">)</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">hasAutoplace</span><span class="s2">) {</span>
+            <span class="s1">status </span><span class="s2">= </span><span class="s3">'autoplace'</span>
+          <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s1">noAutoplace</span><span class="s2">) {</span>
+            <span class="s1">status </span><span class="s2">= </span><span class="s0">true</span>
+          <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+            <span class="s1">status </span><span class="s2">= </span><span class="s4">/on/i</span><span class="s2">.</span><span class="s1">test</span><span class="s2">(</span><span class="s1">i</span><span class="s2">.</span><span class="s1">text</span><span class="s2">)</span>
+          <span class="s2">}</span>
+        <span class="s2">}</span>
+      <span class="s2">})</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">status </span><span class="s2">!== </span><span class="s1">undefined</span><span class="s2">) {</span>
+        <span class="s1">value </span><span class="s2">= </span><span class="s1">status</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">type </span><span class="s2">=== </span><span class="s3">'atrule' </span><span class="s2">&amp;&amp; </span><span class="s1">node</span><span class="s2">.</span><span class="s1">name </span><span class="s2">=== </span><span class="s3">'supports'</span><span class="s2">) {</span>
+      <span class="s0">let </span><span class="s1">params </span><span class="s2">= </span><span class="s1">node</span><span class="s2">.</span><span class="s1">params</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">params</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'grid'</span><span class="s2">) &amp;&amp; </span><span class="s1">params</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'auto'</span><span class="s2">)) {</span>
+        <span class="s1">value </span><span class="s2">= </span><span class="s0">false</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+
+    <span class="s0">if </span><span class="s2">(!</span><span class="s1">node</span><span class="s2">.</span><span class="s1">nodes </span><span class="s2">|| </span><span class="s1">value </span><span class="s2">=== </span><span class="s0">null</span><span class="s2">) {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">) {</span>
+        <span class="s0">let </span><span class="s1">isParentGrid </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">gridStatus</span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">node</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">_autoprefixerSelfDisabled </span><span class="s2">=== </span><span class="s0">true</span><span class="s2">) {</span>
+          <span class="s1">value </span><span class="s2">= </span><span class="s0">false</span>
+        <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+          <span class="s1">value </span><span class="s2">= </span><span class="s1">isParentGrid</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s0">typeof this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">options</span><span class="s2">.</span><span class="s1">grid </span><span class="s2">!== </span><span class="s3">'undefined'</span><span class="s2">) {</span>
+        <span class="s1">value </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">options</span><span class="s2">.</span><span class="s1">grid</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span><span class="s0">typeof </span><span class="s1">process</span><span class="s2">.</span><span class="s1">env</span><span class="s2">.</span><span class="s1">AUTOPREFIXER_GRID </span><span class="s2">!== </span><span class="s3">'undefined'</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">process</span><span class="s2">.</span><span class="s1">env</span><span class="s2">.</span><span class="s1">AUTOPREFIXER_GRID </span><span class="s2">=== </span><span class="s3">'autoplace'</span><span class="s2">) {</span>
+          <span class="s1">value </span><span class="s2">= </span><span class="s3">'autoplace'</span>
+        <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+          <span class="s1">value </span><span class="s2">= </span><span class="s0">true</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else </span><span class="s2">{</span>
+        <span class="s1">value </span><span class="s2">= </span><span class="s0">false</span>
+      <span class="s2">}</span>
+    <span class="s2">}</span>
+
+    <span class="s1">node</span><span class="s2">.</span><span class="s1">_autoprefixerGridStatus </span><span class="s2">= </span><span class="s1">value</span>
+    <span class="s0">return </span><span class="s1">value</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Normalize spaces in cascade declaration group</span>
+   <span class="s5">*/</span>
+  <span class="s1">reduceSpaces</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">) {</span>
+    <span class="s0">let </span><span class="s1">stop </span><span class="s2">= </span><span class="s0">false</span>
+    <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">group</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">).</span><span class="s1">up</span><span class="s2">(() =&gt; {</span>
+      <span class="s1">stop </span><span class="s2">= </span><span class="s0">true</span>
+      <span class="s0">return true</span>
+    <span class="s2">})</span>
+    <span class="s0">if </span><span class="s2">(</span><span class="s1">stop</span><span class="s2">) {</span>
+      <span class="s0">return</span>
+    <span class="s2">}</span>
+
+    <span class="s0">let </span><span class="s1">parts </span><span class="s2">= </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">(</span><span class="s3">'before'</span><span class="s2">).</span><span class="s1">split</span><span class="s2">(</span><span class="s3">'</span><span class="s0">\n</span><span class="s3">'</span><span class="s2">)</span>
+    <span class="s0">let </span><span class="s1">prevMin </span><span class="s2">= </span><span class="s1">parts</span><span class="s2">[</span><span class="s1">parts</span><span class="s2">.</span><span class="s1">length </span><span class="s2">- </span><span class="s7">1</span><span class="s2">].</span><span class="s1">length</span>
+    <span class="s0">let </span><span class="s1">diff </span><span class="s2">= </span><span class="s0">false</span>
+
+    <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">group</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">).</span><span class="s1">down</span><span class="s2">(</span><span class="s1">other </span><span class="s2">=&gt; {</span>
+      <span class="s1">parts </span><span class="s2">= </span><span class="s1">other</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">(</span><span class="s3">'before'</span><span class="s2">).</span><span class="s1">split</span><span class="s2">(</span><span class="s3">'</span><span class="s0">\n</span><span class="s3">'</span><span class="s2">)</span>
+      <span class="s0">let </span><span class="s1">last </span><span class="s2">= </span><span class="s1">parts</span><span class="s2">.</span><span class="s1">length </span><span class="s2">- </span><span class="s7">1</span>
+
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">parts</span><span class="s2">[</span><span class="s1">last</span><span class="s2">].</span><span class="s1">length </span><span class="s2">&gt; </span><span class="s1">prevMin</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">diff </span><span class="s2">=== </span><span class="s0">false</span><span class="s2">) {</span>
+          <span class="s1">diff </span><span class="s2">= </span><span class="s1">parts</span><span class="s2">[</span><span class="s1">last</span><span class="s2">].</span><span class="s1">length </span><span class="s2">- </span><span class="s1">prevMin</span>
+        <span class="s2">}</span>
+
+        <span class="s1">parts</span><span class="s2">[</span><span class="s1">last</span><span class="s2">] = </span><span class="s1">parts</span><span class="s2">[</span><span class="s1">last</span><span class="s2">].</span><span class="s1">slice</span><span class="s2">(</span><span class="s7">0</span><span class="s2">, -</span><span class="s1">diff</span><span class="s2">)</span>
+        <span class="s1">other</span><span class="s2">.</span><span class="s1">raws</span><span class="s2">.</span><span class="s1">before </span><span class="s2">= </span><span class="s1">parts</span><span class="s2">.</span><span class="s1">join</span><span class="s2">(</span><span class="s3">'</span><span class="s0">\n</span><span class="s3">'</span><span class="s2">)</span>
+      <span class="s2">}</span>
+    <span class="s2">})</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Remove unnecessary pefixes</span>
+   <span class="s5">*/</span>
+  <span class="s1">remove</span><span class="s2">(</span><span class="s1">css</span><span class="s2">, </span><span class="s1">result</span><span class="s2">) {</span>
+    <span class="s6">// At-rules</span>
+    <span class="s0">let </span><span class="s1">resolution </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">remove</span><span class="s2">[</span><span class="s3">'@resolution'</span><span class="s2">]</span>
+
+    <span class="s1">css</span><span class="s2">.</span><span class="s1">walkAtRules</span><span class="s2">((</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">i</span><span class="s2">) =&gt; {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">remove</span><span class="s2">[</span><span class="s3">`@</span><span class="s1">$</span><span class="s2">{</span><span class="s1">rule</span><span class="s2">.</span><span class="s1">name</span><span class="s2">}</span><span class="s3">`</span><span class="s2">]) {</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) {</span>
+          <span class="s1">rule</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">removeChild</span><span class="s2">(</span><span class="s1">i</span><span class="s2">)</span>
+        <span class="s2">}</span>
+      <span class="s2">} </span><span class="s0">else if </span><span class="s2">(</span>
+        <span class="s1">rule</span><span class="s2">.</span><span class="s1">name </span><span class="s2">=== </span><span class="s3">'media' </span><span class="s2">&amp;&amp;</span>
+        <span class="s1">rule</span><span class="s2">.</span><span class="s1">params</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'-resolution'</span><span class="s2">) &amp;&amp;</span>
+        <span class="s1">resolution</span>
+      <span class="s2">) {</span>
+        <span class="s1">resolution</span><span class="s2">.</span><span class="s1">clean</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">)</span>
+      <span class="s2">}</span>
+    <span class="s2">})</span>
+
+    <span class="s6">// Selectors</span>
+    <span class="s1">css</span><span class="s2">.</span><span class="s1">walkRules</span><span class="s2">((</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">i</span><span class="s2">) =&gt; {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) </span><span class="s0">return</span>
+
+      <span class="s0">for </span><span class="s2">(</span><span class="s0">let </span><span class="s1">checker of </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">remove</span><span class="s2">.</span><span class="s1">selectors</span><span class="s2">) {</span>
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">checker</span><span class="s2">.</span><span class="s1">check</span><span class="s2">(</span><span class="s1">rule</span><span class="s2">)) {</span>
+          <span class="s1">rule</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">removeChild</span><span class="s2">(</span><span class="s1">i</span><span class="s2">)</span>
+          <span class="s0">return</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+    <span class="s2">})</span>
+
+    <span class="s0">return </span><span class="s1">css</span><span class="s2">.</span><span class="s1">walkDecls</span><span class="s2">((</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">i</span><span class="s2">) =&gt; {</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s0">this</span><span class="s2">.</span><span class="s1">disabled</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">, </span><span class="s1">result</span><span class="s2">)) </span><span class="s0">return</span>
+
+      <span class="s0">let </span><span class="s1">rule </span><span class="s2">= </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span>
+      <span class="s0">let </span><span class="s1">unprefixed </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">unprefixed</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">)</span>
+
+      <span class="s6">// Transition</span>
+      <span class="s0">if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'transition' </span><span class="s2">|| </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'transition-property'</span><span class="s2">) {</span>
+        <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">transition</span><span class="s2">.</span><span class="s1">remove</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)</span>
+      <span class="s2">}</span>
+
+      <span class="s6">// Properties</span>
+      <span class="s0">if </span><span class="s2">(</span>
+        <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">remove</span><span class="s2">[</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">] &amp;&amp;</span>
+        <span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">remove</span><span class="s2">[</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">].</span><span class="s1">remove</span>
+      <span class="s2">) {</span>
+        <span class="s0">let </span><span class="s1">notHack </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">group</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">).</span><span class="s1">down</span><span class="s2">(</span><span class="s1">other </span><span class="s2">=&gt; {</span>
+          <span class="s0">return this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">normalize</span><span class="s2">(</span><span class="s1">other</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">) === </span><span class="s1">unprefixed</span>
+        <span class="s2">})</span>
+
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">unprefixed </span><span class="s2">=== </span><span class="s3">'flex-flow'</span><span class="s2">) {</span>
+          <span class="s1">notHack </span><span class="s2">= </span><span class="s0">true</span>
+        <span class="s2">}</span>
+
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'-webkit-box-orient'</span><span class="s2">) {</span>
+          <span class="s0">let </span><span class="s1">hacks </span><span class="s2">= { </span><span class="s3">'flex-direction'</span><span class="s2">: </span><span class="s0">true</span><span class="s2">, </span><span class="s3">'flex-flow'</span><span class="s2">: </span><span class="s0">true </span><span class="s2">}</span>
+          <span class="s0">if </span><span class="s2">(!</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">j </span><span class="s2">=&gt; </span><span class="s1">hacks</span><span class="s2">[</span><span class="s1">j</span><span class="s2">.</span><span class="s1">prop</span><span class="s2">])) </span><span class="s0">return</span>
+        <span class="s2">}</span>
+
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">notHack </span><span class="s2">&amp;&amp; !</span><span class="s0">this</span><span class="s2">.</span><span class="s1">withHackValue</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)) {</span>
+          <span class="s0">if </span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">raw</span><span class="s2">(</span><span class="s3">'before'</span><span class="s2">).</span><span class="s1">includes</span><span class="s2">(</span><span class="s3">'</span><span class="s0">\n</span><span class="s3">'</span><span class="s2">)) {</span>
+            <span class="s0">this</span><span class="s2">.</span><span class="s1">reduceSpaces</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">)</span>
+          <span class="s2">}</span>
+          <span class="s1">rule</span><span class="s2">.</span><span class="s1">removeChild</span><span class="s2">(</span><span class="s1">i</span><span class="s2">)</span>
+          <span class="s0">return</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+
+      <span class="s6">// Values</span>
+      <span class="s0">for </span><span class="s2">(</span><span class="s0">let </span><span class="s1">checker of </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">values</span><span class="s2">(</span><span class="s3">'remove'</span><span class="s2">, </span><span class="s1">unprefixed</span><span class="s2">)) {</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s1">checker</span><span class="s2">.</span><span class="s1">check</span><span class="s2">) </span><span class="s0">continue</span>
+        <span class="s0">if </span><span class="s2">(!</span><span class="s1">checker</span><span class="s2">.</span><span class="s1">check</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value</span><span class="s2">)) </span><span class="s0">continue</span>
+
+        <span class="s1">unprefixed </span><span class="s2">= </span><span class="s1">checker</span><span class="s2">.</span><span class="s1">unprefixed</span>
+        <span class="s0">let </span><span class="s1">notHack </span><span class="s2">= </span><span class="s0">this</span><span class="s2">.</span><span class="s1">prefixes</span><span class="s2">.</span><span class="s1">group</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">).</span><span class="s1">down</span><span class="s2">(</span><span class="s1">other </span><span class="s2">=&gt; {</span>
+          <span class="s0">return </span><span class="s1">other</span><span class="s2">.</span><span class="s1">value</span><span class="s2">.</span><span class="s1">includes</span><span class="s2">(</span><span class="s1">unprefixed</span><span class="s2">)</span>
+        <span class="s2">})</span>
+
+        <span class="s0">if </span><span class="s2">(</span><span class="s1">notHack</span><span class="s2">) {</span>
+          <span class="s1">rule</span><span class="s2">.</span><span class="s1">removeChild</span><span class="s2">(</span><span class="s1">i</span><span class="s2">)</span>
+          <span class="s0">return</span>
+        <span class="s2">}</span>
+      <span class="s2">}</span>
+    <span class="s2">})</span>
+  <span class="s2">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Some rare old values, which is not in standard</span>
+   <span class="s5">*/</span>
+  <span class="s1">withHackValue</span><span class="s2">(</span><span class="s1">decl</span><span class="s2">) {</span>
+    <span class="s0">return </span><span class="s2">(</span>
+      <span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'-webkit-background-clip' </span><span class="s2">&amp;&amp; </span><span class="s1">decl</span><span class="s2">.</span><span class="s1">value </span><span class="s2">=== </span><span class="s3">'text'</span><span class="s2">) ||</span>
+      <span class="s6">// Do not remove -webkit-box-orient when -webkit-line-clamp is present.</span>
+      <span class="s6">// https://github.com/postcss/autoprefixer/issues/1510</span>
+      <span class="s2">(</span><span class="s1">decl</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'-webkit-box-orient' </span><span class="s2">&amp;&amp;</span>
+        <span class="s1">decl</span><span class="s2">.</span><span class="s1">parent</span><span class="s2">.</span><span class="s1">some</span><span class="s2">(</span><span class="s1">d </span><span class="s2">=&gt; </span><span class="s1">d</span><span class="s2">.</span><span class="s1">prop </span><span class="s2">=== </span><span class="s3">'-webkit-line-clamp'</span><span class="s2">))</span>
+    <span class="s2">)</span>
+  <span class="s2">}</span>
+<span class="s2">}</span>
+
+<span class="s1">module</span><span class="s2">.</span><span class="s1">exports </span><span class="s2">= </span><span class="s1">Processor</span>
+</pre>
+</body>
+</html>

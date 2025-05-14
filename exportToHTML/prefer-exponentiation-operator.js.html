@@ -1,0 +1,215 @@
+<html>
+<head>
+<title>prefer-exponentiation-operator.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+prefer-exponentiation-operator.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to disallow Math.pow in favor of the ** operator</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Milos Djermanovic</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">CALL</span><span class="s4">, </span><span class="s2">ReferenceTracker </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint-community/eslint-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">PRECEDENCE_OF_EXPONENTIATION_EXPR </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getPrecedence</span><span class="s4">({ </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;BinaryExpression&quot;</span><span class="s4">, </span><span class="s2">operator</span><span class="s4">: </span><span class="s3">&quot;**&quot; </span><span class="s4">});</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines whether the given node needs parens if used as the base in an exponentiation binary expression.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} base The node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node needs to be parenthesised.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">doesBaseNeedParens</span><span class="s4">(</span><span class="s2">base</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s4">(</span>
+
+        <span class="s5">// '**' is right-associative, parens are needed when Math.pow(a ** b, c) is converted to (a ** b) ** c</span>
+        <span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getPrecedence</span><span class="s4">(</span><span class="s2">base</span><span class="s4">) &lt;= </span><span class="s2">PRECEDENCE_OF_EXPONENTIATION_EXPR </span><span class="s4">||</span>
+
+        <span class="s5">// An unary operator cannot be used immediately before an exponentiation expression</span>
+        <span class="s2">base</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;AwaitExpression&quot; </span><span class="s4">||</span>
+        <span class="s2">base</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;UnaryExpression&quot;</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines whether the given node needs parens if used as the exponent in an exponentiation binary expression.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} exponent The node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node needs to be parenthesised.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">doesExponentNeedParens</span><span class="s4">(</span><span class="s2">exponent</span><span class="s4">) {</span>
+
+    <span class="s5">// '**' is right-associative, there is no need for parens when Math.pow(a, b ** c) is converted to a ** b ** c</span>
+    <span class="s6">return </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getPrecedence</span><span class="s4">(</span><span class="s2">exponent</span><span class="s4">) &lt; </span><span class="s2">PRECEDENCE_OF_EXPONENTIATION_EXPR</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines whether an exponentiation binary expression at the place of the given node would need parens.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A node that would be replaced by an exponentiation binary expression.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{SourceCode} sourceCode A SourceCode object.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the expression needs to be parenthesised.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">doesExponentiationExpressionNeedParens</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">parent </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ChainExpression&quot; </span><span class="s4">? </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent </span><span class="s4">: </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+    <span class="s6">const </span><span class="s2">parentPrecedence </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getPrecedence</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+    <span class="s6">const </span><span class="s2">needsParens </span><span class="s4">= (</span>
+        <span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ClassDeclaration&quot; </span><span class="s4">||</span>
+        <span class="s4">(</span>
+            <span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">.</span><span class="s2">endsWith</span><span class="s4">(</span><span class="s3">&quot;Expression&quot;</span><span class="s4">) &amp;&amp;</span>
+            <span class="s4">(</span><span class="s2">parentPrecedence </span><span class="s4">=== -</span><span class="s7">1 </span><span class="s4">|| </span><span class="s2">parentPrecedence </span><span class="s4">&gt;= </span><span class="s2">PRECEDENCE_OF_EXPONENTIATION_EXPR</span><span class="s4">) &amp;&amp;</span>
+            <span class="s4">!(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;BinaryExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;**&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">right </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">) &amp;&amp;</span>
+            <span class="s4">!((</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;CallExpression&quot; </span><span class="s4">|| </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;NewExpression&quot;</span><span class="s4">) &amp;&amp; </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) &amp;&amp;</span>
+            <span class="s4">!(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;MemberExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">computed </span><span class="s4">&amp;&amp; </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">property </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">) &amp;&amp;</span>
+            <span class="s4">!(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ArrayExpression&quot;</span><span class="s4">)</span>
+        <span class="s4">)</span>
+    <span class="s4">);</span>
+
+    <span class="s6">return </span><span class="s2">needsParens </span><span class="s4">&amp;&amp; !</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isParenthesised</span><span class="s4">(</span><span class="s2">sourceCode</span><span class="s4">, </span><span class="s2">node</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Optionally parenthesizes given text.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} text The text to parenthesize.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} shouldParenthesize If `true`, the text will be parenthesised.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{string} parenthesised or unchanged text.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">parenthesizeIfShould</span><span class="s4">(</span><span class="s2">text</span><span class="s4">, </span><span class="s2">shouldParenthesize</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">shouldParenthesize </span><span class="s4">? </span><span class="s3">`(</span><span class="s2">$</span><span class="s4">{</span><span class="s2">text</span><span class="s4">}</span><span class="s3">)` </span><span class="s4">: </span><span class="s2">text</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow the use of `Math.pow` in favor of the `**` operator&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/prefer-exponentiation-operator&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [],</span>
+        <span class="s2">fixable</span><span class="s4">: </span><span class="s3">&quot;code&quot;</span><span class="s4">,</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">useExponentiation</span><span class="s4">: </span><span class="s3">&quot;Use the '**' operator instead of 'Math.pow'.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Reports the given node.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node 'Math.pow()' node to report.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">report</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                <span class="s2">node</span><span class="s4">,</span>
+                <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;useExponentiation&quot;</span><span class="s4">,</span>
+                <span class="s2">fix</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">) {</span>
+                    <span class="s6">if </span><span class="s4">(</span>
+                        <span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">!== </span><span class="s7">2 </span><span class="s4">||</span>
+                        <span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">arg </span><span class="s4">=&gt; </span><span class="s2">arg</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;SpreadElement&quot;</span><span class="s4">) ||</span>
+                        <span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getCommentsInside</span><span class="s4">(</span><span class="s2">node</span><span class="s4">).</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span>
+                    <span class="s4">) {</span>
+                        <span class="s6">return null</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+
+                    <span class="s6">const </span><span class="s2">base </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">0</span><span class="s4">],</span>
+                        <span class="s2">exponent </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">1</span><span class="s4">],</span>
+                        <span class="s2">baseText </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">base</span><span class="s4">),</span>
+                        <span class="s2">exponentText </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">exponent</span><span class="s4">),</span>
+                        <span class="s2">shouldParenthesizeBase </span><span class="s4">= </span><span class="s2">doesBaseNeedParens</span><span class="s4">(</span><span class="s2">base</span><span class="s4">),</span>
+                        <span class="s2">shouldParenthesizeExponent </span><span class="s4">= </span><span class="s2">doesExponentNeedParens</span><span class="s4">(</span><span class="s2">exponent</span><span class="s4">),</span>
+                        <span class="s2">shouldParenthesizeAll </span><span class="s4">= </span><span class="s2">doesExponentiationExpressionNeedParens</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">);</span>
+
+                    <span class="s6">let </span><span class="s2">prefix </span><span class="s4">= </span><span class="s3">&quot;&quot;</span><span class="s4">,</span>
+                        <span class="s2">suffix </span><span class="s4">= </span><span class="s3">&quot;&quot;</span><span class="s4">;</span>
+
+                    <span class="s6">if </span><span class="s4">(!</span><span class="s2">shouldParenthesizeAll</span><span class="s4">) {</span>
+                        <span class="s6">if </span><span class="s4">(!</span><span class="s2">shouldParenthesizeBase</span><span class="s4">) {</span>
+                            <span class="s6">const </span><span class="s2">firstReplacementToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getFirstToken</span><span class="s4">(</span><span class="s2">base</span><span class="s4">),</span>
+                                <span class="s2">tokenBefore </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+
+                            <span class="s6">if </span><span class="s4">(</span>
+                                <span class="s2">tokenBefore </span><span class="s4">&amp;&amp;</span>
+                                <span class="s2">tokenBefore</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] === </span><span class="s2">node</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp;</span>
+                                <span class="s4">!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">canTokensBeAdjacent</span><span class="s4">(</span><span class="s2">tokenBefore</span><span class="s4">, </span><span class="s2">firstReplacementToken</span><span class="s4">)</span>
+                            <span class="s4">) {</span>
+                                <span class="s2">prefix </span><span class="s4">= </span><span class="s3">&quot; &quot;</span><span class="s4">; </span><span class="s5">// a+Math.pow(++b, c) -&gt; a+ ++b**c</span>
+                            <span class="s4">}</span>
+                        <span class="s4">}</span>
+                        <span class="s6">if </span><span class="s4">(!</span><span class="s2">shouldParenthesizeExponent</span><span class="s4">) {</span>
+                            <span class="s6">const </span><span class="s2">lastReplacementToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getLastToken</span><span class="s4">(</span><span class="s2">exponent</span><span class="s4">),</span>
+                                <span class="s2">tokenAfter </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenAfter</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+
+                            <span class="s6">if </span><span class="s4">(</span>
+                                <span class="s2">tokenAfter </span><span class="s4">&amp;&amp;</span>
+                                <span class="s2">node</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] === </span><span class="s2">tokenAfter</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp;</span>
+                                <span class="s4">!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">canTokensBeAdjacent</span><span class="s4">(</span><span class="s2">lastReplacementToken</span><span class="s4">, </span><span class="s2">tokenAfter</span><span class="s4">)</span>
+                            <span class="s4">) {</span>
+                                <span class="s2">suffix </span><span class="s4">= </span><span class="s3">&quot; &quot;</span><span class="s4">; </span><span class="s5">// Math.pow(a, b)in c -&gt; a**b in c</span>
+                            <span class="s4">}</span>
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+
+                    <span class="s6">const </span><span class="s2">baseReplacement </span><span class="s4">= </span><span class="s2">parenthesizeIfShould</span><span class="s4">(</span><span class="s2">baseText</span><span class="s4">, </span><span class="s2">shouldParenthesizeBase</span><span class="s4">),</span>
+                        <span class="s2">exponentReplacement </span><span class="s4">= </span><span class="s2">parenthesizeIfShould</span><span class="s4">(</span><span class="s2">exponentText</span><span class="s4">, </span><span class="s2">shouldParenthesizeExponent</span><span class="s4">),</span>
+                        <span class="s2">replacement </span><span class="s4">= </span><span class="s2">parenthesizeIfShould</span><span class="s4">(</span><span class="s3">`</span><span class="s2">$</span><span class="s4">{</span><span class="s2">baseReplacement</span><span class="s4">}</span><span class="s3">**</span><span class="s2">$</span><span class="s4">{</span><span class="s2">exponentReplacement</span><span class="s4">}</span><span class="s3">`</span><span class="s4">, </span><span class="s2">shouldParenthesizeAll</span><span class="s4">);</span>
+
+                    <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceText</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s3">`</span><span class="s2">$</span><span class="s4">{</span><span class="s2">prefix</span><span class="s4">}</span><span class="s2">$</span><span class="s4">{</span><span class="s2">replacement</span><span class="s4">}</span><span class="s2">$</span><span class="s4">{</span><span class="s2">suffix</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">});</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">Program</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s6">const </span><span class="s2">tracker </span><span class="s4">= </span><span class="s6">new </span><span class="s2">ReferenceTracker</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">);</span>
+                <span class="s6">const </span><span class="s2">trackMap </span><span class="s4">= {</span>
+                    <span class="s2">Math</span><span class="s4">: {</span>
+                        <span class="s2">pow</span><span class="s4">: { [</span><span class="s2">CALL</span><span class="s4">]: </span><span class="s6">true </span><span class="s4">}</span>
+                    <span class="s4">}</span>
+                <span class="s4">};</span>
+
+                <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">{ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">refNode </span><span class="s4">} </span><span class="s2">of tracker</span><span class="s4">.</span><span class="s2">iterateGlobalReferences</span><span class="s4">(</span><span class="s2">trackMap</span><span class="s4">)) {</span>
+                    <span class="s2">report</span><span class="s4">(</span><span class="s2">refNode</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,446 @@
+<html>
+<head>
+<title>FlagDependencyExportsPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+FlagDependencyExportsPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Queue </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/Queue&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./DependenciesBlock&quot;)} DependenciesBlock */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;)} Dependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;).ExportSpec} ExportSpec */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;).ExportsSpec} ExportsSpec */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ExportsInfo&quot;)} ExportsInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ExportsInfo&quot;).RestoreProvidedData} RestoreProvidedData */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).BuildInfo} BuildInfo */</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;FlagDependencyExportsPlugin&quot;</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">PLUGIN_LOGGER_NAME </span><span class="s3">= </span><span class="s2">`webpack.</span><span class="s1">$</span><span class="s3">{</span><span class="s1">PLUGIN_NAME</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">FlagDependencyExportsPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">cache </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getCache</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">);</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">finishModules</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+				<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">modules</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s1">PLUGIN_LOGGER_NAME</span><span class="s3">);</span>
+					<span class="s4">let </span><span class="s1">statRestoredFromMemCache </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">statRestoredFromCache </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">statNoExports </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">statFlaggedUncached </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">statNotCached </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">statQueueItemsProcessed </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+
+					<span class="s4">const </span><span class="s3">{ </span><span class="s1">moduleMemCaches </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Queue&lt;Module&gt;} */</span>
+					<span class="s4">const </span><span class="s1">queue </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Queue</span><span class="s3">();</span>
+
+					<span class="s0">// Step 1: Try to restore cached provided export info from cache</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;restore cached provided exports&quot;</span><span class="s3">);</span>
+					<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+						<span class="s1">modules</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+							<span class="s0">// If the module doesn't have an exportsType, it's a module</span>
+							<span class="s0">// without declared exports.</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s3">(!</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildMeta </span><span class="s3">|| !</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildMeta</span><span class="s3">.</span><span class="s1">exportsType</span><span class="s3">) &amp;&amp;</span>
+								<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">otherExportsInfo</span><span class="s3">.</span><span class="s1">provided </span><span class="s3">!== </span><span class="s4">null</span>
+							<span class="s3">) {</span>
+								<span class="s0">// It's a module without declared exports</span>
+								<span class="s1">statNoExports</span><span class="s3">++;</span>
+								<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setHasProvideInfo</span><span class="s3">();</span>
+								<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setUnknownExportsProvided</span><span class="s3">();</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+							<span class="s0">// If the module has no hash, it's uncacheable</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s4">typeof </span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">hash</span><span class="s3">) !==</span>
+								<span class="s2">&quot;string&quot;</span>
+							<span class="s3">) {</span>
+								<span class="s1">statFlaggedUncached</span><span class="s3">++;</span>
+								<span class="s0">// Enqueue uncacheable module for determining the exports</span>
+								<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setHasProvideInfo</span><span class="s3">();</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">memCache </span><span class="s3">= </span><span class="s1">moduleMemCaches </span><span class="s3">&amp;&amp; </span><span class="s1">moduleMemCaches</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">memCacheValue </span><span class="s3">= </span><span class="s1">memCache </span><span class="s3">&amp;&amp; </span><span class="s1">memCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">memCacheValue </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s1">statRestoredFromMemCache</span><span class="s3">++;</span>
+								<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">restoreProvided</span><span class="s3">(</span><span class="s1">memCacheValue</span><span class="s3">);</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+							<span class="s1">cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+								<span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(),</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+								<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">hash</span><span class="s3">,</span>
+								<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">result </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+										<span class="s1">statRestoredFromCache</span><span class="s3">++;</span>
+										<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">restoreProvided</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s1">statNotCached</span><span class="s3">++;</span>
+										<span class="s0">// Without cached info enqueue module for determining the exports</span>
+										<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+										<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setHasProvideInfo</span><span class="s3">();</span>
+									<span class="s3">}</span>
+									<span class="s1">callback</span><span class="s3">();</span>
+								<span class="s3">}</span>
+							<span class="s3">);</span>
+						<span class="s3">},</span>
+						<span class="s1">err </span><span class="s3">=&gt; {</span>
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;restore cached provided exports&quot;</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;Module&gt;} */</span>
+							<span class="s4">const </span><span class="s1">modulesToStore </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, Set&lt;Module&gt;&gt;} */</span>
+							<span class="s4">const </span><span class="s1">dependencies </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */</span>
+							<span class="s4">let </span><span class="s1">module</span><span class="s3">;</span>
+
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportsInfo} */</span>
+							<span class="s4">let </span><span class="s1">exportsInfo</span><span class="s3">;</span>
+
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Dependency, ExportsSpec&gt;} */</span>
+							<span class="s4">const </span><span class="s1">exportsSpecsFromDependencies </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+							<span class="s4">let </span><span class="s1">cacheable </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">changed </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+
+							<span class="s5">/**</span>
+							 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependenciesBlock} depBlock the dependencies block</span>
+							 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+							 <span class="s5">*/</span>
+							<span class="s4">const </span><span class="s1">processDependenciesBlock </span><span class="s3">= </span><span class="s1">depBlock </span><span class="s3">=&gt; {</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of depBlock</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">) {</span>
+									<span class="s1">processDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">block of depBlock</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">) {</span>
+									<span class="s1">processDependenciesBlock</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">};</span>
+
+							<span class="s5">/**</span>
+							 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dep the dependency</span>
+							 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+							 <span class="s5">*/</span>
+							<span class="s4">const </span><span class="s1">processDependency </span><span class="s3">= </span><span class="s1">dep </span><span class="s3">=&gt; {</span>
+								<span class="s4">const </span><span class="s1">exportDesc </span><span class="s3">= </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">getExports</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">exportDesc</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+								<span class="s1">exportsSpecsFromDependencies</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">exportDesc</span><span class="s3">);</span>
+							<span class="s3">};</span>
+
+							<span class="s5">/**</span>
+							 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dep dependency</span>
+							 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ExportsSpec} exportDesc info</span>
+							 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+							 <span class="s5">*/</span>
+							<span class="s4">const </span><span class="s1">processExportsSpec </span><span class="s3">= (</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">exportDesc</span><span class="s3">) =&gt; {</span>
+								<span class="s4">const </span><span class="s1">exports </span><span class="s3">= </span><span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">globalCanMangle </span><span class="s3">= </span><span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">canMangle</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">globalFrom </span><span class="s3">= </span><span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">from</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">globalPriority </span><span class="s3">= </span><span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">priority</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">globalTerminalBinding </span><span class="s3">=</span>
+									<span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">terminalBinding </span><span class="s3">|| </span><span class="s4">false</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">exportDeps </span><span class="s3">= </span><span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">hideExports</span><span class="s3">) {</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">name of exportDesc</span><span class="s3">.</span><span class="s1">hideExports</span><span class="s3">) {</span>
+										<span class="s4">const </span><span class="s1">exportInfo </span><span class="s3">= </span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getExportInfo</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+										<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">unsetTarget</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">exports </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+									<span class="s0">// unknown exports</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setUnknownExportsProvided</span><span class="s3">(</span>
+											<span class="s1">globalCanMangle</span><span class="s3">,</span>
+											<span class="s1">exportDesc</span><span class="s3">.</span><span class="s1">excludeExports</span><span class="s3">,</span>
+											<span class="s1">globalFrom </span><span class="s3">&amp;&amp; </span><span class="s1">dep</span><span class="s3">,</span>
+											<span class="s1">globalFrom</span><span class="s3">,</span>
+											<span class="s1">globalPriority</span>
+										<span class="s3">)</span>
+									<span class="s3">) {</span>
+										<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+									<span class="s3">}</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">exports</span><span class="s3">)) {</span>
+									<span class="s5">/**</span>
+									 <span class="s5">* merge in new exports</span>
+									 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ExportsInfo} exportsInfo own exports info</span>
+									 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(ExportSpec | string)[]} exports list of exports</span>
+									 <span class="s5">*/</span>
+									<span class="s4">const </span><span class="s1">mergeExports </span><span class="s3">= (</span><span class="s1">exportsInfo</span><span class="s3">, </span><span class="s1">exports</span><span class="s3">) =&gt; {</span>
+										<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">exportNameOrSpec of exports</span><span class="s3">) {</span>
+											<span class="s4">let </span><span class="s1">name</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">canMangle </span><span class="s3">= </span><span class="s1">globalCanMangle</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">terminalBinding </span><span class="s3">= </span><span class="s1">globalTerminalBinding</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">exports</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">from </span><span class="s3">= </span><span class="s1">globalFrom</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">fromExport</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">priority </span><span class="s3">= </span><span class="s1">globalPriority</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">hidden </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">exportNameOrSpec </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+												<span class="s1">name </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">;</span>
+											<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+												<span class="s1">name </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">name</span><span class="s3">;</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">canMangle </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+													<span class="s1">canMangle </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">canMangle</span><span class="s3">;</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">export </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+													<span class="s1">fromExport </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">export</span><span class="s3">;</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+													<span class="s1">exports </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">;</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">from </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+													<span class="s1">from </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">from</span><span class="s3">;</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">priority </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+													<span class="s1">priority </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">priority</span><span class="s3">;</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">terminalBinding </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+													<span class="s1">terminalBinding </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">terminalBinding</span><span class="s3">;</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">hidden </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+													<span class="s1">hidden </span><span class="s3">= </span><span class="s1">exportNameOrSpec</span><span class="s3">.</span><span class="s1">hidden</span><span class="s3">;</span>
+											<span class="s3">}</span>
+											<span class="s4">const </span><span class="s1">exportInfo </span><span class="s3">= </span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getExportInfo</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+
+											<span class="s4">if </span><span class="s3">(</span>
+												<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">provided </span><span class="s3">=== </span><span class="s4">false </span><span class="s3">||</span>
+												<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">provided </span><span class="s3">=== </span><span class="s4">null</span>
+											<span class="s3">) {</span>
+												<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">provided </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+												<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+											<span class="s3">}</span>
+
+											<span class="s4">if </span><span class="s3">(</span>
+												<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">canMangleProvide </span><span class="s3">!== </span><span class="s4">false </span><span class="s3">&amp;&amp;</span>
+												<span class="s1">canMangle </span><span class="s3">=== </span><span class="s4">false</span>
+											<span class="s3">) {</span>
+												<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">canMangleProvide </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+												<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+											<span class="s3">}</span>
+
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">terminalBinding </span><span class="s3">&amp;&amp; !</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">terminalBinding</span><span class="s3">) {</span>
+												<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">terminalBinding </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+												<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+											<span class="s3">}</span>
+
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">exports</span><span class="s3">) {</span>
+												<span class="s4">const </span><span class="s1">nestedExportsInfo </span><span class="s3">=</span>
+													<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">createNestedExportsInfo</span><span class="s3">();</span>
+												<span class="s1">mergeExports</span><span class="s3">(</span>
+													<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportsInfo} */ </span><span class="s3">(</span><span class="s1">nestedExportsInfo</span><span class="s3">),</span>
+													<span class="s1">exports</span>
+												<span class="s3">);</span>
+											<span class="s3">}</span>
+
+											<span class="s4">if </span><span class="s3">(</span>
+												<span class="s1">from </span><span class="s3">&amp;&amp;</span>
+												<span class="s3">(</span><span class="s1">hidden</span>
+													<span class="s3">? </span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">unsetTarget</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">)</span>
+													<span class="s3">: </span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">setTarget</span><span class="s3">(</span>
+															<span class="s1">dep</span><span class="s3">,</span>
+															<span class="s1">from</span><span class="s3">,</span>
+															<span class="s1">fromExport </span><span class="s3">=== </span><span class="s1">undefined </span><span class="s3">? [</span><span class="s1">name</span><span class="s3">] : </span><span class="s1">fromExport</span><span class="s3">,</span>
+															<span class="s1">priority</span>
+														<span class="s3">))</span>
+											<span class="s3">) {</span>
+												<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+											<span class="s3">}</span>
+
+											<span class="s0">// Recalculate target exportsInfo</span>
+											<span class="s4">const </span><span class="s1">target </span><span class="s3">= </span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">getTarget</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">);</span>
+											<span class="s4">let </span><span class="s1">targetExportsInfo</span><span class="s3">;</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">target</span><span class="s3">) {</span>
+												<span class="s4">const </span><span class="s1">targetModuleExportsInfo </span><span class="s3">=</span>
+													<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">target</span><span class="s3">.</span><span class="s1">module</span><span class="s3">);</span>
+												<span class="s1">targetExportsInfo </span><span class="s3">=</span>
+													<span class="s1">targetModuleExportsInfo</span><span class="s3">.</span><span class="s1">getNestedExportsInfo</span><span class="s3">(</span>
+														<span class="s1">target</span><span class="s3">.</span><span class="s1">export</span>
+													<span class="s3">);</span>
+												<span class="s0">// add dependency for this module</span>
+												<span class="s4">const </span><span class="s1">set </span><span class="s3">= </span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">target</span><span class="s3">.</span><span class="s1">module</span><span class="s3">);</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">set </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+													<span class="s1">dependencies</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">target</span><span class="s3">.</span><span class="s1">module</span><span class="s3">, </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">module</span><span class="s3">]));</span>
+												<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+													<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+												<span class="s3">}</span>
+											<span class="s3">}</span>
+
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">exportsInfoOwned</span><span class="s3">) {</span>
+												<span class="s4">if </span><span class="s3">(</span>
+													<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportsInfo} */</span>
+													<span class="s3">(</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">exportsInfo</span><span class="s3">).</span><span class="s1">setRedirectNamedTo</span><span class="s3">(</span>
+														<span class="s1">targetExportsInfo</span>
+													<span class="s3">)</span>
+												<span class="s3">) {</span>
+													<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+												<span class="s3">}</span>
+											<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">exportsInfo </span><span class="s3">!== </span><span class="s1">targetExportsInfo</span><span class="s3">) {</span>
+												<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">targetExportsInfo</span><span class="s3">;</span>
+												<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+									<span class="s3">};</span>
+									<span class="s1">mergeExports</span><span class="s3">(</span><span class="s1">exportsInfo</span><span class="s3">, </span><span class="s1">exports</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s0">// store dependencies</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">exportDeps</span><span class="s3">) {</span>
+									<span class="s1">cacheable </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">exportDependency of exportDeps</span><span class="s3">) {</span>
+										<span class="s0">// add dependency for this module</span>
+										<span class="s4">const </span><span class="s1">set </span><span class="s3">= </span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">exportDependency</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">set </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+											<span class="s1">dependencies</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">exportDependency</span><span class="s3">, </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">module</span><span class="s3">]));</span>
+										<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+											<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+										<span class="s3">}</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">};</span>
+
+							<span class="s4">const </span><span class="s1">notifyDependencies </span><span class="s3">= () =&gt; {</span>
+								<span class="s4">const </span><span class="s1">deps </span><span class="s3">= </span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">deps </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of deps</span><span class="s3">) {</span>
+										<span class="s1">queue</span><span class="s3">.</span><span class="s1">enqueue</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">};</span>
+
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;figure out provided exports&quot;</span><span class="s3">);</span>
+							<span class="s4">while </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+								<span class="s1">module </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">dequeue</span><span class="s3">());</span>
+
+								<span class="s1">statQueueItemsProcessed</span><span class="s3">++;</span>
+
+								<span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+
+								<span class="s1">cacheable </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+								<span class="s1">changed </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+
+								<span class="s1">exportsSpecsFromDependencies</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+								<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">freeze</span><span class="s3">();</span>
+								<span class="s1">processDependenciesBlock</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">unfreeze</span><span class="s3">();</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">exportsSpec</span><span class="s3">] </span><span class="s1">of exportsSpecsFromDependencies</span><span class="s3">) {</span>
+									<span class="s1">processExportsSpec</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">, </span><span class="s1">exportsSpec</span><span class="s3">);</span>
+								<span class="s3">}</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheable</span><span class="s3">) {</span>
+									<span class="s1">modulesToStore</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s3">}</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">changed</span><span class="s3">) {</span>
+									<span class="s1">notifyDependencies</span><span class="s3">();</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;figure out provided exports&quot;</span><span class="s3">);</span>
+
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+								<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Math</span><span class="s3">.</span><span class="s1">round</span><span class="s3">(</span>
+									<span class="s3">(</span><span class="s7">100 </span><span class="s3">* (</span><span class="s1">statFlaggedUncached </span><span class="s3">+ </span><span class="s1">statNotCached</span><span class="s3">)) /</span>
+										<span class="s3">(</span><span class="s1">statRestoredFromMemCache </span><span class="s3">+</span>
+											<span class="s1">statRestoredFromCache </span><span class="s3">+</span>
+											<span class="s1">statNotCached </span><span class="s3">+</span>
+											<span class="s1">statFlaggedUncached </span><span class="s3">+</span>
+											<span class="s1">statNoExports</span><span class="s3">)</span>
+								<span class="s3">)}</span><span class="s2">% of exports of modules have been determined (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statNoExports</span><span class="s3">} </span><span class="s2">no declared exports, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statNotCached</span><span class="s3">} </span><span class="s2">not cached, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statFlaggedUncached</span><span class="s3">} </span><span class="s2">flagged uncacheable, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statRestoredFromCache</span><span class="s3">} </span><span class="s2">from cache, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statRestoredFromMemCache</span><span class="s3">} </span><span class="s2">from mem cache, </span><span class="s1">$</span><span class="s3">{</span>
+									<span class="s1">statQueueItemsProcessed </span><span class="s3">- </span><span class="s1">statNotCached </span><span class="s3">- </span><span class="s1">statFlaggedUncached</span>
+								<span class="s3">} </span><span class="s2">additional calculations due to dependencies)`</span>
+							<span class="s3">);</span>
+
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;store provided exports into cache&quot;</span><span class="s3">);</span>
+							<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+								<span class="s1">modulesToStore</span><span class="s3">,</span>
+								<span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s4">typeof </span><span class="s3">(</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">hash</span>
+										<span class="s3">) !== </span><span class="s2">&quot;string&quot;</span>
+									<span class="s3">) {</span>
+										<span class="s0">// not cacheable</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+									<span class="s3">}</span>
+									<span class="s4">const </span><span class="s1">cachedData </span><span class="s3">= </span><span class="s1">moduleGraph</span>
+										<span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)</span>
+										<span class="s3">.</span><span class="s1">getRestoreProvidedData</span><span class="s3">();</span>
+									<span class="s4">const </span><span class="s1">memCache </span><span class="s3">=</span>
+										<span class="s1">moduleMemCaches </span><span class="s3">&amp;&amp; </span><span class="s1">moduleMemCaches</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">memCache</span><span class="s3">) {</span>
+										<span class="s1">memCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">cachedData</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">cache</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span>
+										<span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(),</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+										<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">hash</span><span class="s3">,</span>
+										<span class="s1">cachedData</span><span class="s3">,</span>
+										<span class="s1">callback</span>
+									<span class="s3">);</span>
+								<span class="s3">},</span>
+								<span class="s1">err </span><span class="s3">=&gt; {</span>
+									<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;store provided exports into cache&quot;</span><span class="s3">);</span>
+									<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Module, RestoreProvidedData&gt;} */</span>
+			<span class="s4">const </span><span class="s1">providedExportsCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">rebuildModule</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">module </span><span class="s3">=&gt; {</span>
+				<span class="s1">providedExportsCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">module</span><span class="s3">,</span>
+					<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">getRestoreProvidedData</span><span class="s3">()</span>
+				<span class="s3">);</span>
+			<span class="s3">});</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">finishRebuildingModule</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">module </span><span class="s3">=&gt; {</span>
+				<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">restoreProvided</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{RestoreProvidedData} */</span>
+					<span class="s3">(</span><span class="s1">providedExportsCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">))</span>
+				<span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">FlagDependencyExportsPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

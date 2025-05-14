@@ -1,0 +1,416 @@
+<html>
+<head>
+<title>watchpack.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #2aacb8;}
+.s6 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+watchpack.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">getWatcherManager </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./getWatcherManager&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">LinkResolver </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./LinkResolver&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">EventEmitter </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;events&quot;</span><span class="s3">).</span><span class="s1">EventEmitter</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">globToRegExp </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;glob-to-regexp&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">watchEventSource </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./watchEventSource&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">EMPTY_ARRAY </span><span class="s3">= [];</span>
+<span class="s4">const </span><span class="s1">EMPTY_OPTIONS </span><span class="s3">= {};</span>
+
+<span class="s4">function </span><span class="s1">addWatchersToSet</span><span class="s3">(</span><span class="s1">watchers</span><span class="s3">, </span><span class="s1">set</span><span class="s3">) {</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">ww of watchers</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">w </span><span class="s3">= </span><span class="s1">ww</span><span class="s3">.</span><span class="s1">watcher</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">set</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">w</span><span class="s3">.</span><span class="s1">directoryWatcher</span><span class="s3">)) {</span>
+			<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">w</span><span class="s3">.</span><span class="s1">directoryWatcher</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">const </span><span class="s1">stringToRegexp </span><span class="s3">= </span><span class="s1">ignored </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">ignored</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+		<span class="s4">return</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">const </span><span class="s1">source </span><span class="s3">= </span><span class="s1">globToRegExp</span><span class="s3">(</span><span class="s1">ignored</span><span class="s3">, { </span><span class="s1">globstar</span><span class="s3">: </span><span class="s4">true</span><span class="s3">, </span><span class="s1">extended</span><span class="s3">: </span><span class="s4">true </span><span class="s3">})</span>
+		<span class="s3">.</span><span class="s1">source</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s1">source</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s5">0</span><span class="s3">, </span><span class="s1">source</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s5">1</span><span class="s3">) + </span><span class="s2">&quot;(?:$|</span><span class="s4">\\</span><span class="s2">/)&quot;</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">ignoredToFunction </span><span class="s3">= </span><span class="s1">ignored </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">ignored</span><span class="s3">)) {</span>
+		<span class="s4">const </span><span class="s1">stringRegexps </span><span class="s3">= </span><span class="s1">ignored</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">i </span><span class="s3">=&gt; </span><span class="s1">stringToRegexp</span><span class="s3">(</span><span class="s1">i</span><span class="s3">)).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">Boolean</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">stringRegexps</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s3">() =&gt; </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">regexp </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RegExp</span><span class="s3">(</span><span class="s1">stringRegexps</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;|&quot;</span><span class="s3">));</span>
+		<span class="s4">return </span><span class="s1">x </span><span class="s3">=&gt; </span><span class="s1">regexp</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">x</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s6">/\\/g</span><span class="s3">, </span><span class="s2">&quot;/&quot;</span><span class="s3">));</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">ignored </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">stringRegexp </span><span class="s3">= </span><span class="s1">stringToRegexp</span><span class="s3">(</span><span class="s1">ignored</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">stringRegexp</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s3">() =&gt; </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">regexp </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RegExp</span><span class="s3">(</span><span class="s1">stringRegexp</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">x </span><span class="s3">=&gt; </span><span class="s1">regexp</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">x</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s6">/\\/g</span><span class="s3">, </span><span class="s2">&quot;/&quot;</span><span class="s3">));</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">ignored </span><span class="s4">instanceof </span><span class="s1">RegExp</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">x </span><span class="s3">=&gt; </span><span class="s1">ignored</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">x</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s6">/\\/g</span><span class="s3">, </span><span class="s2">&quot;/&quot;</span><span class="s3">));</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">ignored </span><span class="s4">instanceof </span><span class="s1">Function</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">ignored</span><span class="s3">;</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">ignored</span><span class="s3">) {</span>
+		<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">`Invalid option for 'ignored': </span><span class="s1">$</span><span class="s3">{</span><span class="s1">ignored</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s4">return </span><span class="s3">() =&gt; </span><span class="s4">false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">normalizeOptions </span><span class="s3">= </span><span class="s1">options </span><span class="s3">=&gt; {</span>
+	<span class="s4">return </span><span class="s3">{</span>
+		<span class="s1">followSymlinks</span><span class="s3">: !!</span><span class="s1">options</span><span class="s3">.</span><span class="s1">followSymlinks</span><span class="s3">,</span>
+		<span class="s1">ignored</span><span class="s3">: </span><span class="s1">ignoredToFunction</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">ignored</span><span class="s3">),</span>
+		<span class="s1">poll</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">poll</span>
+	<span class="s3">};</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">normalizeCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+<span class="s4">const </span><span class="s1">cachedNormalizeOptions </span><span class="s3">= </span><span class="s1">options </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">normalizeCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">normalized </span><span class="s3">= </span><span class="s1">normalizeOptions</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+	<span class="s1">normalizeCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">options</span><span class="s3">, </span><span class="s1">normalized</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">normalized</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">WatchpackFileWatcher </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">watchpack</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">files</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">files </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">files</span><span class="s3">) ? </span><span class="s1">files </span><span class="s3">: [</span><span class="s1">files</span><span class="s3">];</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">watcher</span><span class="s3">;</span>
+		<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;initial-missing&quot;</span><span class="s3">, </span><span class="s1">type </span><span class="s3">=&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">files</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">watchpack</span><span class="s3">.</span><span class="s1">_missing</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">file</span><span class="s3">))</span>
+					<span class="s1">watchpack</span><span class="s3">.</span><span class="s1">_onRemove</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+		<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, (</span><span class="s1">mtime</span><span class="s3">, </span><span class="s1">type</span><span class="s3">) =&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">files</span><span class="s3">) {</span>
+				<span class="s1">watchpack</span><span class="s3">.</span><span class="s1">_onChange</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">mtime</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+		<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;remove&quot;</span><span class="s3">, </span><span class="s1">type </span><span class="s3">=&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">files</span><span class="s3">) {</span>
+				<span class="s1">watchpack</span><span class="s3">.</span><span class="s1">_onRemove</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s1">update</span><span class="s3">(</span><span class="s1">files</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">files</span><span class="s3">)) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">files</span><span class="s3">.</span><span class="s1">length </span><span class="s3">!== </span><span class="s5">1</span><span class="s3">) {</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">files </span><span class="s3">= [</span><span class="s1">files</span><span class="s3">];</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">files</span><span class="s3">[</span><span class="s5">0</span><span class="s3">] !== </span><span class="s1">files</span><span class="s3">) {</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">files</span><span class="s3">[</span><span class="s5">0</span><span class="s3">] = </span><span class="s1">files</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">files </span><span class="s3">= </span><span class="s1">files</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">close</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">class </span><span class="s1">WatchpackDirectoryWatcher </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">watchpack</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">directories</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">directories </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">directories</span><span class="s3">) ? </span><span class="s1">directories </span><span class="s3">: [</span><span class="s1">directories</span><span class="s3">];</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">watcher</span><span class="s3">;</span>
+		<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;initial-missing&quot;</span><span class="s3">, </span><span class="s1">type </span><span class="s3">=&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">directories</span><span class="s3">) {</span>
+				<span class="s1">watchpack</span><span class="s3">.</span><span class="s1">_onRemove</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">item</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+		<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, (</span><span class="s1">file</span><span class="s3">, </span><span class="s1">mtime</span><span class="s3">, </span><span class="s1">type</span><span class="s3">) =&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">directories</span><span class="s3">) {</span>
+				<span class="s1">watchpack</span><span class="s3">.</span><span class="s1">_onChange</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">mtime</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+		<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;remove&quot;</span><span class="s3">, </span><span class="s1">type </span><span class="s3">=&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">directories</span><span class="s3">) {</span>
+				<span class="s1">watchpack</span><span class="s3">.</span><span class="s1">_onRemove</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">item</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s1">update</span><span class="s3">(</span><span class="s1">directories</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">directories</span><span class="s3">)) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">directories</span><span class="s3">.</span><span class="s1">length </span><span class="s3">!== </span><span class="s5">1</span><span class="s3">) {</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">directories </span><span class="s3">= [</span><span class="s1">directories</span><span class="s3">];</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">directories</span><span class="s3">[</span><span class="s5">0</span><span class="s3">] !== </span><span class="s1">directories</span><span class="s3">) {</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">directories</span><span class="s3">[</span><span class="s5">0</span><span class="s3">] = </span><span class="s1">directories</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">directories </span><span class="s3">= </span><span class="s1">directories</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">close</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">class </span><span class="s1">Watchpack </span><span class="s4">extends </span><span class="s1">EventEmitter </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">();</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">options</span><span class="s3">) </span><span class="s1">options </span><span class="s3">= </span><span class="s1">EMPTY_OPTIONS</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimeout </span><span class="s3">=</span>
+			<span class="s4">typeof </span><span class="s1">options</span><span class="s3">.</span><span class="s1">aggregateTimeout </span><span class="s3">=== </span><span class="s2">&quot;number&quot;</span>
+				<span class="s3">? </span><span class="s1">options</span><span class="s3">.</span><span class="s1">aggregateTimeout</span>
+				<span class="s3">: </span><span class="s5">200</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcherOptions </span><span class="s3">= </span><span class="s1">cachedNormalizeOptions</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcherManager </span><span class="s3">= </span><span class="s1">getWatcherManager</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcherOptions</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">fileWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">directoryWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_missing </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">startTime </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">paused </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedChanges </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedRemovals </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_onTimeout </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_onTimeout</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">watch</span><span class="s3">(</span><span class="s1">arg1</span><span class="s3">, </span><span class="s1">arg2</span><span class="s3">, </span><span class="s1">arg3</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">files</span><span class="s3">, </span><span class="s1">directories</span><span class="s3">, </span><span class="s1">missing</span><span class="s3">, </span><span class="s1">startTime</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">arg2</span><span class="s3">) {</span>
+			<span class="s3">({</span>
+				<span class="s1">files </span><span class="s3">= </span><span class="s1">EMPTY_ARRAY</span><span class="s3">,</span>
+				<span class="s1">directories </span><span class="s3">= </span><span class="s1">EMPTY_ARRAY</span><span class="s3">,</span>
+				<span class="s1">missing </span><span class="s3">= </span><span class="s1">EMPTY_ARRAY</span><span class="s3">,</span>
+				<span class="s1">startTime</span>
+			<span class="s3">} = </span><span class="s1">arg1</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">files </span><span class="s3">= </span><span class="s1">arg1</span><span class="s3">;</span>
+			<span class="s1">directories </span><span class="s3">= </span><span class="s1">arg2</span><span class="s3">;</span>
+			<span class="s1">missing </span><span class="s3">= </span><span class="s1">EMPTY_ARRAY</span><span class="s3">;</span>
+			<span class="s1">startTime </span><span class="s3">= </span><span class="s1">arg3</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">paused </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">fileWatchers </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">fileWatchers</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">directoryWatchers </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">directoryWatchers</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">ignored </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcherOptions</span><span class="s3">.</span><span class="s1">ignored</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">filter </span><span class="s3">= </span><span class="s1">path </span><span class="s3">=&gt; !</span><span class="s1">ignored</span><span class="s3">(</span><span class="s1">path</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">addToMap </span><span class="s3">= (</span><span class="s1">map</span><span class="s3">, </span><span class="s1">key</span><span class="s3">, </span><span class="s1">item</span><span class="s3">) =&gt; {</span>
+			<span class="s4">const </span><span class="s1">list </span><span class="s3">= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">list </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">item</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">list</span><span class="s3">)) {</span>
+				<span class="s1">list</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, [</span><span class="s1">list</span><span class="s3">, </span><span class="s1">item</span><span class="s3">]);</span>
+			<span class="s3">}</span>
+		<span class="s3">};</span>
+		<span class="s4">const </span><span class="s1">fileWatchersNeeded </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">directoryWatchersNeeded </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">missingFiles </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcherOptions</span><span class="s3">.</span><span class="s1">followSymlinks</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">resolver </span><span class="s3">= </span><span class="s4">new </span><span class="s1">LinkResolver</span><span class="s3">();</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of files</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">file</span><span class="s3">)) {</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">innerFile of resolver</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">(</span><span class="s1">file</span><span class="s3">)) {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">file </span><span class="s3">=== </span><span class="s1">innerFile </span><span class="s3">|| </span><span class="s1">filter</span><span class="s3">(</span><span class="s1">innerFile</span><span class="s3">)) {</span>
+							<span class="s1">addToMap</span><span class="s3">(</span><span class="s1">fileWatchersNeeded</span><span class="s3">, </span><span class="s1">innerFile</span><span class="s3">, </span><span class="s1">file</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of missing</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">file</span><span class="s3">)) {</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">innerFile of resolver</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">(</span><span class="s1">file</span><span class="s3">)) {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">file </span><span class="s3">=== </span><span class="s1">innerFile </span><span class="s3">|| </span><span class="s1">filter</span><span class="s3">(</span><span class="s1">innerFile</span><span class="s3">)) {</span>
+							<span class="s1">missingFiles</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+							<span class="s1">addToMap</span><span class="s3">(</span><span class="s1">fileWatchersNeeded</span><span class="s3">, </span><span class="s1">innerFile</span><span class="s3">, </span><span class="s1">file</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dir of directories</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">dir</span><span class="s3">)) {</span>
+					<span class="s4">let </span><span class="s1">first </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">innerItem of resolver</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">(</span><span class="s1">dir</span><span class="s3">)) {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">innerItem</span><span class="s3">)) {</span>
+							<span class="s1">addToMap</span><span class="s3">(</span>
+								<span class="s1">first </span><span class="s3">? </span><span class="s1">directoryWatchersNeeded </span><span class="s3">: </span><span class="s1">fileWatchersNeeded</span><span class="s3">,</span>
+								<span class="s1">innerItem</span><span class="s3">,</span>
+								<span class="s1">dir</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s1">first </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of files</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">file</span><span class="s3">)) {</span>
+					<span class="s1">addToMap</span><span class="s3">(</span><span class="s1">fileWatchersNeeded</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">file</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of missing</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">file</span><span class="s3">)) {</span>
+					<span class="s1">missingFiles</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+					<span class="s1">addToMap</span><span class="s3">(</span><span class="s1">fileWatchersNeeded</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">file</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dir of directories</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">dir</span><span class="s3">)) {</span>
+					<span class="s1">addToMap</span><span class="s3">(</span><span class="s1">directoryWatchersNeeded</span><span class="s3">, </span><span class="s1">dir</span><span class="s3">, </span><span class="s1">dir</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s0">// Close unneeded old watchers</span>
+		<span class="s0">// and update existing watchers</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">w</span><span class="s3">] </span><span class="s1">of fileWatchers</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">needed </span><span class="s3">= </span><span class="s1">fileWatchersNeeded</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">needed </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">w</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+				<span class="s1">fileWatchers</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">w</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">needed</span><span class="s3">);</span>
+				<span class="s1">fileWatchersNeeded</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">w</span><span class="s3">] </span><span class="s1">of directoryWatchers</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">needed </span><span class="s3">= </span><span class="s1">directoryWatchersNeeded</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">needed </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">w</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+				<span class="s1">directoryWatchers</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">w</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">needed</span><span class="s3">);</span>
+				<span class="s1">directoryWatchersNeeded</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s0">// Create new watchers and install handlers on these watchers</span>
+		<span class="s1">watchEventSource</span><span class="s3">.</span><span class="s1">batch</span><span class="s3">(() =&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">files</span><span class="s3">] </span><span class="s1">of fileWatchersNeeded</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">watcher </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcherManager</span><span class="s3">.</span><span class="s1">watchFile</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">startTime</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">) {</span>
+					<span class="s1">fileWatchers</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s4">new </span><span class="s1">WatchpackFileWatcher</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">files</span><span class="s3">));</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">directories</span><span class="s3">] </span><span class="s1">of directoryWatchersNeeded</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">watcher </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcherManager</span><span class="s3">.</span><span class="s1">watchDirectory</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">startTime</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">) {</span>
+					<span class="s1">directoryWatchers</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+						<span class="s1">key</span><span class="s3">,</span>
+						<span class="s4">new </span><span class="s1">WatchpackDirectoryWatcher</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">directories</span><span class="s3">)</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_missing </span><span class="s3">= </span><span class="s1">missingFiles</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">startTime </span><span class="s3">= </span><span class="s1">startTime</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">close</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">paused </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">) </span><span class="s1">clearTimeout</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">fileWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()) </span><span class="s1">w</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">directoryWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()) </span><span class="s1">w</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">fileWatchers</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">directoryWatchers</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s1">pause</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">paused </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">) </span><span class="s1">clearTimeout</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">getTimes</span><span class="s3">() {</span>
+		<span class="s4">const </span><span class="s1">directoryWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s1">addWatchersToSet</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">fileWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">(), </span><span class="s1">directoryWatchers</span><span class="s3">);</span>
+		<span class="s1">addWatchersToSet</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">directoryWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">(), </span><span class="s1">directoryWatchers</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">obj </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of directoryWatchers</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">times </span><span class="s3">= </span><span class="s1">w</span><span class="s3">.</span><span class="s1">getTimes</span><span class="s3">();</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">times</span><span class="s3">)) </span><span class="s1">obj</span><span class="s3">[</span><span class="s1">file</span><span class="s3">] = </span><span class="s1">times</span><span class="s3">[</span><span class="s1">file</span><span class="s3">];</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">obj</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">getTimeInfoEntries</span><span class="s3">() {</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">collectTimeInfoEntries</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s1">map</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">map</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">collectTimeInfoEntries</span><span class="s3">(</span><span class="s1">fileTimestamps</span><span class="s3">, </span><span class="s1">directoryTimestamps</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">allWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s1">addWatchersToSet</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">fileWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">(), </span><span class="s1">allWatchers</span><span class="s3">);</span>
+		<span class="s1">addWatchersToSet</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">directoryWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">(), </span><span class="s1">allWatchers</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">safeTime </span><span class="s3">= { </span><span class="s1">value</span><span class="s3">: </span><span class="s5">0 </span><span class="s3">};</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of allWatchers</span><span class="s3">) {</span>
+			<span class="s1">w</span><span class="s3">.</span><span class="s1">collectTimeInfoEntries</span><span class="s3">(</span><span class="s1">fileTimestamps</span><span class="s3">, </span><span class="s1">directoryTimestamps</span><span class="s3">, </span><span class="s1">safeTime</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">getAggregated</span><span class="s3">() {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">) {</span>
+			<span class="s1">clearTimeout</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">);</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">changes </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedChanges</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">removals </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedRemovals</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedChanges </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedRemovals </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">return </span><span class="s3">{ </span><span class="s1">changes</span><span class="s3">, </span><span class="s1">removals </span><span class="s3">};</span>
+	<span class="s3">}</span>
+
+	<span class="s1">_onChange</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">mtime</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">type</span><span class="s3">) {</span>
+		<span class="s1">file </span><span class="s3">= </span><span class="s1">file </span><span class="s3">|| </span><span class="s1">item</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s4">this</span><span class="s3">.</span><span class="s1">paused</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">mtime</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">) </span><span class="s1">clearTimeout</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">);</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer </span><span class="s3">= </span><span class="s1">setTimeout</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_onTimeout</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimeout</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedRemovals</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedChanges</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">_onRemove</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">type</span><span class="s3">) {</span>
+		<span class="s1">file </span><span class="s3">= </span><span class="s1">file </span><span class="s3">|| </span><span class="s1">item</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s4">this</span><span class="s3">.</span><span class="s1">paused</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;remove&quot;</span><span class="s3">, </span><span class="s1">file</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">) </span><span class="s1">clearTimeout</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer</span><span class="s3">);</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer </span><span class="s3">= </span><span class="s1">setTimeout</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_onTimeout</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimeout</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedChanges</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedRemovals</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">_onTimeout</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregateTimer </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">changes </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedChanges</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">removals </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedRemovals</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedChanges </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">aggregatedRemovals </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;aggregated&quot;</span><span class="s3">, </span><span class="s1">changes</span><span class="s3">, </span><span class="s1">removals</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">Watchpack</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

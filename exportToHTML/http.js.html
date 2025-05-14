@@ -1,0 +1,1371 @@
+<html>
+<head>
+<title>http.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #bcbec4;}
+.s5 { color: #6aab73;}
+.s6 { color: #7a7e85;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+http.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* HTTP client-side implementation that uses forge.net sockets.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Dave Longley</span>
+ <span class="s0">*</span>
+ <span class="s0">* Copyright (c) 2010-2014 Digital Bazaar, Inc. All rights reserved.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">forge </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s5">'./forge'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./tls'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./util'</span><span class="s4">);</span>
+
+<span class="s6">// define http namespace</span>
+<span class="s3">var </span><span class="s2">http </span><span class="s4">= </span><span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">http </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">http </span><span class="s4">|| {};</span>
+
+<span class="s6">// logging category</span>
+<span class="s3">var </span><span class="s2">cat </span><span class="s4">= </span><span class="s5">'forge.http'</span><span class="s4">;</span>
+
+<span class="s6">// normalizes an http header field name</span>
+<span class="s3">var </span><span class="s2">_normalize </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">name</span><span class="s4">) {</span>
+  <span class="s3">return </span><span class="s2">name</span><span class="s4">.</span><span class="s2">toLowerCase</span><span class="s4">().</span><span class="s2">replace</span><span class="s4">(</span><span class="s7">/(^.)|(-.)/g</span><span class="s4">,</span>
+    <span class="s3">function</span><span class="s4">(</span><span class="s2">a</span><span class="s4">) {</span><span class="s3">return </span><span class="s2">a</span><span class="s4">.</span><span class="s2">toUpperCase</span><span class="s4">();});</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Gets the local storage ID for the given client.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the client to get the local storage ID for.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the local storage ID to use.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_getStorageId </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">) {</span>
+  <span class="s6">// TODO: include browser in ID to avoid sharing cookies between</span>
+  <span class="s6">// browsers (if this is undesirable)</span>
+  <span class="s6">// navigator.userAgent</span>
+  <span class="s3">return </span><span class="s5">'forge.http.' </span><span class="s4">+</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">protocol</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s8">0</span><span class="s4">, -</span><span class="s8">1</span><span class="s4">) + </span><span class="s5">'.' </span><span class="s4">+</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">hostname </span><span class="s4">+ </span><span class="s5">'.' </span><span class="s4">+</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">port</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Loads persistent cookies from disk for the given client.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the client.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_loadCookies </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">) {</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">client</span><span class="s4">.</span><span class="s2">persistCookies</span><span class="s4">) {</span>
+    <span class="s3">try </span><span class="s4">{</span>
+      <span class="s3">var </span><span class="s2">cookies </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">getItem</span><span class="s4">(</span>
+        <span class="s2">client</span><span class="s4">.</span><span class="s2">socketPool</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">,</span>
+        <span class="s2">_getStorageId</span><span class="s4">(</span><span class="s2">client</span><span class="s4">), </span><span class="s5">'cookies'</span><span class="s4">);</span>
+      <span class="s2">client</span><span class="s4">.</span><span class="s2">cookies </span><span class="s4">= </span><span class="s2">cookies </span><span class="s4">|| {};</span>
+    <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">ex</span><span class="s4">) {</span>
+      <span class="s6">// no flash storage available, just silently fail</span>
+      <span class="s6">// TODO: i assume we want this logged somewhere or</span>
+      <span class="s6">// should it actually generate an error</span>
+      <span class="s6">//forge.log.error(cat, ex);</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Saves persistent cookies on disk for the given client.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the client.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_saveCookies </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">) {</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">client</span><span class="s4">.</span><span class="s2">persistCookies</span><span class="s4">) {</span>
+    <span class="s3">try </span><span class="s4">{</span>
+      <span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">setItem</span><span class="s4">(</span>
+        <span class="s2">client</span><span class="s4">.</span><span class="s2">socketPool</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">,</span>
+        <span class="s2">_getStorageId</span><span class="s4">(</span><span class="s2">client</span><span class="s4">), </span><span class="s5">'cookies'</span><span class="s4">, </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">ex</span><span class="s4">) {</span>
+      <span class="s6">// no flash storage available, just silently fail</span>
+      <span class="s6">// TODO: i assume we want this logged somewhere or</span>
+      <span class="s6">// should it actually generate an error</span>
+      <span class="s6">//forge.log.error(cat, ex);</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// FIXME: remove me</span>
+  <span class="s2">_loadCookies</span><span class="s4">(</span><span class="s2">client</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Clears persistent cookies on disk for the given client.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the client.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_clearCookies </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">) {</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">client</span><span class="s4">.</span><span class="s2">persistCookies</span><span class="s4">) {</span>
+    <span class="s3">try </span><span class="s4">{</span>
+      <span class="s6">// only thing stored is 'cookies', so clear whole storage</span>
+      <span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">clearItems</span><span class="s4">(</span>
+        <span class="s2">client</span><span class="s4">.</span><span class="s2">socketPool</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">,</span>
+        <span class="s2">_getStorageId</span><span class="s4">(</span><span class="s2">client</span><span class="s4">));</span>
+    <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">ex</span><span class="s4">) {</span>
+      <span class="s6">// no flash storage available, just silently fail</span>
+      <span class="s6">// TODO: i assume we want this logged somewhere or</span>
+      <span class="s6">// should it actually generate an error</span>
+      <span class="s6">//forge.log.error(cat, ex);</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Connects and sends a request.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the http client.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">socket the socket to use.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_doRequest </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">) {</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">isConnected</span><span class="s4">()) {</span>
+    <span class="s6">// already connected</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">connectTime </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">();</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">connected</span><span class="s4">({</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s5">'connect'</span><span class="s4">,</span>
+      <span class="s2">id</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">id</span>
+    <span class="s4">});</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s6">// connect</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">connectTime </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">();</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">connect</span><span class="s4">({</span>
+      <span class="s2">host</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">hostname</span><span class="s4">,</span>
+      <span class="s2">port</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">port</span><span class="s4">,</span>
+      <span class="s2">policyPort</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">policyPort</span><span class="s4">,</span>
+      <span class="s2">policyUrl</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">policyUrl</span>
+    <span class="s4">});</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Handles the next request or marks a socket as idle.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the http client.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">socket the socket.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_handleNextRequest </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">) {</span>
+  <span class="s6">// clear buffer</span>
+  <span class="s2">socket</span><span class="s4">.</span><span class="s2">buffer</span><span class="s4">.</span><span class="s2">clear</span><span class="s4">();</span>
+
+  <span class="s6">// get pending request</span>
+  <span class="s3">var </span><span class="s2">pending </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s3">while</span><span class="s4">(</span><span class="s2">pending </span><span class="s4">=== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">client</span><span class="s4">.</span><span class="s2">requests</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s8">0</span><span class="s4">) {</span>
+    <span class="s2">pending </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">requests</span><span class="s4">.</span><span class="s2">shift</span><span class="s4">();</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">pending</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">aborted</span><span class="s4">) {</span>
+      <span class="s2">pending </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// mark socket idle if no pending requests</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">pending </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">socket</span><span class="s4">.</span><span class="s2">options </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">);</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s6">// handle pending request, allow 1 retry</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">retries </span><span class="s4">= </span><span class="s8">1</span><span class="s4">;</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">options </span><span class="s4">= </span><span class="s2">pending</span><span class="s4">;</span>
+    <span class="s2">_doRequest</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">);</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Sets up a socket for use with an http client.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the parent http client.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">socket the socket to set up.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">tlsOptions if the socket must use TLS, the TLS options.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_initSocket </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">, </span><span class="s2">tlsOptions</span><span class="s4">) {</span>
+  <span class="s6">// no socket options yet</span>
+  <span class="s2">socket</span><span class="s4">.</span><span class="s2">options </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+
+  <span class="s6">// set up handlers</span>
+  <span class="s2">socket</span><span class="s4">.</span><span class="s2">connected </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+    <span class="s6">// socket primed by caching TLS session, handle next request</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">_handleNextRequest</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// socket in use</span>
+      <span class="s3">var </span><span class="s2">request </span><span class="s4">= </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">;</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">connectTime </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">() - </span><span class="s2">request</span><span class="s4">.</span><span class="s2">connectTime</span><span class="s4">;</span>
+      <span class="s2">e</span><span class="s4">.</span><span class="s2">socket </span><span class="s4">= </span><span class="s2">socket</span><span class="s4">;</span>
+      <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">connected</span><span class="s4">(</span><span class="s2">e</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">aborted</span><span class="s4">) {</span>
+        <span class="s2">socket</span><span class="s4">.</span><span class="s2">close</span><span class="s4">();</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s3">var </span><span class="s2">out </span><span class="s4">= </span><span class="s2">request</span><span class="s4">.</span><span class="s2">toString</span><span class="s4">();</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">body</span><span class="s4">) {</span>
+          <span class="s2">out </span><span class="s4">+= </span><span class="s2">request</span><span class="s4">.</span><span class="s2">body</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s2">request</span><span class="s4">.</span><span class="s2">time </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">();</span>
+        <span class="s2">socket</span><span class="s4">.</span><span class="s2">send</span><span class="s4">(</span><span class="s2">out</span><span class="s4">);</span>
+        <span class="s2">request</span><span class="s4">.</span><span class="s2">time </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">() - </span><span class="s2">request</span><span class="s4">.</span><span class="s2">time</span><span class="s4">;</span>
+        <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">response</span><span class="s4">.</span><span class="s2">time </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">();</span>
+        <span class="s2">socket</span><span class="s4">.</span><span class="s2">sending </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+  <span class="s2">socket</span><span class="s4">.</span><span class="s2">closed </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">sending</span><span class="s4">) {</span>
+      <span class="s2">socket</span><span class="s4">.</span><span class="s2">sending </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">retries </span><span class="s4">&gt; </span><span class="s8">0</span><span class="s4">) {</span>
+        <span class="s4">--</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">retries</span><span class="s4">;</span>
+        <span class="s2">_doRequest</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">);</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// error, closed during send</span>
+        <span class="s2">socket</span><span class="s4">.</span><span class="s2">error</span><span class="s4">({</span>
+          <span class="s2">id</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">id</span><span class="s4">,</span>
+          <span class="s2">type</span><span class="s4">: </span><span class="s5">'ioError'</span><span class="s4">,</span>
+          <span class="s2">message</span><span class="s4">: </span><span class="s5">'Connection closed during send. Broken pipe.'</span><span class="s4">,</span>
+          <span class="s2">bytesAvailable</span><span class="s4">: </span><span class="s8">0</span>
+        <span class="s4">});</span>
+      <span class="s4">}</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// handle unspecified content-length transfer</span>
+      <span class="s3">var </span><span class="s2">response </span><span class="s4">= </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">response</span><span class="s4">;</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">response</span><span class="s4">.</span><span class="s2">readBodyUntilClose</span><span class="s4">) {</span>
+        <span class="s2">response</span><span class="s4">.</span><span class="s2">time </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">() - </span><span class="s2">response</span><span class="s4">.</span><span class="s2">time</span><span class="s4">;</span>
+        <span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+        <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">bodyReady</span><span class="s4">({</span>
+          <span class="s2">request</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">,</span>
+          <span class="s2">response</span><span class="s4">: </span><span class="s2">response</span><span class="s4">,</span>
+          <span class="s2">socket</span><span class="s4">: </span><span class="s2">socket</span>
+        <span class="s4">});</span>
+      <span class="s4">}</span>
+      <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">closed</span><span class="s4">(</span><span class="s2">e</span><span class="s4">);</span>
+      <span class="s2">_handleNextRequest</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+  <span class="s2">socket</span><span class="s4">.</span><span class="s2">data </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">sending </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">request </span><span class="s4">= </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">aborted</span><span class="s4">) {</span>
+      <span class="s2">socket</span><span class="s4">.</span><span class="s2">close</span><span class="s4">();</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// receive all bytes available</span>
+      <span class="s3">var </span><span class="s2">response </span><span class="s4">= </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">response</span><span class="s4">;</span>
+      <span class="s3">var </span><span class="s2">bytes </span><span class="s4">= </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">receive</span><span class="s4">(</span><span class="s2">e</span><span class="s4">.</span><span class="s2">bytesAvailable</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">bytes </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+        <span class="s6">// receive header and then body</span>
+        <span class="s2">socket</span><span class="s4">.</span><span class="s2">buffer</span><span class="s4">.</span><span class="s2">putBytes</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+        <span class="s3">if</span><span class="s4">(!</span><span class="s2">response</span><span class="s4">.</span><span class="s2">headerReceived</span><span class="s4">) {</span>
+          <span class="s2">response</span><span class="s4">.</span><span class="s2">readHeader</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">buffer</span><span class="s4">);</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">response</span><span class="s4">.</span><span class="s2">headerReceived</span><span class="s4">) {</span>
+            <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">headerReady</span><span class="s4">({</span>
+              <span class="s2">request</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">,</span>
+              <span class="s2">response</span><span class="s4">: </span><span class="s2">response</span><span class="s4">,</span>
+              <span class="s2">socket</span><span class="s4">: </span><span class="s2">socket</span>
+            <span class="s4">});</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">response</span><span class="s4">.</span><span class="s2">headerReceived </span><span class="s4">&amp;&amp; !</span><span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived</span><span class="s4">) {</span>
+          <span class="s2">response</span><span class="s4">.</span><span class="s2">readBody</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">buffer</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived</span><span class="s4">) {</span>
+          <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">bodyReady</span><span class="s4">({</span>
+            <span class="s2">request</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">,</span>
+            <span class="s2">response</span><span class="s4">: </span><span class="s2">response</span><span class="s4">,</span>
+            <span class="s2">socket</span><span class="s4">: </span><span class="s2">socket</span>
+          <span class="s4">});</span>
+          <span class="s6">// close connection if requested or by default on http/1.0</span>
+          <span class="s3">var </span><span class="s2">value </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Connection'</span><span class="s4">) || </span><span class="s5">''</span><span class="s4">;</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">value</span><span class="s4">.</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s5">'close'</span><span class="s4">) != -</span><span class="s8">1 </span><span class="s4">||</span>
+            <span class="s4">(</span><span class="s2">response</span><span class="s4">.</span><span class="s2">version </span><span class="s4">=== </span><span class="s5">'HTTP/1.0' </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">response</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Keep-Alive'</span><span class="s4">) === </span><span class="s3">null</span><span class="s4">)) {</span>
+            <span class="s2">socket</span><span class="s4">.</span><span class="s2">close</span><span class="s4">();</span>
+          <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+            <span class="s2">_handleNextRequest</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">);</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+  <span class="s2">socket</span><span class="s4">.</span><span class="s2">error </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+    <span class="s6">// do error callback, include request</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">error</span><span class="s4">({</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">e</span><span class="s4">.</span><span class="s2">type</span><span class="s4">,</span>
+      <span class="s2">message</span><span class="s4">: </span><span class="s2">e</span><span class="s4">.</span><span class="s2">message</span><span class="s4">,</span>
+      <span class="s2">request</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">,</span>
+      <span class="s2">response</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">response</span><span class="s4">,</span>
+      <span class="s2">socket</span><span class="s4">: </span><span class="s2">socket</span>
+    <span class="s4">});</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">close</span><span class="s4">();</span>
+  <span class="s4">};</span>
+
+  <span class="s6">// wrap socket for TLS</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">tlsOptions</span><span class="s4">) {</span>
+    <span class="s2">socket </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">tls</span><span class="s4">.</span><span class="s2">wrapSocket</span><span class="s4">({</span>
+      <span class="s2">sessionId</span><span class="s4">: </span><span class="s3">null</span><span class="s4">,</span>
+      <span class="s2">sessionCache</span><span class="s4">: {},</span>
+      <span class="s2">caStore</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">caStore</span><span class="s4">,</span>
+      <span class="s2">cipherSuites</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">cipherSuites</span><span class="s4">,</span>
+      <span class="s2">socket</span><span class="s4">: </span><span class="s2">socket</span><span class="s4">,</span>
+      <span class="s2">virtualHost</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">virtualHost</span><span class="s4">,</span>
+      <span class="s2">verify</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">verify</span><span class="s4">,</span>
+      <span class="s2">getCertificate</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">getCertificate</span><span class="s4">,</span>
+      <span class="s2">getPrivateKey</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">getPrivateKey</span><span class="s4">,</span>
+      <span class="s2">getSignature</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">getSignature</span><span class="s4">,</span>
+      <span class="s2">deflate</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">deflate </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">,</span>
+      <span class="s2">inflate</span><span class="s4">: </span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">inflate </span><span class="s4">|| </span><span class="s3">null</span>
+    <span class="s4">});</span>
+
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">options </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">buffer </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">();</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">sockets</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">);</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">prime</span><span class="s4">) {</span>
+      <span class="s6">// prime socket by connecting and caching TLS session, will do</span>
+      <span class="s6">// next request from there</span>
+      <span class="s2">socket</span><span class="s4">.</span><span class="s2">connect</span><span class="s4">({</span>
+        <span class="s2">host</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">hostname</span><span class="s4">,</span>
+        <span class="s2">port</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">port</span><span class="s4">,</span>
+        <span class="s2">policyPort</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">policyPort</span><span class="s4">,</span>
+        <span class="s2">policyUrl</span><span class="s4">: </span><span class="s2">client</span><span class="s4">.</span><span class="s2">policyUrl</span>
+      <span class="s4">});</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// do not prime socket, just add as idle</span>
+      <span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s6">// no need to prime non-TLS sockets</span>
+    <span class="s2">socket</span><span class="s4">.</span><span class="s2">buffer </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">();</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">sockets</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">);</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">);</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks to see if the given cookie has expired. If the cookie's max-age</span>
+ <span class="s0">* plus its created time is less than the time now, it has expired, unless</span>
+ <span class="s0">* its max-age is set to -1 which indicates it will never expire.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">cookie the cookie to check.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">true if it has expired, false if not.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_hasCookieExpired </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">maxAge </span><span class="s4">!== -</span><span class="s8">1</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">now </span><span class="s4">= </span><span class="s2">_getUtcTime</span><span class="s4">(</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">());</span>
+    <span class="s3">var </span><span class="s2">expires </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">created </span><span class="s4">+ </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">maxAge</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">expires </span><span class="s4">&lt;= </span><span class="s2">now</span><span class="s4">) {</span>
+      <span class="s2">rval </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Adds cookies in the given client to the given request.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the client.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">request the request.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_writeCookies </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">request</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">expired </span><span class="s4">= [];</span>
+  <span class="s3">var </span><span class="s2">url </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">cookies </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">;</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">name </span><span class="s3">in </span><span class="s2">cookies</span><span class="s4">) {</span>
+    <span class="s6">// get cookie paths</span>
+    <span class="s3">var </span><span class="s2">paths </span><span class="s4">= </span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">name</span><span class="s4">];</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">p </span><span class="s3">in </span><span class="s2">paths</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">cookie </span><span class="s4">= </span><span class="s2">paths</span><span class="s4">[</span><span class="s2">p</span><span class="s4">];</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">_hasCookieExpired</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">)) {</span>
+        <span class="s6">// store for clean up</span>
+        <span class="s2">expired</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">);</span>
+      <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">path</span><span class="s4">.</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">path</span><span class="s4">) === </span><span class="s8">0</span><span class="s4">) {</span>
+        <span class="s6">// path or path's ancestor must match cookie.path</span>
+        <span class="s2">request</span><span class="s4">.</span><span class="s2">addCookie</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// clean up expired cookies</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">expired</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">cookie </span><span class="s4">= </span><span class="s2">expired</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">removeCookie</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">name</span><span class="s4">, </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">path</span><span class="s4">);</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Gets cookies from the given response and adds the to the given client.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">client the client.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">response the response.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_readCookies </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">response</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">cookies </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">getCookies</span><span class="s4">();</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">cookies</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s3">try </span><span class="s4">{</span>
+      <span class="s2">client</span><span class="s4">.</span><span class="s2">setCookie</span><span class="s4">(</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]);</span>
+    <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">ex</span><span class="s4">) {</span>
+      <span class="s6">// ignore failure to add other-domain, etc. cookies</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates an http client that uses forge.net sockets as a backend and</span>
+ <span class="s0">* forge.tls for security.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">options:</span>
+ <span class="s0">*   url: the url to connect to (scheme://host:port).</span>
+ <span class="s0">*   socketPool: the flash socket pool to use.</span>
+ <span class="s0">*   policyPort: the flash policy port to use (if other than the</span>
+ <span class="s0">*     socket pool default), use 0 for flash default.</span>
+ <span class="s0">*   policyUrl: the flash policy file URL to use (if provided will</span>
+ <span class="s0">*     be used instead of a policy port).</span>
+ <span class="s0">*   connections: number of connections to use to handle requests.</span>
+ <span class="s0">*   caCerts: an array of certificates to trust for TLS, certs may</span>
+ <span class="s0">*     be PEM-formatted or cert objects produced via forge.pki.</span>
+ <span class="s0">*   cipherSuites: an optional array of cipher suites to use,</span>
+ <span class="s0">*     see forge.tls.CipherSuites.</span>
+ <span class="s0">*   virtualHost: the virtual server name to use in a TLS SNI</span>
+ <span class="s0">*     extension, if not provided the url host will be used.</span>
+ <span class="s0">*   verify: a custom TLS certificate verify callback to use.</span>
+ <span class="s0">*   getCertificate: an optional callback used to get a client-side</span>
+ <span class="s0">*     certificate (see forge.tls for details).</span>
+ <span class="s0">*   getPrivateKey: an optional callback used to get a client-side</span>
+ <span class="s0">*     private key (see forge.tls for details).</span>
+ <span class="s0">*   getSignature: an optional callback used to get a client-side</span>
+ <span class="s0">*     signature (see forge.tls for details).</span>
+ <span class="s0">*   persistCookies: true to use persistent cookies via flash local</span>
+ <span class="s0">*     storage, false to only keep cookies in javascript.</span>
+ <span class="s0">*   primeTlsSockets: true to immediately connect TLS sockets on</span>
+ <span class="s0">*     their creation so that they will cache TLS sessions for reuse.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the client.</span>
+ <span class="s0">*/</span>
+<span class="s2">http</span><span class="s4">.</span><span class="s2">createClient </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">options</span><span class="s4">) {</span>
+  <span class="s6">// create CA store to share with all TLS connections</span>
+  <span class="s3">var </span><span class="s2">caStore </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">caCerts</span><span class="s4">) {</span>
+    <span class="s2">caStore </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">createCaStore</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">caCerts</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// get scheme, host, and port from url</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">url </span><span class="s4">= (</span><span class="s2">options</span><span class="s4">.</span><span class="s2">url </span><span class="s4">||</span>
+    <span class="s2">window</span><span class="s4">.</span><span class="s2">location</span><span class="s4">.</span><span class="s2">protocol </span><span class="s4">+ </span><span class="s5">'//' </span><span class="s4">+ </span><span class="s2">window</span><span class="s4">.</span><span class="s2">location</span><span class="s4">.</span><span class="s2">host</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">url</span><span class="s4">;</span>
+  <span class="s3">try </span><span class="s4">{</span>
+    <span class="s2">url </span><span class="s4">= </span><span class="s3">new </span><span class="s2">URL</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">url</span><span class="s4">);</span>
+  <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Invalid url.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">details </span><span class="s4">= {</span><span class="s2">url</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">url</span><span class="s4">};</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// default to 1 connection</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">connections </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">connections </span><span class="s4">|| </span><span class="s8">1</span><span class="s4">;</span>
+
+  <span class="s6">// create client</span>
+  <span class="s3">var </span><span class="s2">sp </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">socketPool</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">client </span><span class="s4">= {</span>
+    <span class="s6">// url</span>
+    <span class="s2">url</span><span class="s4">: </span><span class="s2">url</span><span class="s4">,</span>
+    <span class="s6">// socket pool</span>
+    <span class="s2">socketPool</span><span class="s4">: </span><span class="s2">sp</span><span class="s4">,</span>
+    <span class="s6">// the policy port to use</span>
+    <span class="s2">policyPort</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">policyPort</span><span class="s4">,</span>
+    <span class="s6">// policy url to use</span>
+    <span class="s2">policyUrl</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">policyUrl</span><span class="s4">,</span>
+    <span class="s6">// queue of requests to service</span>
+    <span class="s2">requests</span><span class="s4">: [],</span>
+    <span class="s6">// all sockets</span>
+    <span class="s2">sockets</span><span class="s4">: [],</span>
+    <span class="s6">// idle sockets</span>
+    <span class="s2">idle</span><span class="s4">: [],</span>
+    <span class="s6">// whether or not the connections are secure</span>
+    <span class="s2">secure</span><span class="s4">: (</span><span class="s2">url</span><span class="s4">.</span><span class="s2">protocol </span><span class="s4">=== </span><span class="s5">'https:'</span><span class="s4">),</span>
+    <span class="s6">// cookie jar (key'd off of name and then path, there is only 1 domain</span>
+    <span class="s6">// and one setting for secure per client so name+path is unique)</span>
+    <span class="s2">cookies</span><span class="s4">: {},</span>
+    <span class="s6">// default to flash storage of cookies</span>
+    <span class="s2">persistCookies</span><span class="s4">: (</span><span class="s3">typeof</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">persistCookies</span><span class="s4">) === </span><span class="s5">'undefined'</span><span class="s4">) ?</span>
+      <span class="s3">true </span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">persistCookies</span>
+  <span class="s4">};</span>
+
+  <span class="s6">// load cookies from disk</span>
+  <span class="s2">_loadCookies</span><span class="s4">(</span><span class="s2">client</span><span class="s4">);</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* A default certificate verify function that checks a certificate common</span>
+   <span class="s0">* name against the client's URL host.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">c the TLS connection.</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">verified true if cert is verified, otherwise alert number.</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">depth the chain depth.</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">certs the cert chain.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">true if verified and the common name matches the host, error</span>
+   <span class="s0">*         otherwise.</span>
+   <span class="s0">*/</span>
+  <span class="s3">var </span><span class="s2">_defaultCertificateVerify </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">c</span><span class="s4">, </span><span class="s2">verified</span><span class="s4">, </span><span class="s2">depth</span><span class="s4">, </span><span class="s2">certs</span><span class="s4">) {</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">depth </span><span class="s4">=== </span><span class="s8">0 </span><span class="s4">&amp;&amp; </span><span class="s2">verified </span><span class="s4">=== </span><span class="s3">true</span><span class="s4">) {</span>
+      <span class="s6">// compare common name to url host</span>
+      <span class="s3">var </span><span class="s2">cn </span><span class="s4">= </span><span class="s2">certs</span><span class="s4">[</span><span class="s2">depth</span><span class="s4">].</span><span class="s2">subject</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'CN'</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">cn </span><span class="s4">=== </span><span class="s3">null </span><span class="s4">|| </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">hostname </span><span class="s4">!== </span><span class="s2">cn</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) {</span>
+        <span class="s2">verified </span><span class="s4">= {</span>
+          <span class="s2">message</span><span class="s4">: </span><span class="s5">'Certificate common name does not match url host.'</span>
+        <span class="s4">};</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s3">return </span><span class="s2">verified</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s6">// determine if TLS is used</span>
+  <span class="s3">var </span><span class="s2">tlsOptions </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">client</span><span class="s4">.</span><span class="s2">secure</span><span class="s4">) {</span>
+    <span class="s2">tlsOptions </span><span class="s4">= {</span>
+      <span class="s2">caStore</span><span class="s4">: </span><span class="s2">caStore</span><span class="s4">,</span>
+      <span class="s2">cipherSuites</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">cipherSuites </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">,</span>
+      <span class="s2">virtualHost</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">virtualHost </span><span class="s4">|| </span><span class="s2">url</span><span class="s4">.</span><span class="s2">hostname</span><span class="s4">,</span>
+      <span class="s2">verify</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">verify </span><span class="s4">|| </span><span class="s2">_defaultCertificateVerify</span><span class="s4">,</span>
+      <span class="s2">getCertificate</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">getCertificate </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">,</span>
+      <span class="s2">getPrivateKey</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">getPrivateKey </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">,</span>
+      <span class="s2">getSignature</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">getSignature </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">,</span>
+      <span class="s2">prime</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">primeTlsSockets </span><span class="s4">|| </span><span class="s3">false</span>
+    <span class="s4">};</span>
+
+    <span class="s6">// if socket pool uses a flash api, then add deflate support to TLS</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">sp</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">deflate </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">) {</span>
+        <span class="s6">// strip 2 byte zlib header and 4 byte trailer</span>
+        <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">deflate</span><span class="s4">(</span><span class="s2">sp</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">, </span><span class="s3">true</span><span class="s4">);</span>
+      <span class="s4">};</span>
+      <span class="s2">tlsOptions</span><span class="s4">.</span><span class="s2">inflate </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">inflate</span><span class="s4">(</span><span class="s2">sp</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">, </span><span class="s3">true</span><span class="s4">);</span>
+      <span class="s4">};</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// create and initialize sockets</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">options</span><span class="s4">.</span><span class="s2">connections</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s2">_initSocket</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">sp</span><span class="s4">.</span><span class="s2">createSocket</span><span class="s4">(), </span><span class="s2">tlsOptions</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Sends a request. A method 'abort' will be set on the request that</span>
+   <span class="s0">* can be called to attempt to abort the request.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">options:</span>
+   <span class="s0">*          request: the request to send.</span>
+   <span class="s0">*          connected: a callback for when the connection is open.</span>
+   <span class="s0">*          closed: a callback for when the connection is closed.</span>
+   <span class="s0">*          headerReady: a callback for when the response header arrives.</span>
+   <span class="s0">*          bodyReady: a callback for when the response body arrives.</span>
+   <span class="s0">*          error: a callback for if an error occurs.</span>
+   <span class="s0">*/</span>
+  <span class="s2">client</span><span class="s4">.</span><span class="s2">send </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">options</span><span class="s4">) {</span>
+    <span class="s6">// add host header if not set</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Host'</span><span class="s4">) === </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Host'</span><span class="s4">, </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">.</span><span class="s2">origin</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// set default dummy handlers</span>
+    <span class="s3">var </span><span class="s2">opts </span><span class="s4">= {};</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">request </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">request</span><span class="s4">;</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">connected </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">connected </span><span class="s4">|| </span><span class="s3">function</span><span class="s4">() {};</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">closed </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">close </span><span class="s4">|| </span><span class="s3">function</span><span class="s4">() {};</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">headerReady </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+      <span class="s6">// read cookies</span>
+      <span class="s2">_readCookies</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">e</span><span class="s4">.</span><span class="s2">response</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">headerReady</span><span class="s4">) {</span>
+        <span class="s2">options</span><span class="s4">.</span><span class="s2">headerReady</span><span class="s4">(</span><span class="s2">e</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">};</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">bodyReady </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">bodyReady </span><span class="s4">|| </span><span class="s3">function</span><span class="s4">() {};</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">error </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">error </span><span class="s4">|| </span><span class="s3">function</span><span class="s4">() {};</span>
+
+    <span class="s6">// create response</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">response </span><span class="s4">= </span><span class="s2">http</span><span class="s4">.</span><span class="s2">createResponse</span><span class="s4">();</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">response</span><span class="s4">.</span><span class="s2">time </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">response</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">socketPool</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">;</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">socketPool</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">;</span>
+
+    <span class="s6">// create abort function</span>
+    <span class="s2">opts</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">abort </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+      <span class="s6">// set aborted, clear handlers</span>
+      <span class="s2">opts</span><span class="s4">.</span><span class="s2">request</span><span class="s4">.</span><span class="s2">aborted </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+      <span class="s2">opts</span><span class="s4">.</span><span class="s2">connected </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {};</span>
+      <span class="s2">opts</span><span class="s4">.</span><span class="s2">closed </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {};</span>
+      <span class="s2">opts</span><span class="s4">.</span><span class="s2">headerReady </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {};</span>
+      <span class="s2">opts</span><span class="s4">.</span><span class="s2">bodyReady </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {};</span>
+      <span class="s2">opts</span><span class="s4">.</span><span class="s2">error </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {};</span>
+    <span class="s4">};</span>
+
+    <span class="s6">// add cookies to request</span>
+    <span class="s2">_writeCookies</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">opts</span><span class="s4">.</span><span class="s2">request</span><span class="s4">);</span>
+
+    <span class="s6">// queue request options if there are no idle sockets</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s8">0</span><span class="s4">) {</span>
+      <span class="s2">client</span><span class="s4">.</span><span class="s2">requests</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">opts</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// use an idle socket, prefer an idle *connected* socket first</span>
+      <span class="s3">var </span><span class="s2">socket </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+      <span class="s3">var </span><span class="s2">len </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">socket </span><span class="s4">=== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">len</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s2">socket </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">socket</span><span class="s4">.</span><span class="s2">isConnected</span><span class="s4">()) {</span>
+          <span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">.</span><span class="s2">splice</span><span class="s4">(</span><span class="s2">i</span><span class="s4">, </span><span class="s8">1</span><span class="s4">);</span>
+        <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+          <span class="s2">socket </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+      <span class="s6">// no connected socket available, get unconnected socket</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">socket </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+        <span class="s2">socket </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">idle</span><span class="s4">.</span><span class="s2">pop</span><span class="s4">();</span>
+      <span class="s4">}</span>
+      <span class="s2">socket</span><span class="s4">.</span><span class="s2">options </span><span class="s4">= </span><span class="s2">opts</span><span class="s4">;</span>
+      <span class="s2">_doRequest</span><span class="s4">(</span><span class="s2">client</span><span class="s4">, </span><span class="s2">socket</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Destroys this client.</span>
+   <span class="s0">*/</span>
+  <span class="s2">client</span><span class="s4">.</span><span class="s2">destroy </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+    <span class="s6">// clear pending requests, close and destroy sockets</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">requests </span><span class="s4">= [];</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">client</span><span class="s4">.</span><span class="s2">sockets</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+      <span class="s2">client</span><span class="s4">.</span><span class="s2">sockets</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">close</span><span class="s4">();</span>
+      <span class="s2">client</span><span class="s4">.</span><span class="s2">sockets</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">destroy</span><span class="s4">();</span>
+    <span class="s4">}</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">socketPool </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">sockets </span><span class="s4">= [];</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">idle </span><span class="s4">= [];</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Sets a cookie for use with all connections made by this client. Any</span>
+   <span class="s0">* cookie with the same name will be replaced. If the cookie's value</span>
+   <span class="s0">* is undefined, null, or the blank string, the cookie will be removed.</span>
+   <span class="s0">*</span>
+   <span class="s0">* If the cookie's domain doesn't match this client's url host or the</span>
+   <span class="s0">* cookie's secure flag doesn't match this client's url scheme, then</span>
+   <span class="s0">* setting the cookie will fail with an exception.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">cookie the cookie with parameters:</span>
+   <span class="s0">*   name: the name of the cookie.</span>
+   <span class="s0">*   value: the value of the cookie.</span>
+   <span class="s0">*   comment: an optional comment string.</span>
+   <span class="s0">*   maxAge: the age of the cookie in seconds relative to created time.</span>
+   <span class="s0">*   secure: true if the cookie must be sent over a secure protocol.</span>
+   <span class="s0">*   httpOnly: true to restrict access to the cookie from javascript</span>
+   <span class="s0">*     (inaffective since the cookies are stored in javascript).</span>
+   <span class="s0">*   path: the path for the cookie.</span>
+   <span class="s0">*   domain: optional domain the cookie belongs to (must start with dot).</span>
+   <span class="s0">*   version: optional version of the cookie.</span>
+   <span class="s0">*   created: creation time, in UTC seconds, of the cookie.</span>
+   <span class="s0">*/</span>
+  <span class="s2">client</span><span class="s4">.</span><span class="s2">setCookie </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">rval</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">name</span><span class="s4">) !== </span><span class="s5">'undefined'</span><span class="s4">) {</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">null </span><span class="s4">|| </span><span class="s3">typeof</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) === </span><span class="s5">'undefined' </span><span class="s4">||</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s5">''</span><span class="s4">) {</span>
+        <span class="s6">// remove cookie</span>
+        <span class="s2">rval </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">removeCookie</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">name</span><span class="s4">, </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">path</span><span class="s4">);</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// set cookie defaults</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">comment </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">comment </span><span class="s4">|| </span><span class="s5">''</span><span class="s4">;</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">maxAge </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">maxAge </span><span class="s4">|| </span><span class="s8">0</span><span class="s4">;</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">secure </span><span class="s4">= (</span><span class="s3">typeof</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">secure</span><span class="s4">) === </span><span class="s5">'undefined'</span><span class="s4">) ?</span>
+          <span class="s3">true </span><span class="s4">: </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">secure</span><span class="s4">;</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">httpOnly </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">httpOnly </span><span class="s4">|| </span><span class="s3">true</span><span class="s4">;</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">path </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">path </span><span class="s4">|| </span><span class="s5">'/'</span><span class="s4">;</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">domain </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">domain </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">;</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">version </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">version </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">;</span>
+        <span class="s2">cookie</span><span class="s4">.</span><span class="s2">created </span><span class="s4">= </span><span class="s2">_getUtcTime</span><span class="s4">(</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">());</span>
+
+        <span class="s6">// do secure check</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">secure </span><span class="s4">!== </span><span class="s2">client</span><span class="s4">.</span><span class="s2">secure</span><span class="s4">) {</span>
+          <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Http client url scheme is incompatible ' </span><span class="s4">+</span>
+            <span class="s5">'with cookie secure flag.'</span><span class="s4">);</span>
+          <span class="s2">error</span><span class="s4">.</span><span class="s2">url </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">;</span>
+          <span class="s2">error</span><span class="s4">.</span><span class="s2">cookie </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">;</span>
+          <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s6">// make sure url host is within cookie.domain</span>
+        <span class="s3">if</span><span class="s4">(!</span><span class="s2">http</span><span class="s4">.</span><span class="s2">withinCookieDomain</span><span class="s4">(</span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">, </span><span class="s2">cookie</span><span class="s4">)) {</span>
+          <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Http client url scheme is incompatible ' </span><span class="s4">+</span>
+            <span class="s5">'with cookie secure flag.'</span><span class="s4">);</span>
+          <span class="s2">error</span><span class="s4">.</span><span class="s2">url </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">url</span><span class="s4">;</span>
+          <span class="s2">error</span><span class="s4">.</span><span class="s2">cookie </span><span class="s4">= </span><span class="s2">cookie</span><span class="s4">;</span>
+          <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">// add new cookie</span>
+        <span class="s3">if</span><span class="s4">(!(</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">name </span><span class="s3">in </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">)) {</span>
+          <span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">name</span><span class="s4">] = {};</span>
+        <span class="s4">}</span>
+        <span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">name</span><span class="s4">][</span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">path</span><span class="s4">] = </span><span class="s2">cookie</span><span class="s4">;</span>
+        <span class="s2">rval </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+
+        <span class="s6">// save cookies</span>
+        <span class="s2">_saveCookies</span><span class="s4">(</span><span class="s2">client</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Gets a cookie by its name.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">name the name of the cookie to retrieve.</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">path an optional path for the cookie (if there are multiple</span>
+   <span class="s0">*          cookies with the same name but different paths).</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">the cookie or null if not found.</span>
+   <span class="s0">*/</span>
+  <span class="s2">client</span><span class="s4">.</span><span class="s2">getCookie </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">path</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">name </span><span class="s3">in </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">paths </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">name</span><span class="s4">];</span>
+
+      <span class="s6">// get path-specific cookie</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">path</span><span class="s4">) {</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">path </span><span class="s3">in </span><span class="s2">paths</span><span class="s4">) {</span>
+          <span class="s2">rval </span><span class="s4">= </span><span class="s2">paths</span><span class="s4">[</span><span class="s2">path</span><span class="s4">];</span>
+        <span class="s4">}</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// get first cookie</span>
+        <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">p </span><span class="s3">in </span><span class="s2">paths</span><span class="s4">) {</span>
+          <span class="s2">rval </span><span class="s4">= </span><span class="s2">paths</span><span class="s4">[</span><span class="s2">p</span><span class="s4">];</span>
+          <span class="s3">break</span><span class="s4">;</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Removes a cookie.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">name the name of the cookie to remove.</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">path an optional path for the cookie (if there are multiple</span>
+   <span class="s0">*          cookies with the same name but different paths).</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">true if a cookie was removed, false if not.</span>
+   <span class="s0">*/</span>
+  <span class="s2">client</span><span class="s4">.</span><span class="s2">removeCookie </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">path</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">name </span><span class="s3">in </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">) {</span>
+      <span class="s6">// delete the specific path</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">path</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">paths </span><span class="s4">= </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">name</span><span class="s4">];</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">path </span><span class="s3">in </span><span class="s2">paths</span><span class="s4">) {</span>
+          <span class="s2">rval </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+          <span class="s3">delete </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">name</span><span class="s4">][</span><span class="s2">path</span><span class="s4">];</span>
+          <span class="s6">// clean up entry if empty</span>
+          <span class="s3">var </span><span class="s2">empty </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+          <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s3">in </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">name</span><span class="s4">]) {</span>
+            <span class="s2">empty </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+            <span class="s3">break</span><span class="s4">;</span>
+          <span class="s4">}</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">empty</span><span class="s4">) {</span>
+            <span class="s3">delete </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">name</span><span class="s4">];</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// delete all cookies with the given name</span>
+        <span class="s2">rval </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+        <span class="s3">delete </span><span class="s2">client</span><span class="s4">.</span><span class="s2">cookies</span><span class="s4">[</span><span class="s2">name</span><span class="s4">];</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">rval</span><span class="s4">) {</span>
+      <span class="s6">// save cookies</span>
+      <span class="s2">_saveCookies</span><span class="s4">(</span><span class="s2">client</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Clears all cookies stored in this client.</span>
+   <span class="s0">*/</span>
+  <span class="s2">client</span><span class="s4">.</span><span class="s2">clearCookies </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+    <span class="s2">client</span><span class="s4">.</span><span class="s2">cookies </span><span class="s4">= {};</span>
+    <span class="s2">_clearCookies</span><span class="s4">(</span><span class="s2">client</span><span class="s4">);</span>
+  <span class="s4">};</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">log</span><span class="s4">) {</span>
+    <span class="s2">forge</span><span class="s4">.</span><span class="s2">log</span><span class="s4">.</span><span class="s2">debug</span><span class="s4">(</span><span class="s5">'forge.http'</span><span class="s4">, </span><span class="s5">'created client'</span><span class="s4">, </span><span class="s2">options</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">client</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Trims the whitespace off of the beginning and end of a string.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">str the string to trim.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the trimmed string.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_trimString </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">str</span><span class="s4">) {</span>
+  <span class="s3">return </span><span class="s2">str</span><span class="s4">.</span><span class="s2">replace</span><span class="s4">(</span><span class="s7">/^\s*/</span><span class="s4">, </span><span class="s5">''</span><span class="s4">).</span><span class="s2">replace</span><span class="s4">(</span><span class="s7">/\s*$/</span><span class="s4">, </span><span class="s5">''</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates an http header object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the http header object.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_createHeader </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+  <span class="s3">var </span><span class="s2">header </span><span class="s4">= {</span>
+    <span class="s2">fields</span><span class="s4">: {},</span>
+    <span class="s2">setField</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">value</span><span class="s4">) {</span>
+      <span class="s6">// normalize field name, trim value</span>
+      <span class="s2">header</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">[</span><span class="s2">_normalize</span><span class="s4">(</span><span class="s2">name</span><span class="s4">)] = [</span><span class="s2">_trimString</span><span class="s4">(</span><span class="s5">'' </span><span class="s4">+ </span><span class="s2">value</span><span class="s4">)];</span>
+    <span class="s4">},</span>
+    <span class="s2">appendField</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">value</span><span class="s4">) {</span>
+      <span class="s2">name </span><span class="s4">= </span><span class="s2">_normalize</span><span class="s4">(</span><span class="s2">name</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(!(</span><span class="s2">name </span><span class="s3">in </span><span class="s2">header</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">)) {</span>
+        <span class="s2">header</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">[</span><span class="s2">name</span><span class="s4">] = [];</span>
+      <span class="s4">}</span>
+      <span class="s2">header</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">[</span><span class="s2">name</span><span class="s4">].</span><span class="s2">push</span><span class="s4">(</span><span class="s2">_trimString</span><span class="s4">(</span><span class="s5">'' </span><span class="s4">+ </span><span class="s2">value</span><span class="s4">));</span>
+    <span class="s4">},</span>
+    <span class="s2">getField</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">index</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+      <span class="s2">name </span><span class="s4">= </span><span class="s2">_normalize</span><span class="s4">(</span><span class="s2">name</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">name </span><span class="s3">in </span><span class="s2">header</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">) {</span>
+        <span class="s2">index </span><span class="s4">= </span><span class="s2">index </span><span class="s4">|| </span><span class="s8">0</span><span class="s4">;</span>
+        <span class="s2">rval </span><span class="s4">= </span><span class="s2">header</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">[</span><span class="s2">name</span><span class="s4">][</span><span class="s2">index</span><span class="s4">];</span>
+      <span class="s4">}</span>
+      <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+  <span class="s3">return </span><span class="s2">header</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Gets the time in utc seconds given a date.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">d the date to use.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the time in utc seconds.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">_getUtcTime </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">d</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">utc </span><span class="s4">= +</span><span class="s2">d </span><span class="s4">+ </span><span class="s2">d</span><span class="s4">.</span><span class="s2">getTimezoneOffset</span><span class="s4">() * </span><span class="s8">60000</span><span class="s4">;</span>
+  <span class="s3">return </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">floor</span><span class="s4">(+</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">() / </span><span class="s8">1000</span><span class="s4">);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates an http request.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">options:</span>
+ <span class="s0">*          version: the version.</span>
+ <span class="s0">*          method: the method.</span>
+ <span class="s0">*          path: the path.</span>
+ <span class="s0">*          body: the body.</span>
+ <span class="s0">*          headers: custom header fields to add,</span>
+ <span class="s0">*            eg: [{'Content-Length': 0}].</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the http request.</span>
+ <span class="s0">*/</span>
+<span class="s2">http</span><span class="s4">.</span><span class="s2">createRequest </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">options</span><span class="s4">) {</span>
+  <span class="s2">options </span><span class="s4">= </span><span class="s2">options </span><span class="s4">|| {};</span>
+  <span class="s3">var </span><span class="s2">request </span><span class="s4">= </span><span class="s2">_createHeader</span><span class="s4">();</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">version </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">version </span><span class="s4">|| </span><span class="s5">'HTTP/1.1'</span><span class="s4">;</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">method </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">method </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">path </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">path </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">body </span><span class="s4">|| </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">bodyDeflated </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+
+  <span class="s6">// add custom headers</span>
+  <span class="s3">var </span><span class="s2">headers </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">headers </span><span class="s4">|| [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">headers</span><span class="s4">)) {</span>
+    <span class="s2">headers </span><span class="s4">= [</span><span class="s2">headers</span><span class="s4">];</span>
+  <span class="s4">}</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">headers</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">name </span><span class="s3">in </span><span class="s2">headers</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]) {</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">appendField</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">headers</span><span class="s4">[</span><span class="s2">i</span><span class="s4">][</span><span class="s2">name</span><span class="s4">]);</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Adds a cookie to the request 'Cookie' header.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">cookie a cookie to add.</span>
+   <span class="s0">*/</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">addCookie </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">value </span><span class="s4">= </span><span class="s5">''</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">field </span><span class="s4">= </span><span class="s2">request</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Cookie'</span><span class="s4">);</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">field </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s6">// separate cookies by semi-colons</span>
+      <span class="s2">value </span><span class="s4">= </span><span class="s2">field </span><span class="s4">+ </span><span class="s5">'; '</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// get current time in utc seconds</span>
+    <span class="s3">var </span><span class="s2">now </span><span class="s4">= </span><span class="s2">_getUtcTime</span><span class="s4">(</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">());</span>
+
+    <span class="s6">// output cookie name and value</span>
+    <span class="s2">value </span><span class="s4">+= </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">name </span><span class="s4">+ </span><span class="s5">'=' </span><span class="s4">+ </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">value</span><span class="s4">;</span>
+    <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Cookie'</span><span class="s4">, </span><span class="s2">value</span><span class="s4">);</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Converts an http request into a string that can be sent as an</span>
+   <span class="s0">* HTTP request. Does not include any data.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">the string representation of the request.</span>
+   <span class="s0">*/</span>
+  <span class="s2">request</span><span class="s4">.</span><span class="s2">toString </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+    <span class="s6">/* Sample request header: 
+      GET /some/path/?query HTTP/1.1 
+      Host: www.someurl.com 
+      Connection: close 
+      Accept-Encoding: deflate 
+      Accept: image/gif, text/html 
+      User-Agent: Mozilla 4.0 
+     */</span>
+
+    <span class="s6">// set default headers</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'User-Agent'</span><span class="s4">) === </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'User-Agent'</span><span class="s4">, </span><span class="s5">'forge.http 1.0'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Accept'</span><span class="s4">) === </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Accept'</span><span class="s4">, </span><span class="s5">'*/*'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Connection'</span><span class="s4">) === </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Connection'</span><span class="s4">, </span><span class="s5">'keep-alive'</span><span class="s4">);</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Keep-Alive'</span><span class="s4">, </span><span class="s5">'115'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// add Accept-Encoding if not specified</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp;</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Accept-Encoding'</span><span class="s4">) === </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Accept-Encoding'</span><span class="s4">, </span><span class="s5">'deflate'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// if the body isn't null, deflate it if its larger than 100 bytes</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">request</span><span class="s4">.</span><span class="s2">body </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp;</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Content-Encoding'</span><span class="s4">) === </span><span class="s3">null </span><span class="s4">&amp;&amp;</span>
+      <span class="s4">!</span><span class="s2">request</span><span class="s4">.</span><span class="s2">bodyDeflated </span><span class="s4">&amp;&amp; </span><span class="s2">request</span><span class="s4">.</span><span class="s2">body</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s8">100</span><span class="s4">) {</span>
+      <span class="s6">// use flash to compress data</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">deflate</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">, </span><span class="s2">request</span><span class="s4">.</span><span class="s2">body</span><span class="s4">);</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">bodyDeflated </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Content-Encoding'</span><span class="s4">, </span><span class="s5">'deflate'</span><span class="s4">);</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Content-Length'</span><span class="s4">, </span><span class="s2">request</span><span class="s4">.</span><span class="s2">body</span><span class="s4">.</span><span class="s2">length</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">request</span><span class="s4">.</span><span class="s2">body </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s6">// set content length for body</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">setField</span><span class="s4">(</span><span class="s5">'Content-Length'</span><span class="s4">, </span><span class="s2">request</span><span class="s4">.</span><span class="s2">body</span><span class="s4">.</span><span class="s2">length</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// build start line</span>
+    <span class="s3">var </span><span class="s2">rval </span><span class="s4">=</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">method</span><span class="s4">.</span><span class="s2">toUpperCase</span><span class="s4">() + </span><span class="s5">' ' </span><span class="s4">+ </span><span class="s2">request</span><span class="s4">.</span><span class="s2">path </span><span class="s4">+ </span><span class="s5">' ' </span><span class="s4">+</span>
+      <span class="s2">request</span><span class="s4">.</span><span class="s2">version </span><span class="s4">+ </span><span class="s5">'</span><span class="s3">\r\n</span><span class="s5">'</span><span class="s4">;</span>
+
+    <span class="s6">// add each header</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">name </span><span class="s3">in </span><span class="s2">request</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">fields </span><span class="s4">= </span><span class="s2">request</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">[</span><span class="s2">name</span><span class="s4">];</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">fields</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s2">rval </span><span class="s4">+= </span><span class="s2">name </span><span class="s4">+ </span><span class="s5">': ' </span><span class="s4">+ </span><span class="s2">fields</span><span class="s4">[</span><span class="s2">i</span><span class="s4">] + </span><span class="s5">'</span><span class="s3">\r\n</span><span class="s5">'</span><span class="s4">;</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">// final terminating CRLF</span>
+    <span class="s2">rval </span><span class="s4">+= </span><span class="s5">'</span><span class="s3">\r\n</span><span class="s5">'</span><span class="s4">;</span>
+
+    <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s3">return </span><span class="s2">request</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates an empty http response header.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the empty http response header.</span>
+ <span class="s0">*/</span>
+<span class="s2">http</span><span class="s4">.</span><span class="s2">createResponse </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+  <span class="s6">// private vars</span>
+  <span class="s3">var </span><span class="s2">_first </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">_chunkSize </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">_chunksFinished </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+
+  <span class="s6">// create response</span>
+  <span class="s3">var </span><span class="s2">response </span><span class="s4">= </span><span class="s2">_createHeader</span><span class="s4">();</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">version </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">code </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">message </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">headerReceived </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Reads a line that ends in CRLF from a byte buffer.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">b the byte buffer.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">the line or null if none was found.</span>
+   <span class="s0">*/</span>
+  <span class="s3">var </span><span class="s2">_readCrlf </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">b</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">line </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s2">b</span><span class="s4">.</span><span class="s2">data</span><span class="s4">.</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s5">'</span><span class="s3">\r\n</span><span class="s5">'</span><span class="s4">, </span><span class="s2">b</span><span class="s4">.</span><span class="s2">read</span><span class="s4">);</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">i </span><span class="s4">!= -</span><span class="s8">1</span><span class="s4">) {</span>
+      <span class="s6">// read line, skip CRLF</span>
+      <span class="s2">line </span><span class="s4">= </span><span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">i </span><span class="s4">- </span><span class="s2">b</span><span class="s4">.</span><span class="s2">read</span><span class="s4">);</span>
+      <span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s8">2</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s3">return </span><span class="s2">line</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Parses a header field and appends it to the response.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">line the header field line.</span>
+   <span class="s0">*/</span>
+  <span class="s3">var </span><span class="s2">_parseHeader </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">line</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">tmp </span><span class="s4">= </span><span class="s2">line</span><span class="s4">.</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s5">':'</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">name </span><span class="s4">= </span><span class="s2">line</span><span class="s4">.</span><span class="s2">substring</span><span class="s4">(</span><span class="s8">0</span><span class="s4">, </span><span class="s2">tmp</span><span class="s4">++);</span>
+    <span class="s2">response</span><span class="s4">.</span><span class="s2">appendField</span><span class="s4">(</span>
+      <span class="s2">name</span><span class="s4">, (</span><span class="s2">tmp </span><span class="s4">&lt; </span><span class="s2">line</span><span class="s4">.</span><span class="s2">length</span><span class="s4">) ? </span><span class="s2">line</span><span class="s4">.</span><span class="s2">substring</span><span class="s4">(</span><span class="s2">tmp</span><span class="s4">) : </span><span class="s5">''</span><span class="s4">);</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Reads an http response header from a buffer of bytes.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">b the byte buffer to parse the header from.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">true if the whole header was read, false if not.</span>
+   <span class="s0">*/</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">readHeader </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">b</span><span class="s4">) {</span>
+    <span class="s6">// read header lines (each ends in CRLF)</span>
+    <span class="s3">var </span><span class="s2">line </span><span class="s4">= </span><span class="s5">''</span><span class="s4">;</span>
+    <span class="s3">while</span><span class="s4">(!</span><span class="s2">response</span><span class="s4">.</span><span class="s2">headerReceived </span><span class="s4">&amp;&amp; </span><span class="s2">line </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">line </span><span class="s4">= </span><span class="s2">_readCrlf</span><span class="s4">(</span><span class="s2">b</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">line </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+        <span class="s6">// parse first line</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">_first</span><span class="s4">) {</span>
+          <span class="s2">_first </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+          <span class="s3">var </span><span class="s2">tmp </span><span class="s4">= </span><span class="s2">line</span><span class="s4">.</span><span class="s2">split</span><span class="s4">(</span><span class="s5">' '</span><span class="s4">);</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">tmp</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt;= </span><span class="s8">3</span><span class="s4">) {</span>
+            <span class="s2">response</span><span class="s4">.</span><span class="s2">version </span><span class="s4">= </span><span class="s2">tmp</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+            <span class="s2">response</span><span class="s4">.</span><span class="s2">code </span><span class="s4">= </span><span class="s2">parseInt</span><span class="s4">(</span><span class="s2">tmp</span><span class="s4">[</span><span class="s8">1</span><span class="s4">], </span><span class="s8">10</span><span class="s4">);</span>
+            <span class="s2">response</span><span class="s4">.</span><span class="s2">message </span><span class="s4">= </span><span class="s2">tmp</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s8">2</span><span class="s4">).</span><span class="s2">join</span><span class="s4">(</span><span class="s5">' '</span><span class="s4">);</span>
+          <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+            <span class="s6">// invalid header</span>
+            <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Invalid http response header.'</span><span class="s4">);</span>
+            <span class="s2">error</span><span class="s4">.</span><span class="s2">details </span><span class="s4">= {</span><span class="s5">'line'</span><span class="s4">: </span><span class="s2">line</span><span class="s4">};</span>
+            <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+          <span class="s4">}</span>
+        <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">line</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s8">0</span><span class="s4">) {</span>
+          <span class="s6">// handle final line, end of header</span>
+          <span class="s2">response</span><span class="s4">.</span><span class="s2">headerReceived </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+        <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+          <span class="s2">_parseHeader</span><span class="s4">(</span><span class="s2">line</span><span class="s4">);</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s2">response</span><span class="s4">.</span><span class="s2">headerReceived</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Reads some chunked http response entity-body from the given buffer of</span>
+   <span class="s0">* bytes.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">b the byte buffer to read from.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">true if the whole body was read, false if not.</span>
+   <span class="s0">*/</span>
+  <span class="s3">var </span><span class="s2">_readChunkedBody </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">b</span><span class="s4">) {</span>
+    <span class="s6">/* Chunked transfer-encoding sends data in a series of chunks, 
+      followed by a set of 0-N http trailers. 
+      The format is as follows: 
+ 
+      chunk-size (in hex) CRLF 
+      chunk data (with &quot;chunk-size&quot; many bytes) CRLF 
+      ... (N many chunks) 
+      chunk-size (of 0 indicating the last chunk) CRLF 
+      N many http trailers followed by CRLF 
+      blank line + CRLF (terminates the trailers) 
+ 
+      If there are no http trailers, then after the chunk-size of 0, 
+      there is still a single CRLF (indicating the blank line + CRLF 
+      that terminates the trailers). In other words, you always terminate 
+      the trailers with blank line + CRLF, regardless of 0-N trailers. */</span>
+
+      <span class="s6">/* From RFC-2616, section 3.6.1, here is the pseudo-code for 
+      implementing chunked transfer-encoding: 
+ 
+      length := 0 
+      read chunk-size, chunk-extension (if any) and CRLF 
+      while (chunk-size &gt; 0) { 
+        read chunk-data and CRLF 
+        append chunk-data to entity-body 
+        length := length + chunk-size 
+        read chunk-size and CRLF 
+      } 
+      read entity-header 
+      while (entity-header not empty) { 
+        append entity-header to existing header fields 
+        read entity-header 
+      } 
+      Content-Length := length 
+      Remove &quot;chunked&quot; from Transfer-Encoding 
+    */</span>
+
+    <span class="s3">var </span><span class="s2">line </span><span class="s4">= </span><span class="s5">''</span><span class="s4">;</span>
+    <span class="s3">while</span><span class="s4">(</span><span class="s2">line </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &gt; </span><span class="s8">0</span><span class="s4">) {</span>
+      <span class="s6">// if in the process of reading a chunk</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">_chunkSize </span><span class="s4">&gt; </span><span class="s8">0</span><span class="s4">) {</span>
+        <span class="s6">// if there are not enough bytes to read chunk and its</span>
+        <span class="s6">// trailing CRLF,  we must wait for more data to be received</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">_chunkSize </span><span class="s4">+ </span><span class="s8">2 </span><span class="s4">&gt; </span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">()) {</span>
+          <span class="s3">break</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">// read chunk data, skip CRLF</span>
+        <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">+= </span><span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">_chunkSize</span><span class="s4">);</span>
+        <span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s8">2</span><span class="s4">);</span>
+        <span class="s2">_chunkSize </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+      <span class="s4">} </span><span class="s3">else if</span><span class="s4">(!</span><span class="s2">_chunksFinished</span><span class="s4">) {</span>
+        <span class="s6">// more chunks, read next chunk-size line</span>
+        <span class="s2">line </span><span class="s4">= </span><span class="s2">_readCrlf</span><span class="s4">(</span><span class="s2">b</span><span class="s4">);</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">line </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+          <span class="s6">// parse chunk-size (ignore any chunk extension)</span>
+          <span class="s2">_chunkSize </span><span class="s4">= </span><span class="s2">parseInt</span><span class="s4">(</span><span class="s2">line</span><span class="s4">.</span><span class="s2">split</span><span class="s4">(</span><span class="s5">';'</span><span class="s4">, </span><span class="s8">1</span><span class="s4">)[</span><span class="s8">0</span><span class="s4">], </span><span class="s8">16</span><span class="s4">);</span>
+          <span class="s2">_chunksFinished </span><span class="s4">= (</span><span class="s2">_chunkSize </span><span class="s4">=== </span><span class="s8">0</span><span class="s4">);</span>
+        <span class="s4">}</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s6">// chunks finished, read next trailer</span>
+        <span class="s2">line </span><span class="s4">= </span><span class="s2">_readCrlf</span><span class="s4">(</span><span class="s2">b</span><span class="s4">);</span>
+        <span class="s3">while</span><span class="s4">(</span><span class="s2">line </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">line</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s8">0</span><span class="s4">) {</span>
+            <span class="s6">// parse trailer</span>
+            <span class="s2">_parseHeader</span><span class="s4">(</span><span class="s2">line</span><span class="s4">);</span>
+            <span class="s6">// read next trailer</span>
+            <span class="s2">line </span><span class="s4">= </span><span class="s2">_readCrlf</span><span class="s4">(</span><span class="s2">b</span><span class="s4">);</span>
+          <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+            <span class="s6">// body received</span>
+            <span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+            <span class="s2">line </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Reads an http response body from a buffer of bytes.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">b the byte buffer to read from.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">true if the whole body was read, false if not.</span>
+   <span class="s0">*/</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">readBody </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">b</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">contentLength </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Content-Length'</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">transferEncoding </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Transfer-Encoding'</span><span class="s4">);</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">contentLength </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s2">contentLength </span><span class="s4">= </span><span class="s2">parseInt</span><span class="s4">(</span><span class="s2">contentLength</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// read specified length</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">contentLength </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">contentLength </span><span class="s4">&gt;= </span><span class="s8">0</span><span class="s4">) {</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">|| </span><span class="s5">''</span><span class="s4">;</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">+= </span><span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">contentLength</span><span class="s4">);</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived </span><span class="s4">= (</span><span class="s2">response</span><span class="s4">.</span><span class="s2">body</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s2">contentLength</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">transferEncoding </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s6">// read chunked encoding</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">transferEncoding</span><span class="s4">.</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s5">'chunked'</span><span class="s4">) != -</span><span class="s8">1</span><span class="s4">) {</span>
+        <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">|| </span><span class="s5">''</span><span class="s4">;</span>
+        <span class="s2">_readChunkedBody</span><span class="s4">(</span><span class="s2">b</span><span class="s4">);</span>
+      <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+        <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unknown Transfer-Encoding.'</span><span class="s4">);</span>
+        <span class="s2">error</span><span class="s4">.</span><span class="s2">details </span><span class="s4">= {</span><span class="s5">'transferEncoding'</span><span class="s4">: </span><span class="s2">transferEncoding</span><span class="s4">};</span>
+        <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+      <span class="s4">}</span>
+    <span class="s4">} </span><span class="s3">else if</span><span class="s4">((</span><span class="s2">contentLength </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">contentLength </span><span class="s4">&lt; </span><span class="s8">0</span><span class="s4">) ||</span>
+      <span class="s4">(</span><span class="s2">contentLength </span><span class="s4">=== </span><span class="s3">null </span><span class="s4">&amp;&amp;</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Content-Type'</span><span class="s4">) !== </span><span class="s3">null</span><span class="s4">)) {</span>
+      <span class="s6">// read all data in the buffer</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">|| </span><span class="s5">''</span><span class="s4">;</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">+= </span><span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">();</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">readBodyUntilClose </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// no body</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived</span><span class="s4">) {</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">time </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">() - </span><span class="s2">response</span><span class="s4">.</span><span class="s2">time</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">response</span><span class="s4">.</span><span class="s2">flashApi </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp;</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived </span><span class="s4">&amp;&amp; </span><span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp;</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">getField</span><span class="s4">(</span><span class="s5">'Content-Encoding'</span><span class="s4">) === </span><span class="s5">'deflate'</span><span class="s4">) {</span>
+      <span class="s6">// inflate using flash api</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">body </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">inflate</span><span class="s4">(</span>
+        <span class="s2">response</span><span class="s4">.</span><span class="s2">flashApi</span><span class="s4">, </span><span class="s2">response</span><span class="s4">.</span><span class="s2">body</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s2">response</span><span class="s4">.</span><span class="s2">bodyReceived</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+   <span class="s0">/**</span>
+    <span class="s0">* Parses an array of cookies from the 'Set-Cookie' field, if present.</span>
+    <span class="s0">*</span>
+    <span class="s0">* </span><span class="s1">@return </span><span class="s0">the array of cookies.</span>
+    <span class="s0">*/</span>
+   <span class="s2">response</span><span class="s4">.</span><span class="s2">getCookies </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+     <span class="s3">var </span><span class="s2">rval </span><span class="s4">= [];</span>
+
+     <span class="s6">// get Set-Cookie field</span>
+     <span class="s3">if</span><span class="s4">(</span><span class="s5">'Set-Cookie' </span><span class="s3">in </span><span class="s2">response</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">) {</span>
+       <span class="s3">var </span><span class="s2">field </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">[</span><span class="s5">'Set-Cookie'</span><span class="s4">];</span>
+
+       <span class="s6">// get current local time in seconds</span>
+       <span class="s3">var </span><span class="s2">now </span><span class="s4">= +</span><span class="s3">new </span><span class="s2">Date</span><span class="s4">() / </span><span class="s8">1000</span><span class="s4">;</span>
+
+       <span class="s6">// regex for parsing 'name1=value1; name2=value2; name3'</span>
+       <span class="s3">var </span><span class="s2">regex </span><span class="s4">= </span><span class="s7">/\s*([^=]*)=?([^;]*)(;|$)/g</span><span class="s4">;</span>
+
+       <span class="s6">// examples:</span>
+       <span class="s6">// Set-Cookie: cookie1_name=cookie1_value; max-age=0; path=/</span>
+       <span class="s6">// Set-Cookie: c2=v2; expires=Thu, 21-Aug-2008 23:47:25 GMT; path=/</span>
+       <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">field</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+         <span class="s3">var </span><span class="s2">fv </span><span class="s4">= </span><span class="s2">field</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+         <span class="s3">var </span><span class="s2">m</span><span class="s4">;</span>
+         <span class="s2">regex</span><span class="s4">.</span><span class="s2">lastIndex </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+         <span class="s3">var </span><span class="s2">first </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+         <span class="s3">var </span><span class="s2">cookie </span><span class="s4">= {};</span>
+         <span class="s3">do </span><span class="s4">{</span>
+           <span class="s2">m </span><span class="s4">= </span><span class="s2">regex</span><span class="s4">.</span><span class="s2">exec</span><span class="s4">(</span><span class="s2">fv</span><span class="s4">);</span>
+           <span class="s3">if</span><span class="s4">(</span><span class="s2">m </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+             <span class="s3">var </span><span class="s2">name </span><span class="s4">= </span><span class="s2">_trimString</span><span class="s4">(</span><span class="s2">m</span><span class="s4">[</span><span class="s8">1</span><span class="s4">]);</span>
+             <span class="s3">var </span><span class="s2">value </span><span class="s4">= </span><span class="s2">_trimString</span><span class="s4">(</span><span class="s2">m</span><span class="s4">[</span><span class="s8">2</span><span class="s4">]);</span>
+
+             <span class="s6">// cookie_name=value</span>
+             <span class="s3">if</span><span class="s4">(</span><span class="s2">first</span><span class="s4">) {</span>
+               <span class="s2">cookie</span><span class="s4">.</span><span class="s2">name </span><span class="s4">= </span><span class="s2">name</span><span class="s4">;</span>
+               <span class="s2">cookie</span><span class="s4">.</span><span class="s2">value </span><span class="s4">= </span><span class="s2">value</span><span class="s4">;</span>
+               <span class="s2">first </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+             <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+               <span class="s6">// property_name=value</span>
+               <span class="s2">name </span><span class="s4">= </span><span class="s2">name</span><span class="s4">.</span><span class="s2">toLowerCase</span><span class="s4">();</span>
+               <span class="s3">switch</span><span class="s4">(</span><span class="s2">name</span><span class="s4">) {</span>
+               <span class="s3">case </span><span class="s5">'expires'</span><span class="s4">:</span>
+                 <span class="s6">// replace hyphens w/spaces so date will parse</span>
+                 <span class="s2">value </span><span class="s4">= </span><span class="s2">value</span><span class="s4">.</span><span class="s2">replace</span><span class="s4">(</span><span class="s7">/-/g</span><span class="s4">, </span><span class="s5">' '</span><span class="s4">);</span>
+                 <span class="s3">var </span><span class="s2">secs </span><span class="s4">= </span><span class="s2">Date</span><span class="s4">.</span><span class="s2">parse</span><span class="s4">(</span><span class="s2">value</span><span class="s4">) / </span><span class="s8">1000</span><span class="s4">;</span>
+                 <span class="s2">cookie</span><span class="s4">.</span><span class="s2">maxAge </span><span class="s4">= </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">max</span><span class="s4">(</span><span class="s8">0</span><span class="s4">, </span><span class="s2">secs </span><span class="s4">- </span><span class="s2">now</span><span class="s4">);</span>
+                 <span class="s3">break</span><span class="s4">;</span>
+               <span class="s3">case </span><span class="s5">'max-age'</span><span class="s4">:</span>
+                 <span class="s2">cookie</span><span class="s4">.</span><span class="s2">maxAge </span><span class="s4">= </span><span class="s2">parseInt</span><span class="s4">(</span><span class="s2">value</span><span class="s4">, </span><span class="s8">10</span><span class="s4">);</span>
+                 <span class="s3">break</span><span class="s4">;</span>
+               <span class="s3">case </span><span class="s5">'secure'</span><span class="s4">:</span>
+                 <span class="s2">cookie</span><span class="s4">.</span><span class="s2">secure </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+                 <span class="s3">break</span><span class="s4">;</span>
+               <span class="s3">case </span><span class="s5">'httponly'</span><span class="s4">:</span>
+                 <span class="s2">cookie</span><span class="s4">.</span><span class="s2">httpOnly </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+                 <span class="s3">break</span><span class="s4">;</span>
+               <span class="s3">default</span><span class="s4">:</span>
+                 <span class="s3">if</span><span class="s4">(</span><span class="s2">name </span><span class="s4">!== </span><span class="s5">''</span><span class="s4">) {</span>
+                   <span class="s2">cookie</span><span class="s4">[</span><span class="s2">name</span><span class="s4">] = </span><span class="s2">value</span><span class="s4">;</span>
+                 <span class="s4">}</span>
+               <span class="s4">}</span>
+             <span class="s4">}</span>
+           <span class="s4">}</span>
+         <span class="s4">} </span><span class="s3">while</span><span class="s4">(</span><span class="s2">m </span><span class="s4">!== </span><span class="s3">null </span><span class="s4">&amp;&amp; </span><span class="s2">m</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] !== </span><span class="s5">''</span><span class="s4">);</span>
+         <span class="s2">rval</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">cookie</span><span class="s4">);</span>
+       <span class="s4">}</span>
+     <span class="s4">}</span>
+
+     <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Converts an http response into a string that can be sent as an</span>
+   <span class="s0">* HTTP response. Does not include any data.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">the string representation of the response.</span>
+   <span class="s0">*/</span>
+  <span class="s2">response</span><span class="s4">.</span><span class="s2">toString </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+    <span class="s6">/* Sample response header: 
+      HTTP/1.0 200 OK 
+      Host: www.someurl.com 
+      Connection: close 
+     */</span>
+
+    <span class="s6">// build start line</span>
+    <span class="s3">var </span><span class="s2">rval </span><span class="s4">=</span>
+      <span class="s2">response</span><span class="s4">.</span><span class="s2">version </span><span class="s4">+ </span><span class="s5">' ' </span><span class="s4">+ </span><span class="s2">response</span><span class="s4">.</span><span class="s2">code </span><span class="s4">+ </span><span class="s5">' ' </span><span class="s4">+ </span><span class="s2">response</span><span class="s4">.</span><span class="s2">message </span><span class="s4">+ </span><span class="s5">'</span><span class="s3">\r\n</span><span class="s5">'</span><span class="s4">;</span>
+
+    <span class="s6">// add each header</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">name </span><span class="s3">in </span><span class="s2">response</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">fields </span><span class="s4">= </span><span class="s2">response</span><span class="s4">.</span><span class="s2">fields</span><span class="s4">[</span><span class="s2">name</span><span class="s4">];</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">fields</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s2">rval </span><span class="s4">+= </span><span class="s2">name </span><span class="s4">+ </span><span class="s5">': ' </span><span class="s4">+ </span><span class="s2">fields</span><span class="s4">[</span><span class="s2">i</span><span class="s4">] + </span><span class="s5">'</span><span class="s3">\r\n</span><span class="s5">'</span><span class="s4">;</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">// final terminating CRLF</span>
+    <span class="s2">rval </span><span class="s4">+= </span><span class="s5">'</span><span class="s3">\r\n</span><span class="s5">'</span><span class="s4">;</span>
+
+    <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+  <span class="s4">};</span>
+
+  <span class="s3">return </span><span class="s2">response</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Returns true if the given url is within the given cookie's domain.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">url the url to check.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">cookie the cookie or cookie domain to check.</span>
+ <span class="s0">*/</span>
+<span class="s2">http</span><span class="s4">.</span><span class="s2">withinCookieDomain </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">url</span><span class="s4">, </span><span class="s2">cookie</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">rval </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+
+  <span class="s6">// cookie may be null, a cookie object, or a domain string</span>
+  <span class="s3">var </span><span class="s2">domain </span><span class="s4">= (</span><span class="s2">cookie </span><span class="s4">=== </span><span class="s3">null </span><span class="s4">|| </span><span class="s3">typeof </span><span class="s2">cookie </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) ?</span>
+    <span class="s2">cookie </span><span class="s4">: </span><span class="s2">cookie</span><span class="s4">.</span><span class="s2">domain</span><span class="s4">;</span>
+
+  <span class="s6">// any domain will do</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">domain </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s2">rval </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+  <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">domain</span><span class="s4">.</span><span class="s2">charAt</span><span class="s4">(</span><span class="s8">0</span><span class="s4">) === </span><span class="s5">'.'</span><span class="s4">) {</span>
+    <span class="s6">// ensure domain starts with a '.'</span>
+    <span class="s6">// parse URL as necessary</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">url </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+      <span class="s2">url </span><span class="s4">= </span><span class="s3">new </span><span class="s2">URL</span><span class="s4">(</span><span class="s2">url</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// add '.' to front of URL hostname to match against domain</span>
+    <span class="s3">var </span><span class="s2">host </span><span class="s4">= </span><span class="s5">'.' </span><span class="s4">+ </span><span class="s2">url</span><span class="s4">.</span><span class="s2">hostname</span><span class="s4">;</span>
+
+    <span class="s6">// if the host ends with domain then it falls within it</span>
+    <span class="s3">var </span><span class="s2">idx </span><span class="s4">= </span><span class="s2">host</span><span class="s4">.</span><span class="s2">lastIndexOf</span><span class="s4">(</span><span class="s2">domain</span><span class="s4">);</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">idx </span><span class="s4">!== -</span><span class="s8">1 </span><span class="s4">&amp;&amp; (</span><span class="s2">idx </span><span class="s4">+ </span><span class="s2">domain</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s2">host</span><span class="s4">.</span><span class="s2">length</span><span class="s4">)) {</span>
+      <span class="s2">rval </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

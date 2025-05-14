@@ -1,0 +1,198 @@
+<html>
+<head>
+<title>WebSocket-impl-browser.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #42c3d4;}
+.s6 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+WebSocket-impl-browser.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* eslint-env browser */</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">DOMException </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;domexception/webidl2js-wrapper&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">parseURL</span><span class="s3">, </span><span class="s1">serializeURL</span><span class="s3">, </span><span class="s1">serializeURLOrigin </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;whatwg-url&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">setupForSimpleEventAccessors </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../helpers/create-event-accessor&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">fireAnEvent </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../helpers/events&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">EventTargetImpl </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../events/EventTarget-impl&quot;</span><span class="s3">).</span><span class="s1">implementation</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">idlUtils </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../generated/utils&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Blob </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../generated/Blob&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">CloseEvent </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../generated/CloseEvent&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">MessageEvent </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../generated/MessageEvent&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">productions </span><span class="s3">= {</span>
+  <span class="s0">// https://tools.ietf.org/html/rfc7230#section-3.2.6</span>
+  <span class="s1">token</span><span class="s3">: </span><span class="s5">/^[!#$%&amp;'*+\-.^_`|~\dA-Za-z]+$/</span>
+<span class="s3">};</span>
+
+<span class="s0">// https://tools.ietf.org/html/rfc6455#section-4.3</span>
+<span class="s0">// See Sec-WebSocket-Protocol-Client, which is for the syntax of an entire header value. This function checks if a</span>
+<span class="s0">// single header conforms to the rules.</span>
+<span class="s4">function </span><span class="s1">verifySecWebSocketProtocol</span><span class="s3">(</span><span class="s1">str</span><span class="s3">) {</span>
+  <span class="s4">return </span><span class="s1">productions</span><span class="s3">.</span><span class="s1">token</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">str</span><span class="s3">);</span>
+<span class="s3">}</span>
+
+<span class="s4">const </span><span class="s1">openSockets </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s4">class </span><span class="s1">WebSocketImpl </span><span class="s4">extends </span><span class="s1">EventTargetImpl </span><span class="s3">{</span>
+  <span class="s1">constructor</span><span class="s3">(</span><span class="s1">constructorArgs</span><span class="s3">, </span><span class="s1">privateData</span><span class="s3">) {</span>
+    <span class="s4">super</span><span class="s3">([], </span><span class="s1">privateData</span><span class="s3">);</span>
+    <span class="s4">const </span><span class="s3">{ </span><span class="s1">window </span><span class="s3">} = </span><span class="s1">privateData</span><span class="s3">;</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ownerDocument </span><span class="s3">= </span><span class="s1">idlUtils</span><span class="s3">.</span><span class="s1">implForWrapper</span><span class="s3">(</span><span class="s1">window</span><span class="s3">.</span><span class="s1">_document</span><span class="s3">);</span>
+
+    <span class="s4">const </span><span class="s1">url </span><span class="s3">= </span><span class="s1">constructorArgs</span><span class="s3">[</span><span class="s6">0</span><span class="s3">];</span>
+    <span class="s4">let </span><span class="s1">protocols </span><span class="s3">= </span><span class="s1">constructorArgs</span><span class="s3">[</span><span class="s6">1</span><span class="s3">] !== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s1">constructorArgs</span><span class="s3">[</span><span class="s6">1</span><span class="s3">] : [];</span>
+
+    <span class="s4">const </span><span class="s1">urlRecord </span><span class="s3">= </span><span class="s1">parseURL</span><span class="s3">(</span><span class="s1">url</span><span class="s3">);</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">urlRecord </span><span class="s3">=== </span><span class="s4">null</span><span class="s3">) {</span>
+      <span class="s4">throw </span><span class="s1">DOMException</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_globalObject</span><span class="s3">, [</span><span class="s2">`The URL '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">}</span><span class="s2">' is invalid.`</span><span class="s3">, </span><span class="s2">&quot;SyntaxError&quot;</span><span class="s3">]);</span>
+    <span class="s3">}</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">urlRecord</span><span class="s3">.</span><span class="s1">scheme </span><span class="s3">!== </span><span class="s2">&quot;ws&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">urlRecord</span><span class="s3">.</span><span class="s1">scheme </span><span class="s3">!== </span><span class="s2">&quot;wss&quot;</span><span class="s3">) {</span>
+      <span class="s4">throw </span><span class="s1">DOMException</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_globalObject</span><span class="s3">, [</span>
+        <span class="s2">`The URL's scheme must be either 'ws' or 'wss'. '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">urlRecord</span><span class="s3">.</span><span class="s1">scheme</span><span class="s3">}</span><span class="s2">' is not allowed.`</span><span class="s3">,</span>
+        <span class="s2">&quot;SyntaxError&quot;</span>
+      <span class="s3">]);</span>
+    <span class="s3">}</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">urlRecord</span><span class="s3">.</span><span class="s1">fragment </span><span class="s3">!== </span><span class="s4">null</span><span class="s3">) {</span>
+      <span class="s4">throw </span><span class="s1">DOMException</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_globalObject</span><span class="s3">, [</span>
+        <span class="s2">`The URL contains a fragment identifier ('</span><span class="s1">$</span><span class="s3">{</span><span class="s1">urlRecord</span><span class="s3">.</span><span class="s1">fragment</span><span class="s3">}</span><span class="s2">'). Fragment identifiers ` </span><span class="s3">+</span>
+        <span class="s2">&quot;are not allowed in WebSocket URLs.&quot;</span><span class="s3">,</span>
+        <span class="s2">&quot;SyntaxError&quot;</span>
+      <span class="s3">]);</span>
+    <span class="s3">}</span>
+
+    <span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">protocols </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+      <span class="s1">protocols </span><span class="s3">= [</span><span class="s1">protocols</span><span class="s3">];</span>
+    <span class="s3">}</span>
+    <span class="s4">const </span><span class="s1">protocolSet </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+    <span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">protocol of protocols</span><span class="s3">) {</span>
+      <span class="s4">if </span><span class="s3">(!</span><span class="s1">verifySecWebSocketProtocol</span><span class="s3">(</span><span class="s1">protocol</span><span class="s3">)) {</span>
+        <span class="s4">throw </span><span class="s1">DOMException</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_globalObject</span><span class="s3">, [</span><span class="s2">`The subprotocol '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">protocol</span><span class="s3">}</span><span class="s2">' is invalid.`</span><span class="s3">, </span><span class="s2">&quot;SyntaxError&quot;</span><span class="s3">]);</span>
+      <span class="s3">}</span>
+      <span class="s4">const </span><span class="s1">lowered </span><span class="s3">= </span><span class="s1">protocol</span><span class="s3">.</span><span class="s1">toLowerCase</span><span class="s3">();</span>
+      <span class="s4">if </span><span class="s3">(</span><span class="s1">protocolSet</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">lowered</span><span class="s3">)) {</span>
+        <span class="s4">throw </span><span class="s1">DOMException</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_globalObject</span><span class="s3">, [</span>
+          <span class="s2">`The subprotocol '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">protocol</span><span class="s3">}</span><span class="s2">' is duplicated.`</span><span class="s3">,</span>
+          <span class="s2">&quot;SyntaxError&quot;</span>
+        <span class="s3">]);</span>
+      <span class="s3">}</span>
+      <span class="s1">protocolSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">lowered</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_urlRecord </span><span class="s3">= </span><span class="s1">urlRecord</span><span class="s3">;</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">url </span><span class="s3">= </span><span class="s1">serializeURL</span><span class="s3">(</span><span class="s1">urlRecord</span><span class="s3">);</span>
+
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WebSocket</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">url</span><span class="s3">, </span><span class="s1">protocols</span><span class="s3">);</span>
+
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">onopen </span><span class="s3">= () =&gt; {</span>
+      <span class="s1">fireAnEvent</span><span class="s3">(</span><span class="s2">&quot;open&quot;</span><span class="s3">, </span><span class="s4">this</span><span class="s3">);</span>
+    <span class="s3">};</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">onerror </span><span class="s3">= () =&gt; {</span>
+      <span class="s1">fireAnEvent</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s4">this</span><span class="s3">);</span>
+    <span class="s3">};</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">onclose </span><span class="s3">= </span><span class="s1">event </span><span class="s3">=&gt; {</span>
+      <span class="s1">fireAnEvent</span><span class="s3">(</span><span class="s2">&quot;close&quot;</span><span class="s3">, </span><span class="s4">this</span><span class="s3">, </span><span class="s1">CloseEvent</span><span class="s3">, {</span>
+        <span class="s1">wasClean</span><span class="s3">: </span><span class="s1">event</span><span class="s3">.</span><span class="s1">wasClean</span><span class="s3">,</span>
+        <span class="s1">code</span><span class="s3">: </span><span class="s1">event</span><span class="s3">.</span><span class="s1">code</span><span class="s3">,</span>
+        <span class="s1">reason</span><span class="s3">: </span><span class="s1">event</span><span class="s3">.</span><span class="s1">reason</span>
+      <span class="s3">});</span>
+    <span class="s3">};</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">onmessage </span><span class="s3">= </span><span class="s1">event </span><span class="s3">=&gt; {</span>
+      <span class="s1">fireAnEvent</span><span class="s3">(</span><span class="s2">&quot;message&quot;</span><span class="s3">, </span><span class="s4">this</span><span class="s3">, </span><span class="s1">MessageEvent</span><span class="s3">, {</span>
+        <span class="s1">data</span><span class="s3">: </span><span class="s1">event</span><span class="s3">.</span><span class="s1">data</span><span class="s3">,</span>
+        <span class="s1">origin</span><span class="s3">: </span><span class="s1">serializeURLOrigin</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_urlRecord</span><span class="s3">)</span>
+      <span class="s3">});</span>
+    <span class="s3">};</span>
+
+    <span class="s4">let </span><span class="s1">openSocketsForWindow </span><span class="s3">= </span><span class="s1">openSockets</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">window</span><span class="s3">.</span><span class="s1">_globalProxy</span><span class="s3">);</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">openSocketsForWindow </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+      <span class="s1">openSocketsForWindow </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+      <span class="s1">openSockets</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">window</span><span class="s3">.</span><span class="s1">_globalProxy</span><span class="s3">, </span><span class="s1">openSocketsForWindow</span><span class="s3">);</span>
+    <span class="s3">}</span>
+    <span class="s1">openSocketsForWindow</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s0">// https://html.spec.whatwg.org/multipage/web-sockets.html#make-disappear</span>
+  <span class="s1">_makeDisappear</span><span class="s3">() {</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_eventListeners </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">close</span><span class="s3">(</span><span class="s6">1001</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s4">static </span><span class="s1">cleanUpWindow</span><span class="s3">(</span><span class="s1">window</span><span class="s3">) {</span>
+    <span class="s4">const </span><span class="s1">openSocketsForWindow </span><span class="s3">= </span><span class="s1">openSockets</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">window</span><span class="s3">.</span><span class="s1">_globalProxy</span><span class="s3">);</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">openSocketsForWindow </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+      <span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">ws of openSocketsForWindow</span><span class="s3">) {</span>
+        <span class="s1">ws</span><span class="s3">.</span><span class="s1">_makeDisappear</span><span class="s3">();</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s1">get readyState</span><span class="s3">() {</span>
+    <span class="s4">return this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">readyState</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s1">get bufferedAmount</span><span class="s3">() {</span>
+    <span class="s4">return this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">bufferedAmount</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s1">get extensions</span><span class="s3">() {</span>
+    <span class="s4">return this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">extensions</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s1">get protocol</span><span class="s3">() {</span>
+    <span class="s4">return this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">protocol</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s1">close</span><span class="s3">(</span><span class="s1">code </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">, </span><span class="s1">reason </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">) {</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">code </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s1">code </span><span class="s3">!== </span><span class="s6">1000 </span><span class="s3">&amp;&amp; !(</span><span class="s1">code </span><span class="s3">&gt;= </span><span class="s6">3000 </span><span class="s3">&amp;&amp; </span><span class="s1">code </span><span class="s3">&lt;= </span><span class="s6">4999</span><span class="s3">)) {</span>
+      <span class="s4">throw </span><span class="s1">DOMException</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_globalObject</span><span class="s3">, [</span>
+        <span class="s2">`The code must be either 1000, or between 3000 and 4999. </span><span class="s1">$</span><span class="s3">{</span><span class="s1">code</span><span class="s3">} </span><span class="s2">is neither.`</span><span class="s3">,</span>
+        <span class="s2">&quot;InvalidAccessError&quot;</span>
+      <span class="s3">]);</span>
+    <span class="s3">}</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">reason </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">byteLength</span><span class="s3">(</span><span class="s1">reason</span><span class="s3">, </span><span class="s2">&quot;utf8&quot;</span><span class="s3">) &gt; </span><span class="s6">123</span><span class="s3">) {</span>
+      <span class="s4">throw </span><span class="s1">DOMException</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_globalObject</span><span class="s3">, [</span>
+        <span class="s2">&quot;The message must not be greater than 123 bytes.&quot;</span><span class="s3">,</span>
+        <span class="s2">&quot;SyntaxError&quot;</span>
+      <span class="s3">]);</span>
+    <span class="s3">}</span>
+    <span class="s4">return this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">close</span><span class="s3">(</span><span class="s1">code</span><span class="s3">, </span><span class="s1">reason</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s1">get binaryType</span><span class="s3">() {</span>
+    <span class="s4">return this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">binaryType</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s1">set binaryType</span><span class="s3">(</span><span class="s1">val</span><span class="s3">) {</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">binaryType </span><span class="s3">= </span><span class="s1">val</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s1">send</span><span class="s3">(</span><span class="s1">data</span><span class="s3">) {</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">Blob</span><span class="s3">.</span><span class="s1">isImpl</span><span class="s3">(</span><span class="s1">data</span><span class="s3">)) {</span>
+      <span class="s1">data </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">_buffer</span><span class="s3">;</span>
+    <span class="s3">}</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_ws</span><span class="s3">.</span><span class="s1">send</span><span class="s3">(</span><span class="s1">data</span><span class="s3">);</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">setupForSimpleEventAccessors</span><span class="s3">(</span><span class="s1">WebSocketImpl</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">, [</span><span class="s2">&quot;open&quot;</span><span class="s3">, </span><span class="s2">&quot;message&quot;</span><span class="s3">, </span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s2">&quot;close&quot;</span><span class="s3">]);</span>
+
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">implementation </span><span class="s3">= </span><span class="s1">WebSocketImpl</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

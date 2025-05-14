@@ -1,0 +1,457 @@
+<html>
+<head>
+<title>convertTransform.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #5f826b; font-style: italic;}
+.s4 { color: #67a37c; font-style: italic;}
+.s5 { color: #cf8e6d;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+convertTransform.js</font>
+</center></td></tr></table>
+<pre><span class="s0">'use strict'</span><span class="s1">;</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* </span><span class="s4">@typedef </span><span class="s3">{import('../lib/types').XastElement} XastElement</span>
+ <span class="s3">*/</span>
+
+<span class="s5">const </span><span class="s1">{ </span><span class="s2">cleanupOutData </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">'../lib/svgo/tools.js'</span><span class="s1">);</span>
+<span class="s5">const </span><span class="s1">{</span>
+  <span class="s2">transform2js</span><span class="s1">,</span>
+  <span class="s2">transformsMultiply</span><span class="s1">,</span>
+  <span class="s2">matrixToTransform</span><span class="s1">,</span>
+<span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">'./_transforms.js'</span><span class="s1">);</span>
+
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">type </span><span class="s1">= </span><span class="s0">'visitor'</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">name </span><span class="s1">= </span><span class="s0">'convertTransform'</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">active </span><span class="s1">= </span><span class="s5">true</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">description </span><span class="s1">= </span><span class="s0">'collapses multiple transformations and optimizes it'</span><span class="s1">;</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Convert matrices to the short aliases,</span>
+ <span class="s3">* convert long translate, scale or rotate transform notations to the shorts ones,</span>
+ <span class="s3">* convert transforms to the matrices and multiply them all into one,</span>
+ <span class="s3">* remove useless transforms.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@see </span><span class="s3">https://www.w3.org/TR/SVG11/coords.html#TransformMatrixDefined</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@author </span><span class="s3">Kir Belevich</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{import('../lib/types').Plugin&lt;{</span>
+ <span class="s3">*   convertToShorts?: boolean,</span>
+ <span class="s3">*   degPrecision?: number,</span>
+ <span class="s3">*   floatPrecision?: number,</span>
+ <span class="s3">*   transformPrecision?: number,</span>
+ <span class="s3">*   matrixToTransform?: boolean,</span>
+ <span class="s3">*   shortTranslate?: boolean,</span>
+ <span class="s3">*   shortScale?: boolean,</span>
+ <span class="s3">*   shortRotate?: boolean,</span>
+ <span class="s3">*   removeUseless?: boolean,</span>
+ <span class="s3">*   collapseIntoOne?: boolean,</span>
+ <span class="s3">*   leadingZero?: boolean,</span>
+ <span class="s3">*   negativeExtraSpace?: boolean,</span>
+ <span class="s3">* }&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">fn </span><span class="s1">= (</span><span class="s2">_root</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">const </span><span class="s1">{</span>
+    <span class="s2">convertToShorts </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s6">// degPrecision = 3, // transformPrecision (or matrix precision) - 2 by default</span>
+    <span class="s2">degPrecision</span><span class="s1">,</span>
+    <span class="s2">floatPrecision </span><span class="s1">= </span><span class="s7">3</span><span class="s1">,</span>
+    <span class="s2">transformPrecision </span><span class="s1">= </span><span class="s7">5</span><span class="s1">,</span>
+    <span class="s2">matrixToTransform </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s2">shortTranslate </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s2">shortScale </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s2">shortRotate </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s2">removeUseless </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s2">collapseIntoOne </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s2">leadingZero </span><span class="s1">= </span><span class="s5">true</span><span class="s1">,</span>
+    <span class="s2">negativeExtraSpace </span><span class="s1">= </span><span class="s5">false</span><span class="s1">,</span>
+  <span class="s1">} = </span><span class="s2">params</span><span class="s1">;</span>
+  <span class="s5">const </span><span class="s2">newParams </span><span class="s1">= {</span>
+    <span class="s2">convertToShorts</span><span class="s1">,</span>
+    <span class="s2">degPrecision</span><span class="s1">,</span>
+    <span class="s2">floatPrecision</span><span class="s1">,</span>
+    <span class="s2">transformPrecision</span><span class="s1">,</span>
+    <span class="s2">matrixToTransform</span><span class="s1">,</span>
+    <span class="s2">shortTranslate</span><span class="s1">,</span>
+    <span class="s2">shortScale</span><span class="s1">,</span>
+    <span class="s2">shortRotate</span><span class="s1">,</span>
+    <span class="s2">removeUseless</span><span class="s1">,</span>
+    <span class="s2">collapseIntoOne</span><span class="s1">,</span>
+    <span class="s2">leadingZero</span><span class="s1">,</span>
+    <span class="s2">negativeExtraSpace</span><span class="s1">,</span>
+  <span class="s1">};</span>
+  <span class="s5">return </span><span class="s1">{</span>
+    <span class="s2">element</span><span class="s1">: {</span>
+      <span class="s2">enter</span><span class="s1">: (</span><span class="s2">node</span><span class="s1">) =&gt; {</span>
+        <span class="s6">// transform</span>
+        <span class="s5">if </span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">attributes</span><span class="s1">.</span><span class="s2">transform </span><span class="s1">!= </span><span class="s5">null</span><span class="s1">) {</span>
+          <span class="s2">convertTransform</span><span class="s1">(</span><span class="s2">node</span><span class="s1">, </span><span class="s0">'transform'</span><span class="s1">, </span><span class="s2">newParams</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s6">// gradientTransform</span>
+        <span class="s5">if </span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">attributes</span><span class="s1">.</span><span class="s2">gradientTransform </span><span class="s1">!= </span><span class="s5">null</span><span class="s1">) {</span>
+          <span class="s2">convertTransform</span><span class="s1">(</span><span class="s2">node</span><span class="s1">, </span><span class="s0">'gradientTransform'</span><span class="s1">, </span><span class="s2">newParams</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s6">// patternTransform</span>
+        <span class="s5">if </span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">attributes</span><span class="s1">.</span><span class="s2">patternTransform </span><span class="s1">!= </span><span class="s5">null</span><span class="s1">) {</span>
+          <span class="s2">convertTransform</span><span class="s1">(</span><span class="s2">node</span><span class="s1">, </span><span class="s0">'patternTransform'</span><span class="s1">, </span><span class="s2">newParams</span><span class="s1">);</span>
+        <span class="s1">}</span>
+      <span class="s1">},</span>
+    <span class="s1">},</span>
+  <span class="s1">};</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* </span><span class="s4">@typedef </span><span class="s3">{{</span>
+ <span class="s3">*   convertToShorts: boolean,</span>
+ <span class="s3">*   degPrecision?: number,</span>
+ <span class="s3">*   floatPrecision: number,</span>
+ <span class="s3">*   transformPrecision: number,</span>
+ <span class="s3">*   matrixToTransform: boolean,</span>
+ <span class="s3">*   shortTranslate: boolean,</span>
+ <span class="s3">*   shortScale: boolean,</span>
+ <span class="s3">*   shortRotate: boolean,</span>
+ <span class="s3">*   removeUseless: boolean,</span>
+ <span class="s3">*   collapseIntoOne: boolean,</span>
+ <span class="s3">*   leadingZero: boolean,</span>
+ <span class="s3">*   negativeExtraSpace: boolean,</span>
+ <span class="s3">* }} TransformParams</span>
+ <span class="s3">*/</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* </span><span class="s4">@typedef </span><span class="s3">{{ name: string, data: Array&lt;number&gt; }} TransformItem</span>
+ <span class="s3">*/</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Main function.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(item: XastElement, attrName: string, params: TransformParams) =&gt; void}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">convertTransform </span><span class="s1">= (</span><span class="s2">item</span><span class="s1">, </span><span class="s2">attrName</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">let </span><span class="s2">data </span><span class="s1">= </span><span class="s2">transform2js</span><span class="s1">(</span><span class="s2">item</span><span class="s1">.</span><span class="s2">attributes</span><span class="s1">[</span><span class="s2">attrName</span><span class="s1">]);</span>
+  <span class="s2">params </span><span class="s1">= </span><span class="s2">definePrecision</span><span class="s1">(</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">collapseIntoOne </span><span class="s1">&amp;&amp; </span><span class="s2">data</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s7">1</span><span class="s1">) {</span>
+    <span class="s2">data </span><span class="s1">= [</span><span class="s2">transformsMultiply</span><span class="s1">(</span><span class="s2">data</span><span class="s1">)];</span>
+  <span class="s1">}</span>
+
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">convertToShorts</span><span class="s1">) {</span>
+    <span class="s2">data </span><span class="s1">= </span><span class="s2">convertToShorts</span><span class="s1">(</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s5">else </span><span class="s1">{</span>
+    <span class="s2">data</span><span class="s1">.</span><span class="s2">forEach</span><span class="s1">((</span><span class="s2">item</span><span class="s1">) =&gt; </span><span class="s2">roundTransform</span><span class="s1">(</span><span class="s2">item</span><span class="s1">, </span><span class="s2">params</span><span class="s1">));</span>
+  <span class="s1">}</span>
+
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">removeUseless</span><span class="s1">) {</span>
+    <span class="s2">data </span><span class="s1">= </span><span class="s2">removeUseless</span><span class="s1">(</span><span class="s2">data</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">data</span><span class="s1">.</span><span class="s2">length</span><span class="s1">) {</span>
+    <span class="s2">item</span><span class="s1">.</span><span class="s2">attributes</span><span class="s1">[</span><span class="s2">attrName</span><span class="s1">] = </span><span class="s2">js2transform</span><span class="s1">(</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s5">else </span><span class="s1">{</span>
+    <span class="s5">delete </span><span class="s2">item</span><span class="s1">.</span><span class="s2">attributes</span><span class="s1">[</span><span class="s2">attrName</span><span class="s1">];</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Defines precision to work with certain parts.</span>
+ <span class="s3">* transformPrecision - for scale and four first matrix parameters (needs a better precision due to multiplying),</span>
+ <span class="s3">* floatPrecision - for translate including two last matrix and rotate parameters,</span>
+ <span class="s3">* degPrecision - for rotate and skew. By default it's equal to (rougly)</span>
+ <span class="s3">* transformPrecision - 2 or floatPrecision whichever is lower. Can be set in params.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(data: Array&lt;TransformItem&gt;, params: TransformParams) =&gt; TransformParams}</span>
+ <span class="s3">*</span>
+ <span class="s3">* clone params so it don't affect other elements transformations.</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">definePrecision </span><span class="s1">= (</span><span class="s2">data</span><span class="s1">, { </span><span class="s2">...newParams </span><span class="s1">}) =&gt; {</span>
+  <span class="s5">const </span><span class="s2">matrixData </span><span class="s1">= [];</span>
+  <span class="s5">for </span><span class="s1">(</span><span class="s5">const </span><span class="s2">item of data</span><span class="s1">) {</span>
+    <span class="s5">if </span><span class="s1">(</span><span class="s2">item</span><span class="s1">.</span><span class="s2">name </span><span class="s1">== </span><span class="s0">'matrix'</span><span class="s1">) {</span>
+      <span class="s2">matrixData</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">...item</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s7">0</span><span class="s1">, </span><span class="s7">4</span><span class="s1">));</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+  <span class="s5">let </span><span class="s2">significantDigits </span><span class="s1">= </span><span class="s2">newParams</span><span class="s1">.</span><span class="s2">transformPrecision</span><span class="s1">;</span>
+  <span class="s6">// Limit transform precision with matrix one. Calculating with larger precision doesn't add any value.</span>
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">matrixData</span><span class="s1">.</span><span class="s2">length</span><span class="s1">) {</span>
+    <span class="s2">newParams</span><span class="s1">.</span><span class="s2">transformPrecision </span><span class="s1">= </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">min</span><span class="s1">(</span>
+      <span class="s2">newParams</span><span class="s1">.</span><span class="s2">transformPrecision</span><span class="s1">,</span>
+      <span class="s2">Math</span><span class="s1">.</span><span class="s2">max</span><span class="s1">.</span><span class="s2">apply</span><span class="s1">(</span><span class="s2">Math</span><span class="s1">, </span><span class="s2">matrixData</span><span class="s1">.</span><span class="s2">map</span><span class="s1">(</span><span class="s2">floatDigits</span><span class="s1">)) ||</span>
+        <span class="s2">newParams</span><span class="s1">.</span><span class="s2">transformPrecision</span>
+    <span class="s1">);</span>
+    <span class="s2">significantDigits </span><span class="s1">= </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">max</span><span class="s1">.</span><span class="s2">apply</span><span class="s1">(</span>
+      <span class="s2">Math</span><span class="s1">,</span>
+      <span class="s2">matrixData</span><span class="s1">.</span><span class="s2">map</span><span class="s1">(</span>
+        <span class="s1">(</span><span class="s2">n</span><span class="s1">) =&gt; </span><span class="s2">n</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">().</span><span class="s2">replace</span><span class="s1">(</span><span class="s8">/\D+/g</span><span class="s1">, </span><span class="s0">''</span><span class="s1">).</span><span class="s2">length </span><span class="s6">// Number of digits in a number. 123.45 → 5</span>
+      <span class="s1">)</span>
+    <span class="s1">);</span>
+  <span class="s1">}</span>
+  <span class="s6">// No sense in angle precision more then number of significant digits in matrix.</span>
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">newParams</span><span class="s1">.</span><span class="s2">degPrecision </span><span class="s1">== </span><span class="s5">null</span><span class="s1">) {</span>
+    <span class="s2">newParams</span><span class="s1">.</span><span class="s2">degPrecision </span><span class="s1">= </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">max</span><span class="s1">(</span>
+      <span class="s7">0</span><span class="s1">,</span>
+      <span class="s2">Math</span><span class="s1">.</span><span class="s2">min</span><span class="s1">(</span><span class="s2">newParams</span><span class="s1">.</span><span class="s2">floatPrecision</span><span class="s1">, </span><span class="s2">significantDigits </span><span class="s1">- </span><span class="s7">2</span><span class="s1">)</span>
+    <span class="s1">);</span>
+  <span class="s1">}</span>
+  <span class="s5">return </span><span class="s2">newParams</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(data: Array&lt;number&gt;, params: TransformParams) =&gt; Array&lt;number&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">degRound </span><span class="s1">= (</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">if </span><span class="s1">(</span>
+    <span class="s2">params</span><span class="s1">.</span><span class="s2">degPrecision </span><span class="s1">!= </span><span class="s5">null </span><span class="s1">&amp;&amp;</span>
+    <span class="s2">params</span><span class="s1">.</span><span class="s2">degPrecision </span><span class="s1">&gt;= </span><span class="s7">1 </span><span class="s1">&amp;&amp;</span>
+    <span class="s2">params</span><span class="s1">.</span><span class="s2">floatPrecision </span><span class="s1">&lt; </span><span class="s7">20</span>
+  <span class="s1">) {</span>
+    <span class="s5">return </span><span class="s2">smartRound</span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">degPrecision</span><span class="s1">, </span><span class="s2">data</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s5">else </span><span class="s1">{</span>
+    <span class="s5">return </span><span class="s2">round</span><span class="s1">(</span><span class="s2">data</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+<span class="s3">/**</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(data: Array&lt;number&gt;, params: TransformParams) =&gt; Array&lt;number&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">floatRound </span><span class="s1">= (</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">floatPrecision </span><span class="s1">&gt;= </span><span class="s7">1 </span><span class="s1">&amp;&amp; </span><span class="s2">params</span><span class="s1">.</span><span class="s2">floatPrecision </span><span class="s1">&lt; </span><span class="s7">20</span><span class="s1">) {</span>
+    <span class="s5">return </span><span class="s2">smartRound</span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">floatPrecision</span><span class="s1">, </span><span class="s2">data</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s5">else </span><span class="s1">{</span>
+    <span class="s5">return </span><span class="s2">round</span><span class="s1">(</span><span class="s2">data</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(data: Array&lt;number&gt;, params: TransformParams) =&gt; Array&lt;number&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">transformRound </span><span class="s1">= (</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">if </span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">transformPrecision </span><span class="s1">&gt;= </span><span class="s7">1 </span><span class="s1">&amp;&amp; </span><span class="s2">params</span><span class="s1">.</span><span class="s2">floatPrecision </span><span class="s1">&lt; </span><span class="s7">20</span><span class="s1">) {</span>
+    <span class="s5">return </span><span class="s2">smartRound</span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">transformPrecision</span><span class="s1">, </span><span class="s2">data</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s5">else </span><span class="s1">{</span>
+    <span class="s5">return </span><span class="s2">round</span><span class="s1">(</span><span class="s2">data</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Returns number of digits after the point. 0.125 → 3</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(n: number) =&gt; number}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">floatDigits </span><span class="s1">= (</span><span class="s2">n</span><span class="s1">) =&gt; {</span>
+  <span class="s5">const </span><span class="s2">str </span><span class="s1">= </span><span class="s2">n</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">();</span>
+  <span class="s5">return </span><span class="s2">str</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s2">str</span><span class="s1">.</span><span class="s2">indexOf</span><span class="s1">(</span><span class="s0">'.'</span><span class="s1">)).</span><span class="s2">length </span><span class="s1">- </span><span class="s7">1</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Convert transforms to the shorthand alternatives.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(transforms: Array&lt;TransformItem&gt;, params: TransformParams) =&gt; Array&lt;TransformItem&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">convertToShorts </span><span class="s1">= (</span><span class="s2">transforms</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">for </span><span class="s1">(</span><span class="s5">var </span><span class="s2">i </span><span class="s1">= </span><span class="s7">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">transforms</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++) {</span>
+    <span class="s5">var </span><span class="s2">transform </span><span class="s1">= </span><span class="s2">transforms</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+
+    <span class="s6">// convert matrix to the short aliases</span>
+    <span class="s5">if </span><span class="s1">(</span><span class="s2">params</span><span class="s1">.</span><span class="s2">matrixToTransform </span><span class="s1">&amp;&amp; </span><span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">'matrix'</span><span class="s1">) {</span>
+      <span class="s5">var </span><span class="s2">decomposed </span><span class="s1">= </span><span class="s2">matrixToTransform</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+      <span class="s5">if </span><span class="s1">(</span>
+        <span class="s2">js2transform</span><span class="s1">(</span><span class="s2">decomposed</span><span class="s1">, </span><span class="s2">params</span><span class="s1">).</span><span class="s2">length </span><span class="s1">&lt;=</span>
+        <span class="s2">js2transform</span><span class="s1">([</span><span class="s2">transform</span><span class="s1">], </span><span class="s2">params</span><span class="s1">).</span><span class="s2">length</span>
+      <span class="s1">) {</span>
+        <span class="s2">transforms</span><span class="s1">.</span><span class="s2">splice</span><span class="s1">(</span><span class="s2">i</span><span class="s1">, </span><span class="s7">1</span><span class="s1">, </span><span class="s2">...decomposed</span><span class="s1">);</span>
+      <span class="s1">}</span>
+      <span class="s2">transform </span><span class="s1">= </span><span class="s2">transforms</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+    <span class="s1">}</span>
+
+    <span class="s6">// fixed-point numbers</span>
+    <span class="s6">// 12.754997 → 12.755</span>
+    <span class="s2">roundTransform</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+
+    <span class="s6">// convert long translate transform notation to the shorts one</span>
+    <span class="s6">// translate(10 0) → translate(10)</span>
+    <span class="s5">if </span><span class="s1">(</span>
+      <span class="s2">params</span><span class="s1">.</span><span class="s2">shortTranslate </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">'translate' </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s7">2 </span><span class="s1">&amp;&amp;</span>
+      <span class="s1">!</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">]</span>
+    <span class="s1">) {</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">pop</span><span class="s1">();</span>
+    <span class="s1">}</span>
+
+    <span class="s6">// convert long scale transform notation to the shorts one</span>
+    <span class="s6">// scale(2 2) → scale(2)</span>
+    <span class="s5">if </span><span class="s1">(</span>
+      <span class="s2">params</span><span class="s1">.</span><span class="s2">shortScale </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">'scale' </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s7">2 </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">] === </span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">]</span>
+    <span class="s1">) {</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">pop</span><span class="s1">();</span>
+    <span class="s1">}</span>
+
+    <span class="s6">// convert long rotate transform notation to the short one</span>
+    <span class="s6">// translate(cx cy) rotate(a) translate(-cx -cy) → rotate(a cx cy)</span>
+    <span class="s5">if </span><span class="s1">(</span>
+      <span class="s2">params</span><span class="s1">.</span><span class="s2">shortRotate </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">2</span><span class="s1">] &amp;&amp;</span>
+      <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">2</span><span class="s1">].</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">'translate' </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">1</span><span class="s1">].</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">'rotate' </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">'translate' </span><span class="s1">&amp;&amp;</span>
+      <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">2</span><span class="s1">].</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">] === -</span><span class="s2">transforms</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">] &amp;&amp;</span>
+      <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">2</span><span class="s1">].</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">] === -</span><span class="s2">transforms</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">]</span>
+    <span class="s1">) {</span>
+      <span class="s2">transforms</span><span class="s1">.</span><span class="s2">splice</span><span class="s1">(</span><span class="s2">i </span><span class="s1">- </span><span class="s7">2</span><span class="s1">, </span><span class="s7">3</span><span class="s1">, {</span>
+        <span class="s2">name</span><span class="s1">: </span><span class="s0">'rotate'</span><span class="s1">,</span>
+        <span class="s2">data</span><span class="s1">: [</span>
+          <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">1</span><span class="s1">].</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">],</span>
+          <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">2</span><span class="s1">].</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">],</span>
+          <span class="s2">transforms</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s7">2</span><span class="s1">].</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">],</span>
+        <span class="s1">],</span>
+      <span class="s1">});</span>
+
+      <span class="s6">// splice compensation</span>
+      <span class="s2">i </span><span class="s1">-= </span><span class="s7">2</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s5">return </span><span class="s2">transforms</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Remove useless transforms.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(trasforms: Array&lt;TransformItem&gt;) =&gt; Array&lt;TransformItem&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">removeUseless </span><span class="s1">= (</span><span class="s2">transforms</span><span class="s1">) =&gt; {</span>
+  <span class="s5">return </span><span class="s2">transforms</span><span class="s1">.</span><span class="s2">filter</span><span class="s1">((</span><span class="s2">transform</span><span class="s1">) =&gt; {</span>
+    <span class="s6">// translate(0), rotate(0[, cx, cy]), skewX(0), skewY(0)</span>
+    <span class="s5">if </span><span class="s1">(</span>
+      <span class="s1">([</span><span class="s0">'translate'</span><span class="s1">, </span><span class="s0">'rotate'</span><span class="s1">, </span><span class="s0">'skewX'</span><span class="s1">, </span><span class="s0">'skewY'</span><span class="s1">].</span><span class="s2">indexOf</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">name</span><span class="s1">) &gt; -</span><span class="s7">1 </span><span class="s1">&amp;&amp;</span>
+        <span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">length </span><span class="s1">== </span><span class="s7">1 </span><span class="s1">|| </span><span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">== </span><span class="s0">'rotate'</span><span class="s1">) &amp;&amp;</span>
+        <span class="s1">!</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">]) ||</span>
+      <span class="s6">// translate(0, 0)</span>
+      <span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">== </span><span class="s0">'translate' </span><span class="s1">&amp;&amp;</span>
+        <span class="s1">!</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">] &amp;&amp;</span>
+        <span class="s1">!</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">]) ||</span>
+      <span class="s6">// scale(1)</span>
+      <span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">== </span><span class="s0">'scale' </span><span class="s1">&amp;&amp;</span>
+        <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">] == </span><span class="s7">1 </span><span class="s1">&amp;&amp;</span>
+        <span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&lt; </span><span class="s7">2 </span><span class="s1">|| </span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">] == </span><span class="s7">1</span><span class="s1">)) ||</span>
+      <span class="s6">// matrix(1 0 0 1 0 0)</span>
+      <span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">== </span><span class="s0">'matrix' </span><span class="s1">&amp;&amp;</span>
+        <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">0</span><span class="s1">] == </span><span class="s7">1 </span><span class="s1">&amp;&amp;</span>
+        <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">3</span><span class="s1">] == </span><span class="s7">1 </span><span class="s1">&amp;&amp;</span>
+        <span class="s1">!(</span>
+          <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">1</span><span class="s1">] ||</span>
+          <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">2</span><span class="s1">] ||</span>
+          <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">4</span><span class="s1">] ||</span>
+          <span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">[</span><span class="s7">5</span><span class="s1">]</span>
+        <span class="s1">))</span>
+    <span class="s1">) {</span>
+      <span class="s5">return false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s5">return true</span><span class="s1">;</span>
+  <span class="s1">});</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Convert transforms JS representation to string.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(transformJS: Array&lt;TransformItem&gt;, params: TransformParams) =&gt; string}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">js2transform </span><span class="s1">= (</span><span class="s2">transformJS</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">var </span><span class="s2">transformString </span><span class="s1">= </span><span class="s0">''</span><span class="s1">;</span>
+
+  <span class="s6">// collect output value string</span>
+  <span class="s2">transformJS</span><span class="s1">.</span><span class="s2">forEach</span><span class="s1">((</span><span class="s2">transform</span><span class="s1">) =&gt; {</span>
+    <span class="s2">roundTransform</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+    <span class="s2">transformString </span><span class="s1">+=</span>
+      <span class="s1">(</span><span class="s2">transformString </span><span class="s1">&amp;&amp; </span><span class="s0">' '</span><span class="s1">) +</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">name </span><span class="s1">+</span>
+      <span class="s0">'(' </span><span class="s1">+</span>
+      <span class="s2">cleanupOutData</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) +</span>
+      <span class="s0">')'</span><span class="s1">;</span>
+  <span class="s1">});</span>
+
+  <span class="s5">return </span><span class="s2">transformString</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(transform: TransformItem, params: TransformParams) =&gt; TransformItem}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">roundTransform </span><span class="s1">= (</span><span class="s2">transform</span><span class="s1">, </span><span class="s2">params</span><span class="s1">) =&gt; {</span>
+  <span class="s5">switch </span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">name</span><span class="s1">) {</span>
+    <span class="s5">case </span><span class="s0">'translate'</span><span class="s1">:</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data </span><span class="s1">= </span><span class="s2">floatRound</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+      <span class="s5">break</span><span class="s1">;</span>
+    <span class="s5">case </span><span class="s0">'rotate'</span><span class="s1">:</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data </span><span class="s1">= [</span>
+        <span class="s2">...degRound</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s7">0</span><span class="s1">, </span><span class="s7">1</span><span class="s1">), </span><span class="s2">params</span><span class="s1">),</span>
+        <span class="s2">...floatRound</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s7">1</span><span class="s1">), </span><span class="s2">params</span><span class="s1">),</span>
+      <span class="s1">];</span>
+      <span class="s5">break</span><span class="s1">;</span>
+    <span class="s5">case </span><span class="s0">'skewX'</span><span class="s1">:</span>
+    <span class="s5">case </span><span class="s0">'skewY'</span><span class="s1">:</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data </span><span class="s1">= </span><span class="s2">degRound</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+      <span class="s5">break</span><span class="s1">;</span>
+    <span class="s5">case </span><span class="s0">'scale'</span><span class="s1">:</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data </span><span class="s1">= </span><span class="s2">transformRound</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">, </span><span class="s2">params</span><span class="s1">);</span>
+      <span class="s5">break</span><span class="s1">;</span>
+    <span class="s5">case </span><span class="s0">'matrix'</span><span class="s1">:</span>
+      <span class="s2">transform</span><span class="s1">.</span><span class="s2">data </span><span class="s1">= [</span>
+        <span class="s2">...transformRound</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s7">0</span><span class="s1">, </span><span class="s7">4</span><span class="s1">), </span><span class="s2">params</span><span class="s1">),</span>
+        <span class="s2">...floatRound</span><span class="s1">(</span><span class="s2">transform</span><span class="s1">.</span><span class="s2">data</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s7">4</span><span class="s1">), </span><span class="s2">params</span><span class="s1">),</span>
+      <span class="s1">];</span>
+      <span class="s5">break</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s5">return </span><span class="s2">transform</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Rounds numbers in array.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(data: Array&lt;number&gt;) =&gt; Array&lt;number&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">round </span><span class="s1">= (</span><span class="s2">data</span><span class="s1">) =&gt; {</span>
+  <span class="s5">return </span><span class="s2">data</span><span class="s1">.</span><span class="s2">map</span><span class="s1">(</span><span class="s2">Math</span><span class="s1">.</span><span class="s2">round</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s3">/**</span>
+ <span class="s3">* Decrease accuracy of floating-point numbers</span>
+ <span class="s3">* in transforms keeping a specified number of decimals.</span>
+ <span class="s3">* Smart rounds values like 2.349 to 2.35.</span>
+ <span class="s3">*</span>
+ <span class="s3">* </span><span class="s4">@type </span><span class="s3">{(precision: number, data: Array&lt;number&gt;) =&gt; Array&lt;number&gt;}</span>
+ <span class="s3">*/</span>
+<span class="s5">const </span><span class="s2">smartRound </span><span class="s1">= (</span><span class="s2">precision</span><span class="s1">, </span><span class="s2">data</span><span class="s1">) =&gt; {</span>
+  <span class="s5">for </span><span class="s1">(</span>
+    <span class="s5">var </span><span class="s2">i </span><span class="s1">= </span><span class="s2">data</span><span class="s1">.</span><span class="s2">length</span><span class="s1">,</span>
+      <span class="s2">tolerance </span><span class="s1">= +</span><span class="s2">Math</span><span class="s1">.</span><span class="s2">pow</span><span class="s1">(</span><span class="s7">0.1</span><span class="s1">, </span><span class="s2">precision</span><span class="s1">).</span><span class="s2">toFixed</span><span class="s1">(</span><span class="s2">precision</span><span class="s1">);</span>
+    <span class="s2">i</span><span class="s1">--;</span>
+
+  <span class="s1">) {</span>
+    <span class="s5">if </span><span class="s1">(</span><span class="s2">Number</span><span class="s1">(</span><span class="s2">data</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">toFixed</span><span class="s1">(</span><span class="s2">precision</span><span class="s1">)) !== </span><span class="s2">data</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]) {</span>
+      <span class="s5">var </span><span class="s2">rounded </span><span class="s1">= +</span><span class="s2">data</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">toFixed</span><span class="s1">(</span><span class="s2">precision </span><span class="s1">- </span><span class="s7">1</span><span class="s1">);</span>
+      <span class="s2">data</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] =</span>
+        <span class="s1">+</span><span class="s2">Math</span><span class="s1">.</span><span class="s2">abs</span><span class="s1">(</span><span class="s2">rounded </span><span class="s1">- </span><span class="s2">data</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]).</span><span class="s2">toFixed</span><span class="s1">(</span><span class="s2">precision </span><span class="s1">+ </span><span class="s7">1</span><span class="s1">) &gt;= </span><span class="s2">tolerance</span>
+          <span class="s1">? +</span><span class="s2">data</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">toFixed</span><span class="s1">(</span><span class="s2">precision</span><span class="s1">)</span>
+          <span class="s1">: </span><span class="s2">rounded</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+  <span class="s5">return </span><span class="s2">data</span><span class="s1">;</span>
+<span class="s1">};</span>
+</pre>
+</body>
+</html>

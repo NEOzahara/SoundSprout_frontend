@@ -1,0 +1,307 @@
+<html>
+<head>
+<title>expandTailwindAtRules.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #cf8e6d;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #42c3d4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #2aacb8;}
+.s7 { color: #5f826b; font-style: italic;}
+.s8 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+expandTailwindAtRules.js</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">fs from </span><span class="s2">'fs'</span>
+<span class="s0">import </span><span class="s1">LRU from </span><span class="s2">'@alloc/quick-lru'</span>
+<span class="s0">import </span><span class="s3">* as </span><span class="s1">sharedState from </span><span class="s2">'./sharedState'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">generateRules </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'./generateRules'</span>
+<span class="s0">import </span><span class="s1">log from </span><span class="s2">'../util/log'</span>
+<span class="s0">import </span><span class="s1">cloneNodes from </span><span class="s2">'../util/cloneNodes'</span>
+<span class="s0">import </span><span class="s3">{ </span><span class="s1">defaultExtractor </span><span class="s3">} </span><span class="s1">from </span><span class="s2">'./defaultExtractor'</span>
+
+<span class="s0">let </span><span class="s1">env </span><span class="s3">= </span><span class="s1">sharedState</span><span class="s3">.</span><span class="s1">env</span>
+
+<span class="s0">const </span><span class="s1">builtInExtractors </span><span class="s3">= {</span>
+  <span class="s1">DEFAULT</span><span class="s3">: </span><span class="s1">defaultExtractor</span><span class="s3">,</span>
+<span class="s3">}</span>
+
+<span class="s0">const </span><span class="s1">builtInTransformers </span><span class="s3">= {</span>
+  <span class="s1">DEFAULT</span><span class="s3">: (</span><span class="s1">content</span><span class="s3">) =&gt; </span><span class="s1">content</span><span class="s3">,</span>
+  <span class="s1">svelte</span><span class="s3">: (</span><span class="s1">content</span><span class="s3">) =&gt; </span><span class="s1">content</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s4">/(?:^|\s)class:/g</span><span class="s3">, </span><span class="s2">' '</span><span class="s3">),</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">getExtractor</span><span class="s3">(</span><span class="s1">context</span><span class="s3">, </span><span class="s1">fileExtension</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s1">extractors </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">content</span><span class="s3">.</span><span class="s1">extract</span>
+
+  <span class="s0">return </span><span class="s3">(</span>
+    <span class="s1">extractors</span><span class="s3">[</span><span class="s1">fileExtension</span><span class="s3">] ||</span>
+    <span class="s1">extractors</span><span class="s3">.</span><span class="s1">DEFAULT </span><span class="s3">||</span>
+    <span class="s1">builtInExtractors</span><span class="s3">[</span><span class="s1">fileExtension</span><span class="s3">] ||</span>
+    <span class="s1">builtInExtractors</span><span class="s3">.</span><span class="s1">DEFAULT</span><span class="s3">(</span><span class="s1">context</span><span class="s3">)</span>
+  <span class="s3">)</span>
+<span class="s3">}</span>
+
+<span class="s0">function </span><span class="s1">getTransformer</span><span class="s3">(</span><span class="s1">tailwindConfig</span><span class="s3">, </span><span class="s1">fileExtension</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s1">transformers </span><span class="s3">= </span><span class="s1">tailwindConfig</span><span class="s3">.</span><span class="s1">content</span><span class="s3">.</span><span class="s1">transform</span>
+
+  <span class="s0">return </span><span class="s3">(</span>
+    <span class="s1">transformers</span><span class="s3">[</span><span class="s1">fileExtension</span><span class="s3">] ||</span>
+    <span class="s1">transformers</span><span class="s3">.</span><span class="s1">DEFAULT </span><span class="s3">||</span>
+    <span class="s1">builtInTransformers</span><span class="s3">[</span><span class="s1">fileExtension</span><span class="s3">] ||</span>
+    <span class="s1">builtInTransformers</span><span class="s3">.</span><span class="s1">DEFAULT</span>
+  <span class="s3">)</span>
+<span class="s3">}</span>
+
+<span class="s0">let </span><span class="s1">extractorCache </span><span class="s3">= </span><span class="s0">new </span><span class="s1">WeakMap</span><span class="s3">()</span>
+
+<span class="s5">// Scans template contents for possible classes. This is a hot path on initial build but</span>
+<span class="s5">// not too important for subsequent builds. The faster the better though — if we can speed</span>
+<span class="s5">// up these regexes by 50% that could cut initial build time by like 20%.</span>
+<span class="s0">function </span><span class="s1">getClassCandidates</span><span class="s3">(</span><span class="s1">content</span><span class="s3">, </span><span class="s1">extractor</span><span class="s3">, </span><span class="s1">candidates</span><span class="s3">, </span><span class="s1">seen</span><span class="s3">) {</span>
+  <span class="s0">if </span><span class="s3">(!</span><span class="s1">extractorCache</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">extractor</span><span class="s3">)) {</span>
+    <span class="s1">extractorCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">extractor</span><span class="s3">, </span><span class="s0">new </span><span class="s1">LRU</span><span class="s3">({ </span><span class="s1">maxSize</span><span class="s3">: </span><span class="s6">25000 </span><span class="s3">}))</span>
+  <span class="s3">}</span>
+
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">line of content</span><span class="s3">.</span><span class="s1">split</span><span class="s3">(</span><span class="s2">'</span><span class="s0">\n</span><span class="s2">'</span><span class="s3">)) {</span>
+    <span class="s1">line </span><span class="s3">= </span><span class="s1">line</span><span class="s3">.</span><span class="s1">trim</span><span class="s3">()</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">seen</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">line</span><span class="s3">)) {</span>
+      <span class="s0">continue</span>
+    <span class="s3">}</span>
+    <span class="s1">seen</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">line</span><span class="s3">)</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">extractorCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">extractor</span><span class="s3">).</span><span class="s1">has</span><span class="s3">(</span><span class="s1">line</span><span class="s3">)) {</span>
+      <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">match of extractorCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">extractor</span><span class="s3">).</span><span class="s1">get</span><span class="s3">(</span><span class="s1">line</span><span class="s3">)) {</span>
+        <span class="s1">candidates</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">match</span><span class="s3">)</span>
+      <span class="s3">}</span>
+    <span class="s3">} </span><span class="s0">else </span><span class="s3">{</span>
+      <span class="s0">let </span><span class="s1">extractorMatches </span><span class="s3">= </span><span class="s1">extractor</span><span class="s3">(</span><span class="s1">line</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">((</span><span class="s1">s</span><span class="s3">) =&gt; </span><span class="s1">s </span><span class="s3">!== </span><span class="s2">'!*'</span><span class="s3">)</span>
+      <span class="s0">let </span><span class="s1">lineMatchesSet </span><span class="s3">= </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">extractorMatches</span><span class="s3">)</span>
+
+      <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">match of lineMatchesSet</span><span class="s3">) {</span>
+        <span class="s1">candidates</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">match</span><span class="s3">)</span>
+      <span class="s3">}</span>
+
+      <span class="s1">extractorCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">extractor</span><span class="s3">).</span><span class="s1">set</span><span class="s3">(</span><span class="s1">line</span><span class="s3">, </span><span class="s1">lineMatchesSet</span><span class="s3">)</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s7">/**</span>
+ <span class="s7">*</span>
+ <span class="s7">* </span><span class="s8">@param </span><span class="s7">{[import('./offsets.js').RuleOffset, import('postcss').Node][]} rules</span>
+ <span class="s7">* </span><span class="s8">@param </span><span class="s7">{*} context</span>
+ <span class="s7">*/</span>
+<span class="s0">function </span><span class="s1">buildStylesheet</span><span class="s3">(</span><span class="s1">rules</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) {</span>
+  <span class="s0">let </span><span class="s1">sortedRules </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">offsets</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span><span class="s1">rules</span><span class="s3">)</span>
+
+  <span class="s0">let </span><span class="s1">returnValue </span><span class="s3">= {</span>
+    <span class="s1">base</span><span class="s3">: </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">(),</span>
+    <span class="s1">defaults</span><span class="s3">: </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">(),</span>
+    <span class="s1">components</span><span class="s3">: </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">(),</span>
+    <span class="s1">utilities</span><span class="s3">: </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">(),</span>
+    <span class="s1">variants</span><span class="s3">: </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">(),</span>
+  <span class="s3">}</span>
+
+  <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s3">[</span><span class="s1">sort</span><span class="s3">, </span><span class="s1">rule</span><span class="s3">] </span><span class="s1">of sortedRules</span><span class="s3">) {</span>
+    <span class="s1">returnValue</span><span class="s3">[</span><span class="s1">sort</span><span class="s3">.</span><span class="s1">layer</span><span class="s3">].</span><span class="s1">add</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">)</span>
+  <span class="s3">}</span>
+
+  <span class="s0">return </span><span class="s1">returnValue</span>
+<span class="s3">}</span>
+
+<span class="s0">export default function </span><span class="s1">expandTailwindAtRules</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+  <span class="s0">return </span><span class="s1">async </span><span class="s3">(</span><span class="s1">root</span><span class="s3">) =&gt; {</span>
+    <span class="s0">let </span><span class="s1">layerNodes </span><span class="s3">= {</span>
+      <span class="s1">base</span><span class="s3">: </span><span class="s0">null</span><span class="s3">,</span>
+      <span class="s1">components</span><span class="s3">: </span><span class="s0">null</span><span class="s3">,</span>
+      <span class="s1">utilities</span><span class="s3">: </span><span class="s0">null</span><span class="s3">,</span>
+      <span class="s1">variants</span><span class="s3">: </span><span class="s0">null</span><span class="s3">,</span>
+    <span class="s3">}</span>
+
+    <span class="s1">root</span><span class="s3">.</span><span class="s1">walkAtRules</span><span class="s3">((</span><span class="s1">rule</span><span class="s3">) =&gt; {</span>
+      <span class="s5">// Make sure this file contains Tailwind directives. If not, we can save</span>
+      <span class="s5">// a lot of work and bail early. Also we don't have to register our touch</span>
+      <span class="s5">// file as a dependency since the output of this CSS does not depend on</span>
+      <span class="s5">// the source of any templates. Think Vue &lt;style&gt; blocks for example.</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">name </span><span class="s3">=== </span><span class="s2">'tailwind'</span><span class="s3">) {</span>
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">).</span><span class="s1">includes</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">params</span><span class="s3">)) {</span>
+          <span class="s1">layerNodes</span><span class="s3">[</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">params</span><span class="s3">] = </span><span class="s1">rule</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+    <span class="s3">})</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">Object</span><span class="s3">.</span><span class="s1">values</span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">).</span><span class="s1">every</span><span class="s3">((</span><span class="s1">n</span><span class="s3">) =&gt; </span><span class="s1">n </span><span class="s3">=== </span><span class="s0">null</span><span class="s3">)) {</span>
+      <span class="s0">return </span><span class="s1">root</span>
+    <span class="s3">}</span>
+
+    <span class="s5">// ---</span>
+
+    <span class="s5">// Find potential rules in changed files</span>
+    <span class="s0">let </span><span class="s1">candidates </span><span class="s3">= </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">...</span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">candidates </span><span class="s3">?? []), </span><span class="s1">sharedState</span><span class="s3">.</span><span class="s1">NOT_ON_DEMAND</span><span class="s3">])</span>
+    <span class="s0">let </span><span class="s1">seen </span><span class="s3">= </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">()</span>
+
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">'Reading changed files'</span><span class="s3">)</span>
+
+    <span class="s7">/** </span><span class="s8">@type </span><span class="s7">{[item: {file?: string, content?: string}, meta: {transformer: any, extractor: any}][]} */</span>
+    <span class="s0">let </span><span class="s1">regexParserContent </span><span class="s3">= []</span>
+
+    <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">item of context</span><span class="s3">.</span><span class="s1">changedContent</span><span class="s3">) {</span>
+      <span class="s0">let </span><span class="s1">transformer </span><span class="s3">= </span><span class="s1">getTransformer</span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">tailwindConfig</span><span class="s3">, </span><span class="s1">item</span><span class="s3">.</span><span class="s1">extension</span><span class="s3">)</span>
+      <span class="s0">let </span><span class="s1">extractor </span><span class="s3">= </span><span class="s1">getExtractor</span><span class="s3">(</span><span class="s1">context</span><span class="s3">, </span><span class="s1">item</span><span class="s3">.</span><span class="s1">extension</span><span class="s3">)</span>
+      <span class="s1">regexParserContent</span><span class="s3">.</span><span class="s1">push</span><span class="s3">([</span><span class="s1">item</span><span class="s3">, { </span><span class="s1">transformer</span><span class="s3">, </span><span class="s1">extractor </span><span class="s3">}])</span>
+    <span class="s3">}</span>
+
+    <span class="s0">const </span><span class="s1">BATCH_SIZE </span><span class="s3">= </span><span class="s6">500</span>
+
+    <span class="s0">for </span><span class="s3">(</span><span class="s0">let </span><span class="s1">i </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">regexParserContent</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i </span><span class="s3">+= </span><span class="s1">BATCH_SIZE</span><span class="s3">) {</span>
+      <span class="s0">let </span><span class="s1">batch </span><span class="s3">= </span><span class="s1">regexParserContent</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">i</span><span class="s3">, </span><span class="s1">i </span><span class="s3">+ </span><span class="s1">BATCH_SIZE</span><span class="s3">)</span>
+      <span class="s0">await </span><span class="s1">Promise</span><span class="s3">.</span><span class="s1">all</span><span class="s3">(</span>
+        <span class="s1">batch</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">async </span><span class="s3">([{ </span><span class="s1">file</span><span class="s3">, </span><span class="s1">content </span><span class="s3">}, { </span><span class="s1">transformer</span><span class="s3">, </span><span class="s1">extractor </span><span class="s3">}]) =&gt; {</span>
+          <span class="s1">content </span><span class="s3">= </span><span class="s1">file </span><span class="s3">? </span><span class="s0">await </span><span class="s1">fs</span><span class="s3">.</span><span class="s1">promises</span><span class="s3">.</span><span class="s1">readFile</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s2">'utf8'</span><span class="s3">) : </span><span class="s1">content</span>
+          <span class="s1">getClassCandidates</span><span class="s3">(</span><span class="s1">transformer</span><span class="s3">(</span><span class="s1">content</span><span class="s3">), </span><span class="s1">extractor</span><span class="s3">, </span><span class="s1">candidates</span><span class="s3">, </span><span class="s1">seen</span><span class="s3">)</span>
+        <span class="s3">})</span>
+      <span class="s3">)</span>
+    <span class="s3">}</span>
+
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">'Reading changed files'</span><span class="s3">)</span>
+
+    <span class="s5">// ---</span>
+
+    <span class="s5">// Generate the actual CSS</span>
+    <span class="s0">let </span><span class="s1">classCacheCount </span><span class="s3">= </span><span class="s1">context</span><span class="s3">.</span><span class="s1">classCache</span><span class="s3">.</span><span class="s1">size</span>
+
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">'Generate rules'</span><span class="s3">)</span>
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">'Sorting candidates'</span><span class="s3">)</span>
+    <span class="s0">let </span><span class="s1">sortedCandidates </span><span class="s3">= </span><span class="s0">new </span><span class="s1">Set</span><span class="s3">(</span>
+      <span class="s3">[</span><span class="s1">...candidates</span><span class="s3">].</span><span class="s1">sort</span><span class="s3">((</span><span class="s1">a</span><span class="s3">, </span><span class="s1">z</span><span class="s3">) =&gt; {</span>
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">=== </span><span class="s1">z</span><span class="s3">) </span><span class="s0">return </span><span class="s6">0</span>
+        <span class="s0">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">&lt; </span><span class="s1">z</span><span class="s3">) </span><span class="s0">return </span><span class="s3">-</span><span class="s6">1</span>
+        <span class="s0">return </span><span class="s6">1</span>
+      <span class="s3">})</span>
+    <span class="s3">)</span>
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">'Sorting candidates'</span><span class="s3">)</span>
+    <span class="s1">generateRules</span><span class="s3">(</span><span class="s1">sortedCandidates</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">'Generate rules'</span><span class="s3">)</span>
+
+    <span class="s5">// We only ever add to the classCache, so if it didn't grow, there is nothing new.</span>
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">'Build stylesheet'</span><span class="s3">)</span>
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">context</span><span class="s3">.</span><span class="s1">stylesheetCache </span><span class="s3">=== </span><span class="s0">null </span><span class="s3">|| </span><span class="s1">context</span><span class="s3">.</span><span class="s1">classCache</span><span class="s3">.</span><span class="s1">size </span><span class="s3">!== </span><span class="s1">classCacheCount</span><span class="s3">) {</span>
+      <span class="s1">context</span><span class="s3">.</span><span class="s1">stylesheetCache </span><span class="s3">= </span><span class="s1">buildStylesheet</span><span class="s3">([</span><span class="s1">...context</span><span class="s3">.</span><span class="s1">ruleCache</span><span class="s3">], </span><span class="s1">context</span><span class="s3">)</span>
+    <span class="s3">}</span>
+    <span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG </span><span class="s3">&amp;&amp; </span><span class="s1">console</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">'Build stylesheet'</span><span class="s3">)</span>
+
+    <span class="s0">let </span><span class="s3">{</span>
+      <span class="s1">defaults</span><span class="s3">: </span><span class="s1">defaultNodes</span><span class="s3">,</span>
+      <span class="s1">base</span><span class="s3">: </span><span class="s1">baseNodes</span><span class="s3">,</span>
+      <span class="s1">components</span><span class="s3">: </span><span class="s1">componentNodes</span><span class="s3">,</span>
+      <span class="s1">utilities</span><span class="s3">: </span><span class="s1">utilityNodes</span><span class="s3">,</span>
+      <span class="s1">variants</span><span class="s3">: </span><span class="s1">screenNodes</span><span class="s3">,</span>
+    <span class="s3">} = </span><span class="s1">context</span><span class="s3">.</span><span class="s1">stylesheetCache</span>
+
+    <span class="s5">// ---</span>
+
+    <span class="s5">// Replace any Tailwind directives with generated CSS</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">base</span><span class="s3">) {</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">base</span><span class="s3">.</span><span class="s1">before</span><span class="s3">(</span>
+        <span class="s1">cloneNodes</span><span class="s3">([</span><span class="s1">...defaultNodes</span><span class="s3">, </span><span class="s1">...baseNodes</span><span class="s3">], </span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">base</span><span class="s3">.</span><span class="s1">source</span><span class="s3">, {</span>
+          <span class="s1">layer</span><span class="s3">: </span><span class="s2">'base'</span><span class="s3">,</span>
+        <span class="s3">})</span>
+      <span class="s3">)</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">base</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">()</span>
+    <span class="s3">}</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">components</span><span class="s3">) {</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">components</span><span class="s3">.</span><span class="s1">before</span><span class="s3">(</span>
+        <span class="s1">cloneNodes</span><span class="s3">([</span><span class="s1">...componentNodes</span><span class="s3">], </span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">components</span><span class="s3">.</span><span class="s1">source</span><span class="s3">, {</span>
+          <span class="s1">layer</span><span class="s3">: </span><span class="s2">'components'</span><span class="s3">,</span>
+        <span class="s3">})</span>
+      <span class="s3">)</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">components</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">()</span>
+    <span class="s3">}</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">utilities</span><span class="s3">) {</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">utilities</span><span class="s3">.</span><span class="s1">before</span><span class="s3">(</span>
+        <span class="s1">cloneNodes</span><span class="s3">([</span><span class="s1">...utilityNodes</span><span class="s3">], </span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">utilities</span><span class="s3">.</span><span class="s1">source</span><span class="s3">, {</span>
+          <span class="s1">layer</span><span class="s3">: </span><span class="s2">'utilities'</span><span class="s3">,</span>
+        <span class="s3">})</span>
+      <span class="s3">)</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">utilities</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">()</span>
+    <span class="s3">}</span>
+
+    <span class="s5">// We do post-filtering to not alter the emitted order of the variants</span>
+    <span class="s0">const </span><span class="s1">variantNodes </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">screenNodes</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">((</span><span class="s1">node</span><span class="s3">) =&gt; {</span>
+      <span class="s0">const </span><span class="s1">parentLayer </span><span class="s3">= </span><span class="s1">node</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind</span><span class="s3">?.</span><span class="s1">parentLayer</span>
+
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">parentLayer </span><span class="s3">=== </span><span class="s2">'components'</span><span class="s3">) {</span>
+        <span class="s0">return </span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">components </span><span class="s3">!== </span><span class="s0">null</span>
+      <span class="s3">}</span>
+
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">parentLayer </span><span class="s3">=== </span><span class="s2">'utilities'</span><span class="s3">) {</span>
+        <span class="s0">return </span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">utilities </span><span class="s3">!== </span><span class="s0">null</span>
+      <span class="s3">}</span>
+
+      <span class="s0">return true</span>
+    <span class="s3">})</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">variants</span><span class="s3">) {</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">variants</span><span class="s3">.</span><span class="s1">before</span><span class="s3">(</span>
+        <span class="s1">cloneNodes</span><span class="s3">(</span><span class="s1">variantNodes</span><span class="s3">, </span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">variants</span><span class="s3">.</span><span class="s1">source</span><span class="s3">, {</span>
+          <span class="s1">layer</span><span class="s3">: </span><span class="s2">'variants'</span><span class="s3">,</span>
+        <span class="s3">})</span>
+      <span class="s3">)</span>
+      <span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">variants</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">()</span>
+    <span class="s3">} </span><span class="s0">else if </span><span class="s3">(</span><span class="s1">variantNodes</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s1">root</span><span class="s3">.</span><span class="s1">append</span><span class="s3">(</span>
+        <span class="s1">cloneNodes</span><span class="s3">(</span><span class="s1">variantNodes</span><span class="s3">, </span><span class="s1">root</span><span class="s3">.</span><span class="s1">source</span><span class="s3">, {</span>
+          <span class="s1">layer</span><span class="s3">: </span><span class="s2">'variants'</span><span class="s3">,</span>
+        <span class="s3">})</span>
+      <span class="s3">)</span>
+    <span class="s3">}</span>
+
+    <span class="s5">// TODO: Why is the root node having no source location for `end` possible?</span>
+    <span class="s1">root</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">end </span><span class="s3">= </span><span class="s1">root</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">end </span><span class="s3">?? </span><span class="s1">root</span><span class="s3">.</span><span class="s1">source</span><span class="s3">.</span><span class="s1">start</span>
+
+    <span class="s5">// If we've got a utility layer and no utilities are generated there's likely something wrong</span>
+    <span class="s0">const </span><span class="s1">hasUtilityVariants </span><span class="s3">= </span><span class="s1">variantNodes</span><span class="s3">.</span><span class="s1">some</span><span class="s3">(</span>
+      <span class="s3">(</span><span class="s1">node</span><span class="s3">) =&gt; </span><span class="s1">node</span><span class="s3">.</span><span class="s1">raws</span><span class="s3">.</span><span class="s1">tailwind</span><span class="s3">?.</span><span class="s1">parentLayer </span><span class="s3">=== </span><span class="s2">'utilities'</span>
+    <span class="s3">)</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">.</span><span class="s1">utilities </span><span class="s3">&amp;&amp; </span><span class="s1">utilityNodes</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s6">0 </span><span class="s3">&amp;&amp; !</span><span class="s1">hasUtilityVariants</span><span class="s3">) {</span>
+      <span class="s1">log</span><span class="s3">.</span><span class="s1">warn</span><span class="s3">(</span><span class="s2">'content-problems'</span><span class="s3">, [</span>
+        <span class="s2">'No utility classes were detected in your source files. If this is unexpected, double-check the `content` option in your Tailwind CSS configuration.'</span><span class="s3">,</span>
+        <span class="s2">'https://tailwindcss.com/docs/content-configuration'</span><span class="s3">,</span>
+      <span class="s3">])</span>
+    <span class="s3">}</span>
+
+    <span class="s5">// ---</span>
+
+    <span class="s0">if </span><span class="s3">(</span><span class="s1">env</span><span class="s3">.</span><span class="s1">DEBUG</span><span class="s3">) {</span>
+      <span class="s1">console</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">'Potential classes: '</span><span class="s3">, </span><span class="s1">candidates</span><span class="s3">.</span><span class="s1">size</span><span class="s3">)</span>
+      <span class="s1">console</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">'Active contexts: '</span><span class="s3">, </span><span class="s1">sharedState</span><span class="s3">.</span><span class="s1">contextSourcesMap</span><span class="s3">.</span><span class="s1">size</span><span class="s3">)</span>
+    <span class="s3">}</span>
+
+    <span class="s5">// Clear the cache for the changed files</span>
+    <span class="s1">context</span><span class="s3">.</span><span class="s1">changedContent </span><span class="s3">= []</span>
+
+    <span class="s5">// Cleanup any leftover @layer atrules</span>
+    <span class="s1">root</span><span class="s3">.</span><span class="s1">walkAtRules</span><span class="s3">(</span><span class="s2">'layer'</span><span class="s3">, (</span><span class="s1">rule</span><span class="s3">) =&gt; {</span>
+      <span class="s0">if </span><span class="s3">(</span><span class="s1">Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">layerNodes</span><span class="s3">).</span><span class="s1">includes</span><span class="s3">(</span><span class="s1">rule</span><span class="s3">.</span><span class="s1">params</span><span class="s3">)) {</span>
+        <span class="s1">rule</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">()</span>
+      <span class="s3">}</span>
+    <span class="s3">})</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+</pre>
+</body>
+</html>

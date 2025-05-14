@@ -1,0 +1,678 @@
+<html>
+<head>
+<title>nodefs-handler.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #7a7e85;}
+.s5 { color: #2aacb8;}
+.s6 { color: #5f826b; font-style: italic;}
+.s7 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+nodefs-handler.js</font>
+</center></td></tr></table>
+<pre><span class="s0">'use strict'</span><span class="s1">;</span>
+
+<span class="s3">const </span><span class="s2">fs </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">'fs'</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">sysPath </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">'path'</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">promisify </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">'util'</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">isBinaryPath </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">'is-binary-path'</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{</span>
+  <span class="s2">isWindows</span><span class="s1">,</span>
+  <span class="s2">isLinux</span><span class="s1">,</span>
+  <span class="s2">EMPTY_FN</span><span class="s1">,</span>
+  <span class="s2">EMPTY_STR</span><span class="s1">,</span>
+  <span class="s2">KEY_LISTENERS</span><span class="s1">,</span>
+  <span class="s2">KEY_ERR</span><span class="s1">,</span>
+  <span class="s2">KEY_RAW</span><span class="s1">,</span>
+  <span class="s2">HANDLER_KEYS</span><span class="s1">,</span>
+  <span class="s2">EV_CHANGE</span><span class="s1">,</span>
+  <span class="s2">EV_ADD</span><span class="s1">,</span>
+  <span class="s2">EV_ADD_DIR</span><span class="s1">,</span>
+  <span class="s2">EV_ERROR</span><span class="s1">,</span>
+  <span class="s2">STR_DATA</span><span class="s1">,</span>
+  <span class="s2">STR_END</span><span class="s1">,</span>
+  <span class="s2">BRACE_START</span><span class="s1">,</span>
+  <span class="s2">STAR</span>
+<span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">'./constants'</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s2">THROTTLE_MODE_WATCH </span><span class="s1">= </span><span class="s0">'watch'</span><span class="s1">;</span>
+
+<span class="s3">const </span><span class="s2">open </span><span class="s1">= </span><span class="s2">promisify</span><span class="s1">(</span><span class="s2">fs</span><span class="s1">.</span><span class="s2">open</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">stat </span><span class="s1">= </span><span class="s2">promisify</span><span class="s1">(</span><span class="s2">fs</span><span class="s1">.</span><span class="s2">stat</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">lstat </span><span class="s1">= </span><span class="s2">promisify</span><span class="s1">(</span><span class="s2">fs</span><span class="s1">.</span><span class="s2">lstat</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">close </span><span class="s1">= </span><span class="s2">promisify</span><span class="s1">(</span><span class="s2">fs</span><span class="s1">.</span><span class="s2">close</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">fsrealpath </span><span class="s1">= </span><span class="s2">promisify</span><span class="s1">(</span><span class="s2">fs</span><span class="s1">.</span><span class="s2">realpath</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s2">statMethods </span><span class="s1">= { </span><span class="s2">lstat</span><span class="s1">, </span><span class="s2">stat </span><span class="s1">};</span>
+
+<span class="s4">// TODO: emit errors properly. Example: EMFILE on Macos.</span>
+<span class="s3">const </span><span class="s2">foreach </span><span class="s1">= (</span><span class="s2">val</span><span class="s1">, </span><span class="s2">fn</span><span class="s1">) =&gt; {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">val </span><span class="s3">instanceof </span><span class="s2">Set</span><span class="s1">) {</span>
+    <span class="s2">val</span><span class="s1">.</span><span class="s2">forEach</span><span class="s1">(</span><span class="s2">fn</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s2">fn</span><span class="s1">(</span><span class="s2">val</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s3">const </span><span class="s2">addAndConvert </span><span class="s1">= (</span><span class="s2">main</span><span class="s1">, </span><span class="s2">prop</span><span class="s1">, </span><span class="s2">item</span><span class="s1">) =&gt; {</span>
+  <span class="s3">let </span><span class="s2">container </span><span class="s1">= </span><span class="s2">main</span><span class="s1">[</span><span class="s2">prop</span><span class="s1">];</span>
+  <span class="s3">if </span><span class="s1">(!(</span><span class="s2">container </span><span class="s3">instanceof </span><span class="s2">Set</span><span class="s1">)) {</span>
+    <span class="s2">main</span><span class="s1">[</span><span class="s2">prop</span><span class="s1">] = </span><span class="s2">container </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">([</span><span class="s2">container</span><span class="s1">]);</span>
+  <span class="s1">}</span>
+  <span class="s2">container</span><span class="s1">.</span><span class="s2">add</span><span class="s1">(</span><span class="s2">item</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s3">const </span><span class="s2">clearItem </span><span class="s1">= </span><span class="s2">cont </span><span class="s1">=&gt; </span><span class="s2">key </span><span class="s1">=&gt; {</span>
+  <span class="s3">const </span><span class="s2">set </span><span class="s1">= </span><span class="s2">cont</span><span class="s1">[</span><span class="s2">key</span><span class="s1">];</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">set </span><span class="s3">instanceof </span><span class="s2">Set</span><span class="s1">) {</span>
+    <span class="s2">set</span><span class="s1">.</span><span class="s2">clear</span><span class="s1">();</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">delete </span><span class="s2">cont</span><span class="s1">[</span><span class="s2">key</span><span class="s1">];</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s3">const </span><span class="s2">delFromSet </span><span class="s1">= (</span><span class="s2">main</span><span class="s1">, </span><span class="s2">prop</span><span class="s1">, </span><span class="s2">item</span><span class="s1">) =&gt; {</span>
+  <span class="s3">const </span><span class="s2">container </span><span class="s1">= </span><span class="s2">main</span><span class="s1">[</span><span class="s2">prop</span><span class="s1">];</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">container </span><span class="s3">instanceof </span><span class="s2">Set</span><span class="s1">) {</span>
+    <span class="s2">container</span><span class="s1">.</span><span class="s2">delete</span><span class="s1">(</span><span class="s2">item</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">container </span><span class="s1">=== </span><span class="s2">item</span><span class="s1">) {</span>
+    <span class="s3">delete </span><span class="s2">main</span><span class="s1">[</span><span class="s2">prop</span><span class="s1">];</span>
+  <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s3">const </span><span class="s2">isEmptySet </span><span class="s1">= (</span><span class="s2">val</span><span class="s1">) =&gt; </span><span class="s2">val </span><span class="s3">instanceof </span><span class="s2">Set </span><span class="s1">? </span><span class="s2">val</span><span class="s1">.</span><span class="s2">size </span><span class="s1">=== </span><span class="s5">0 </span><span class="s1">: !</span><span class="s2">val</span><span class="s1">;</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* </span><span class="s7">@typedef </span><span class="s6">{String} Path</span>
+ <span class="s6">*/</span>
+
+<span class="s4">// fs_watch helpers</span>
+
+<span class="s4">// object to hold per-process fs_watch instances</span>
+<span class="s4">// (may be shared across chokidar FSWatcher instances)</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* </span><span class="s7">@typedef </span><span class="s6">{Object} FsWatchContainer</span>
+ <span class="s6">* </span><span class="s7">@property </span><span class="s6">{Set} listeners</span>
+ <span class="s6">* </span><span class="s7">@property </span><span class="s6">{Set} errHandlers</span>
+ <span class="s6">* </span><span class="s7">@property </span><span class="s6">{Set} rawEmitters</span>
+ <span class="s6">* </span><span class="s7">@property </span><span class="s6">{fs.FSWatcher=} watcher</span>
+ <span class="s6">* </span><span class="s7">@property </span><span class="s6">{Boolean=} watcherUnusable</span>
+ <span class="s6">*/</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* </span><span class="s7">@type </span><span class="s6">{Map&lt;String,FsWatchContainer&gt;}</span>
+ <span class="s6">*/</span>
+<span class="s3">const </span><span class="s2">FsWatchInstances </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Map</span><span class="s1">();</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Instantiates the fs_watch interface</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} path to be watched</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} options to be passed to fs_watch</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Function} listener main event handler</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Function} errHandler emits info about errors</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Function} emitRaw emits raw event data</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{fs.FSWatcher} new fsevents instance</span>
+ <span class="s6">*/</span>
+<span class="s3">function </span><span class="s2">createFsWatchInstance</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">, </span><span class="s2">errHandler</span><span class="s1">, </span><span class="s2">emitRaw</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">handleEvent </span><span class="s1">= (</span><span class="s2">rawEvent</span><span class="s1">, </span><span class="s2">evPath</span><span class="s1">) =&gt; {</span>
+    <span class="s2">listener</span><span class="s1">(</span><span class="s2">path</span><span class="s1">);</span>
+    <span class="s2">emitRaw</span><span class="s1">(</span><span class="s2">rawEvent</span><span class="s1">, </span><span class="s2">evPath</span><span class="s1">, {</span><span class="s2">watchedPath</span><span class="s1">: </span><span class="s2">path</span><span class="s1">});</span>
+
+    <span class="s4">// emit based on events occurring for files from a directory's watcher in</span>
+    <span class="s4">// case the file's watcher misses it (and rely on throttling to de-dupe)</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">evPath </span><span class="s1">&amp;&amp; </span><span class="s2">path </span><span class="s1">!== </span><span class="s2">evPath</span><span class="s1">) {</span>
+      <span class="s2">fsWatchBroadcast</span><span class="s1">(</span>
+        <span class="s2">sysPath</span><span class="s1">.</span><span class="s2">resolve</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">evPath</span><span class="s1">), </span><span class="s2">KEY_LISTENERS</span><span class="s1">, </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">evPath</span><span class="s1">)</span>
+      <span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">};</span>
+  <span class="s3">try </span><span class="s1">{</span>
+    <span class="s3">return </span><span class="s2">fs</span><span class="s1">.</span><span class="s2">watch</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">handleEvent</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">error</span><span class="s1">) {</span>
+    <span class="s2">errHandler</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Helper for passing fs_watch event data to a collection of listeners</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Path} fullPath absolute path bound to fs_watch instance</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} type listener type</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{*=} val1 arguments to be passed to listeners</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{*=} val2</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{*=} val3</span>
+ <span class="s6">*/</span>
+<span class="s3">const </span><span class="s2">fsWatchBroadcast </span><span class="s1">= (</span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">type</span><span class="s1">, </span><span class="s2">val1</span><span class="s1">, </span><span class="s2">val2</span><span class="s1">, </span><span class="s2">val3</span><span class="s1">) =&gt; {</span>
+  <span class="s3">const </span><span class="s2">cont </span><span class="s1">= </span><span class="s2">FsWatchInstances</span><span class="s1">.</span><span class="s2">get</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">cont</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+  <span class="s2">foreach</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">[</span><span class="s2">type</span><span class="s1">], (</span><span class="s2">listener</span><span class="s1">) =&gt; {</span>
+    <span class="s2">listener</span><span class="s1">(</span><span class="s2">val1</span><span class="s1">, </span><span class="s2">val2</span><span class="s1">, </span><span class="s2">val3</span><span class="s1">);</span>
+  <span class="s1">});</span>
+<span class="s1">};</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Instantiates the fs_watch interface or binds listeners</span>
+ <span class="s6">* to an existing one covering the same file system entry</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} fullPath absolute path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} options to be passed to fs_watch</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} handlers container for event listener functions</span>
+ <span class="s6">*/</span>
+<span class="s3">const </span><span class="s2">setFsWatchListener </span><span class="s1">= (</span><span class="s2">path</span><span class="s1">, </span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">handlers</span><span class="s1">) =&gt; {</span>
+  <span class="s3">const </span><span class="s1">{</span><span class="s2">listener</span><span class="s1">, </span><span class="s2">errHandler</span><span class="s1">, </span><span class="s2">rawEmitter</span><span class="s1">} = </span><span class="s2">handlers</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">cont </span><span class="s1">= </span><span class="s2">FsWatchInstances</span><span class="s1">.</span><span class="s2">get</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">);</span>
+
+  <span class="s6">/** </span><span class="s7">@type </span><span class="s6">{fs.FSWatcher=} */</span>
+  <span class="s3">let </span><span class="s2">watcher</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">options</span><span class="s1">.</span><span class="s2">persistent</span><span class="s1">) {</span>
+    <span class="s2">watcher </span><span class="s1">= </span><span class="s2">createFsWatchInstance</span><span class="s1">(</span>
+      <span class="s2">path</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">, </span><span class="s2">errHandler</span><span class="s1">, </span><span class="s2">rawEmitter</span>
+    <span class="s1">);</span>
+    <span class="s3">return </span><span class="s2">watcher</span><span class="s1">.</span><span class="s2">close</span><span class="s1">.</span><span class="s2">bind</span><span class="s1">(</span><span class="s2">watcher</span><span class="s1">);</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">cont</span><span class="s1">) {</span>
+    <span class="s2">addAndConvert</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_LISTENERS</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">);</span>
+    <span class="s2">addAndConvert</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_ERR</span><span class="s1">, </span><span class="s2">errHandler</span><span class="s1">);</span>
+    <span class="s2">addAndConvert</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_RAW</span><span class="s1">, </span><span class="s2">rawEmitter</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s2">watcher </span><span class="s1">= </span><span class="s2">createFsWatchInstance</span><span class="s1">(</span>
+      <span class="s2">path</span><span class="s1">,</span>
+      <span class="s2">options</span><span class="s1">,</span>
+      <span class="s2">fsWatchBroadcast</span><span class="s1">.</span><span class="s2">bind</span><span class="s1">(</span><span class="s3">null</span><span class="s1">, </span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">KEY_LISTENERS</span><span class="s1">),</span>
+      <span class="s2">errHandler</span><span class="s1">, </span><span class="s4">// no need to use broadcast here</span>
+      <span class="s2">fsWatchBroadcast</span><span class="s1">.</span><span class="s2">bind</span><span class="s1">(</span><span class="s3">null</span><span class="s1">, </span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">KEY_RAW</span><span class="s1">)</span>
+    <span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">watcher</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s2">watcher</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s2">EV_ERROR</span><span class="s1">, </span><span class="s2">async </span><span class="s1">(</span><span class="s2">error</span><span class="s1">) =&gt; {</span>
+      <span class="s3">const </span><span class="s2">broadcastErr </span><span class="s1">= </span><span class="s2">fsWatchBroadcast</span><span class="s1">.</span><span class="s2">bind</span><span class="s1">(</span><span class="s3">null</span><span class="s1">, </span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">KEY_ERR</span><span class="s1">);</span>
+      <span class="s2">cont</span><span class="s1">.</span><span class="s2">watcherUnusable </span><span class="s1">= </span><span class="s3">true</span><span class="s1">; </span><span class="s4">// documented since Node 10.4.1</span>
+      <span class="s4">// Workaround for https://github.com/joyent/node/issues/4337</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">isWindows </span><span class="s1">&amp;&amp; </span><span class="s2">error</span><span class="s1">.</span><span class="s2">code </span><span class="s1">=== </span><span class="s0">'EPERM'</span><span class="s1">) {</span>
+        <span class="s3">try </span><span class="s1">{</span>
+          <span class="s3">const </span><span class="s2">fd </span><span class="s1">= </span><span class="s3">await </span><span class="s2">open</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s0">'r'</span><span class="s1">);</span>
+          <span class="s3">await </span><span class="s2">close</span><span class="s1">(</span><span class="s2">fd</span><span class="s1">);</span>
+          <span class="s2">broadcastErr</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">err</span><span class="s1">) {}</span>
+      <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s2">broadcastErr</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+      <span class="s1">}</span>
+    <span class="s1">});</span>
+    <span class="s2">cont </span><span class="s1">= {</span>
+      <span class="s2">listeners</span><span class="s1">: </span><span class="s2">listener</span><span class="s1">,</span>
+      <span class="s2">errHandlers</span><span class="s1">: </span><span class="s2">errHandler</span><span class="s1">,</span>
+      <span class="s2">rawEmitters</span><span class="s1">: </span><span class="s2">rawEmitter</span><span class="s1">,</span>
+      <span class="s2">watcher</span>
+    <span class="s1">};</span>
+    <span class="s2">FsWatchInstances</span><span class="s1">.</span><span class="s2">set</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">cont</span><span class="s1">);</span>
+  <span class="s1">}</span>
+  <span class="s4">// const index = cont.listeners.indexOf(listener);</span>
+
+  <span class="s4">// removes this instance's listeners and closes the underlying fs_watch</span>
+  <span class="s4">// instance if there are no more listeners left</span>
+  <span class="s3">return </span><span class="s1">() =&gt; {</span>
+    <span class="s2">delFromSet</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_LISTENERS</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">);</span>
+    <span class="s2">delFromSet</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_ERR</span><span class="s1">, </span><span class="s2">errHandler</span><span class="s1">);</span>
+    <span class="s2">delFromSet</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_RAW</span><span class="s1">, </span><span class="s2">rawEmitter</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isEmptySet</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">.</span><span class="s2">listeners</span><span class="s1">)) {</span>
+      <span class="s4">// Check to protect against issue gh-730.</span>
+      <span class="s4">// if (cont.watcherUnusable) {</span>
+      <span class="s2">cont</span><span class="s1">.</span><span class="s2">watcher</span><span class="s1">.</span><span class="s2">close</span><span class="s1">();</span>
+      <span class="s4">// }</span>
+      <span class="s2">FsWatchInstances</span><span class="s1">.</span><span class="s2">delete</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">);</span>
+      <span class="s2">HANDLER_KEYS</span><span class="s1">.</span><span class="s2">forEach</span><span class="s1">(</span><span class="s2">clearItem</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">));</span>
+      <span class="s2">cont</span><span class="s1">.</span><span class="s2">watcher </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+      <span class="s2">Object</span><span class="s1">.</span><span class="s2">freeze</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">};</span>
+<span class="s1">};</span>
+
+<span class="s4">// fs_watchFile helpers</span>
+
+<span class="s4">// object to hold per-process fs_watchFile instances</span>
+<span class="s4">// (may be shared across chokidar FSWatcher instances)</span>
+<span class="s3">const </span><span class="s2">FsWatchFileInstances </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Map</span><span class="s1">();</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Instantiates the fs_watchFile interface or binds listeners</span>
+ <span class="s6">* to an existing one covering the same file system entry</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} path to be watched</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} fullPath absolute path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} options options to be passed to fs_watchFile</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} handlers container for event listener functions</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{Function} closer</span>
+ <span class="s6">*/</span>
+<span class="s3">const </span><span class="s2">setFsWatchFileListener </span><span class="s1">= (</span><span class="s2">path</span><span class="s1">, </span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">handlers</span><span class="s1">) =&gt; {</span>
+  <span class="s3">const </span><span class="s1">{</span><span class="s2">listener</span><span class="s1">, </span><span class="s2">rawEmitter</span><span class="s1">} = </span><span class="s2">handlers</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">cont </span><span class="s1">= </span><span class="s2">FsWatchFileInstances</span><span class="s1">.</span><span class="s2">get</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">);</span>
+
+  <span class="s4">/* eslint-disable no-unused-vars, prefer-destructuring */</span>
+  <span class="s3">let </span><span class="s2">listeners </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">();</span>
+  <span class="s3">let </span><span class="s2">rawEmitters </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">();</span>
+
+  <span class="s3">const </span><span class="s2">copts </span><span class="s1">= </span><span class="s2">cont </span><span class="s1">&amp;&amp; </span><span class="s2">cont</span><span class="s1">.</span><span class="s2">options</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">copts </span><span class="s1">&amp;&amp; (</span><span class="s2">copts</span><span class="s1">.</span><span class="s2">persistent </span><span class="s1">&lt; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">persistent </span><span class="s1">|| </span><span class="s2">copts</span><span class="s1">.</span><span class="s2">interval </span><span class="s1">&gt; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">interval</span><span class="s1">)) {</span>
+    <span class="s4">// &quot;Upgrade&quot; the watcher to persistence or a quicker interval.</span>
+    <span class="s4">// This creates some unlikely edge case issues if the user mixes</span>
+    <span class="s4">// settings in a very weird way, but solving for those cases</span>
+    <span class="s4">// doesn't seem worthwhile for the added complexity.</span>
+    <span class="s2">listeners </span><span class="s1">= </span><span class="s2">cont</span><span class="s1">.</span><span class="s2">listeners</span><span class="s1">;</span>
+    <span class="s2">rawEmitters </span><span class="s1">= </span><span class="s2">cont</span><span class="s1">.</span><span class="s2">rawEmitters</span><span class="s1">;</span>
+    <span class="s2">fs</span><span class="s1">.</span><span class="s2">unwatchFile</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">);</span>
+    <span class="s2">cont </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s4">/* eslint-enable no-unused-vars, prefer-destructuring */</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">cont</span><span class="s1">) {</span>
+    <span class="s2">addAndConvert</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_LISTENERS</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">);</span>
+    <span class="s2">addAndConvert</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_RAW</span><span class="s1">, </span><span class="s2">rawEmitter</span><span class="s1">);</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s4">// TODO</span>
+    <span class="s4">// listeners.add(listener);</span>
+    <span class="s4">// rawEmitters.add(rawEmitter);</span>
+    <span class="s2">cont </span><span class="s1">= {</span>
+      <span class="s2">listeners</span><span class="s1">: </span><span class="s2">listener</span><span class="s1">,</span>
+      <span class="s2">rawEmitters</span><span class="s1">: </span><span class="s2">rawEmitter</span><span class="s1">,</span>
+      <span class="s2">options</span><span class="s1">,</span>
+      <span class="s2">watcher</span><span class="s1">: </span><span class="s2">fs</span><span class="s1">.</span><span class="s2">watchFile</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, (</span><span class="s2">curr</span><span class="s1">, </span><span class="s2">prev</span><span class="s1">) =&gt; {</span>
+        <span class="s2">foreach</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">.</span><span class="s2">rawEmitters</span><span class="s1">, (</span><span class="s2">rawEmitter</span><span class="s1">) =&gt; {</span>
+          <span class="s2">rawEmitter</span><span class="s1">(</span><span class="s2">EV_CHANGE</span><span class="s1">, </span><span class="s2">fullPath</span><span class="s1">, {</span><span class="s2">curr</span><span class="s1">, </span><span class="s2">prev</span><span class="s1">});</span>
+        <span class="s1">});</span>
+        <span class="s3">const </span><span class="s2">currmtime </span><span class="s1">= </span><span class="s2">curr</span><span class="s1">.</span><span class="s2">mtimeMs</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">curr</span><span class="s1">.</span><span class="s2">size </span><span class="s1">!== </span><span class="s2">prev</span><span class="s1">.</span><span class="s2">size </span><span class="s1">|| </span><span class="s2">currmtime </span><span class="s1">&gt; </span><span class="s2">prev</span><span class="s1">.</span><span class="s2">mtimeMs </span><span class="s1">|| </span><span class="s2">currmtime </span><span class="s1">=== </span><span class="s5">0</span><span class="s1">) {</span>
+          <span class="s2">foreach</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">.</span><span class="s2">listeners</span><span class="s1">, (</span><span class="s2">listener</span><span class="s1">) =&gt; </span><span class="s2">listener</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">curr</span><span class="s1">));</span>
+        <span class="s1">}</span>
+      <span class="s1">})</span>
+    <span class="s1">};</span>
+    <span class="s2">FsWatchFileInstances</span><span class="s1">.</span><span class="s2">set</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">, </span><span class="s2">cont</span><span class="s1">);</span>
+  <span class="s1">}</span>
+  <span class="s4">// const index = cont.listeners.indexOf(listener);</span>
+
+  <span class="s4">// Removes this instance's listeners and closes the underlying fs_watchFile</span>
+  <span class="s4">// instance if there are no more listeners left.</span>
+  <span class="s3">return </span><span class="s1">() =&gt; {</span>
+    <span class="s2">delFromSet</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_LISTENERS</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">);</span>
+    <span class="s2">delFromSet</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">, </span><span class="s2">KEY_RAW</span><span class="s1">, </span><span class="s2">rawEmitter</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isEmptySet</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">.</span><span class="s2">listeners</span><span class="s1">)) {</span>
+      <span class="s2">FsWatchFileInstances</span><span class="s1">.</span><span class="s2">delete</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">);</span>
+      <span class="s2">fs</span><span class="s1">.</span><span class="s2">unwatchFile</span><span class="s1">(</span><span class="s2">fullPath</span><span class="s1">);</span>
+      <span class="s2">cont</span><span class="s1">.</span><span class="s2">options </span><span class="s1">= </span><span class="s2">cont</span><span class="s1">.</span><span class="s2">watcher </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+      <span class="s2">Object</span><span class="s1">.</span><span class="s2">freeze</span><span class="s1">(</span><span class="s2">cont</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">};</span>
+<span class="s1">};</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* </span><span class="s7">@mixin</span>
+ <span class="s6">*/</span>
+<span class="s3">class </span><span class="s2">NodeFsHandler </span><span class="s1">{</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{import(&quot;../index&quot;).FSWatcher} fsW</span>
+ <span class="s6">*/</span>
+<span class="s2">constructor</span><span class="s1">(</span><span class="s2">fsW</span><span class="s1">) {</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw </span><span class="s1">= </span><span class="s2">fsW</span><span class="s1">;</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">_boundHandleError </span><span class="s1">= (</span><span class="s2">error</span><span class="s1">) =&gt; </span><span class="s2">fsW</span><span class="s1">.</span><span class="s2">_handleError</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Watch file for changes with fs_watchFile or fs_watch.</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} path to file or dir</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Function} listener on fs change</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{Function} closer for the watcher instance</span>
+ <span class="s6">*/</span>
+<span class="s2">_watchWithNodeFs</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">opts </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">options</span><span class="s1">;</span>
+  <span class="s3">const </span><span class="s2">directory </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">dirname</span><span class="s1">(</span><span class="s2">path</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">basename </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">basename</span><span class="s1">(</span><span class="s2">path</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">parent </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchedDir</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">);</span>
+  <span class="s2">parent</span><span class="s1">.</span><span class="s2">add</span><span class="s1">(</span><span class="s2">basename</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">absolutePath </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">resolve</span><span class="s1">(</span><span class="s2">path</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">options </span><span class="s1">= {</span><span class="s2">persistent</span><span class="s1">: </span><span class="s2">opts</span><span class="s1">.</span><span class="s2">persistent</span><span class="s1">};</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">listener</span><span class="s1">) </span><span class="s2">listener </span><span class="s1">= </span><span class="s2">EMPTY_FN</span><span class="s1">;</span>
+
+  <span class="s3">let </span><span class="s2">closer</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">opts</span><span class="s1">.</span><span class="s2">usePolling</span><span class="s1">) {</span>
+    <span class="s2">options</span><span class="s1">.</span><span class="s2">interval </span><span class="s1">= </span><span class="s2">opts</span><span class="s1">.</span><span class="s2">enableBinaryInterval </span><span class="s1">&amp;&amp; </span><span class="s2">isBinaryPath</span><span class="s1">(</span><span class="s2">basename</span><span class="s1">) ?</span>
+      <span class="s2">opts</span><span class="s1">.</span><span class="s2">binaryInterval </span><span class="s1">: </span><span class="s2">opts</span><span class="s1">.</span><span class="s2">interval</span><span class="s1">;</span>
+    <span class="s2">closer </span><span class="s1">= </span><span class="s2">setFsWatchFileListener</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">absolutePath</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, {</span>
+      <span class="s2">listener</span><span class="s1">,</span>
+      <span class="s2">rawEmitter</span><span class="s1">: </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emitRaw</span>
+    <span class="s1">});</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s2">closer </span><span class="s1">= </span><span class="s2">setFsWatchListener</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">absolutePath</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, {</span>
+      <span class="s2">listener</span><span class="s1">,</span>
+      <span class="s2">errHandler</span><span class="s1">: </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_boundHandleError</span><span class="s1">,</span>
+      <span class="s2">rawEmitter</span><span class="s1">: </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emitRaw</span>
+    <span class="s1">});</span>
+  <span class="s1">}</span>
+  <span class="s3">return </span><span class="s2">closer</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Watch a file and emit add event if warranted.</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Path} file Path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{fs.Stats} stats result of fs_stat</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Boolean} initialAdd was the file added at watch instantiation?</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{Function} closer for the watcher instance</span>
+ <span class="s6">*/</span>
+<span class="s2">_handleFile</span><span class="s1">(</span><span class="s2">file</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) {</span>
+    <span class="s3">return</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">const </span><span class="s2">dirname </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">dirname</span><span class="s1">(</span><span class="s2">file</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">basename </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">basename</span><span class="s1">(</span><span class="s2">file</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">parent </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchedDir</span><span class="s1">(</span><span class="s2">dirname</span><span class="s1">);</span>
+  <span class="s4">// stats is always present</span>
+  <span class="s3">let </span><span class="s2">prevStats </span><span class="s1">= </span><span class="s2">stats</span><span class="s1">;</span>
+
+  <span class="s4">// if the file is already being watched, do nothing</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">parent</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">basename</span><span class="s1">)) </span><span class="s3">return</span><span class="s1">;</span>
+
+  <span class="s3">const </span><span class="s2">listener </span><span class="s1">= </span><span class="s2">async </span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">newStats</span><span class="s1">) =&gt; {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_throttle</span><span class="s1">(</span><span class="s2">THROTTLE_MODE_WATCH</span><span class="s1">, </span><span class="s2">file</span><span class="s1">, </span><span class="s5">5</span><span class="s1">)) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">newStats </span><span class="s1">|| </span><span class="s2">newStats</span><span class="s1">.</span><span class="s2">mtimeMs </span><span class="s1">=== </span><span class="s5">0</span><span class="s1">) {</span>
+      <span class="s3">try </span><span class="s1">{</span>
+        <span class="s3">const </span><span class="s2">newStats </span><span class="s1">= </span><span class="s3">await </span><span class="s2">stat</span><span class="s1">(</span><span class="s2">file</span><span class="s1">);</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+        <span class="s4">// Check that change event was not fired because of changed only accessTime.</span>
+        <span class="s3">const </span><span class="s2">at </span><span class="s1">= </span><span class="s2">newStats</span><span class="s1">.</span><span class="s2">atimeMs</span><span class="s1">;</span>
+        <span class="s3">const </span><span class="s2">mt </span><span class="s1">= </span><span class="s2">newStats</span><span class="s1">.</span><span class="s2">mtimeMs</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(!</span><span class="s2">at </span><span class="s1">|| </span><span class="s2">at </span><span class="s1">&lt;= </span><span class="s2">mt </span><span class="s1">|| </span><span class="s2">mt </span><span class="s1">!== </span><span class="s2">prevStats</span><span class="s1">.</span><span class="s2">mtimeMs</span><span class="s1">) {</span>
+          <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emit</span><span class="s1">(</span><span class="s2">EV_CHANGE</span><span class="s1">, </span><span class="s2">file</span><span class="s1">, </span><span class="s2">newStats</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">isLinux </span><span class="s1">&amp;&amp; </span><span class="s2">prevStats</span><span class="s1">.</span><span class="s2">ino </span><span class="s1">!== </span><span class="s2">newStats</span><span class="s1">.</span><span class="s2">ino</span><span class="s1">) {</span>
+          <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_closeFile</span><span class="s1">(</span><span class="s2">path</span><span class="s1">)</span>
+          <span class="s2">prevStats </span><span class="s1">= </span><span class="s2">newStats</span><span class="s1">;</span>
+          <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_addPathCloser</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_watchWithNodeFs</span><span class="s1">(</span><span class="s2">file</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">));</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+          <span class="s2">prevStats </span><span class="s1">= </span><span class="s2">newStats</span><span class="s1">;</span>
+        <span class="s1">}</span>
+      <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">error</span><span class="s1">) {</span>
+        <span class="s4">// Fix issues where mtime is null but file is still present</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_remove</span><span class="s1">(</span><span class="s2">dirname</span><span class="s1">, </span><span class="s2">basename</span><span class="s1">);</span>
+      <span class="s1">}</span>
+      <span class="s4">// add is about to be emitted if file not already tracked in parent</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">parent</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">basename</span><span class="s1">)) {</span>
+      <span class="s4">// Check that change event was not fired because of changed only accessTime.</span>
+      <span class="s3">const </span><span class="s2">at </span><span class="s1">= </span><span class="s2">newStats</span><span class="s1">.</span><span class="s2">atimeMs</span><span class="s1">;</span>
+      <span class="s3">const </span><span class="s2">mt </span><span class="s1">= </span><span class="s2">newStats</span><span class="s1">.</span><span class="s2">mtimeMs</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(!</span><span class="s2">at </span><span class="s1">|| </span><span class="s2">at </span><span class="s1">&lt;= </span><span class="s2">mt </span><span class="s1">|| </span><span class="s2">mt </span><span class="s1">!== </span><span class="s2">prevStats</span><span class="s1">.</span><span class="s2">mtimeMs</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emit</span><span class="s1">(</span><span class="s2">EV_CHANGE</span><span class="s1">, </span><span class="s2">file</span><span class="s1">, </span><span class="s2">newStats</span><span class="s1">);</span>
+      <span class="s1">}</span>
+      <span class="s2">prevStats </span><span class="s1">= </span><span class="s2">newStats</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+  <span class="s4">// kick off the watcher</span>
+  <span class="s3">const </span><span class="s2">closer </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_watchWithNodeFs</span><span class="s1">(</span><span class="s2">file</span><span class="s1">, </span><span class="s2">listener</span><span class="s1">);</span>
+
+  <span class="s4">// emit an add event if we're supposed to</span>
+  <span class="s3">if </span><span class="s1">(!(</span><span class="s2">initialAdd </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">options</span><span class="s1">.</span><span class="s2">ignoreInitial</span><span class="s1">) &amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_isntIgnored</span><span class="s1">(</span><span class="s2">file</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_throttle</span><span class="s1">(</span><span class="s2">EV_ADD</span><span class="s1">, </span><span class="s2">file</span><span class="s1">, </span><span class="s5">0</span><span class="s1">)) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emit</span><span class="s1">(</span><span class="s2">EV_ADD</span><span class="s1">, </span><span class="s2">file</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">closer</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Handle symlinks encountered while reading a dir.</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} entry returned by readdirp</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} directory path of dir being read</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} path of this item</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} item basename of this item</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{Promise&lt;Boolean&gt;} true if no more processing is needed for this entry.</span>
+ <span class="s6">*/</span>
+<span class="s2">async _handleSymlink</span><span class="s1">(</span><span class="s2">entry</span><span class="s1">, </span><span class="s2">directory</span><span class="s1">, </span><span class="s2">path</span><span class="s1">, </span><span class="s2">item</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) {</span>
+    <span class="s3">return</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">const </span><span class="s2">full </span><span class="s1">= </span><span class="s2">entry</span><span class="s1">.</span><span class="s2">fullPath</span><span class="s1">;</span>
+  <span class="s3">const </span><span class="s2">dir </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchedDir</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">options</span><span class="s1">.</span><span class="s2">followSymlinks</span><span class="s1">) {</span>
+    <span class="s4">// watch symlink directly (don't follow) and detect changes</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_incrReadyCount</span><span class="s1">();</span>
+
+    <span class="s3">let </span><span class="s2">linkPath</span><span class="s1">;</span>
+    <span class="s3">try </span><span class="s1">{</span>
+      <span class="s2">linkPath </span><span class="s1">= </span><span class="s3">await </span><span class="s2">fsrealpath</span><span class="s1">(</span><span class="s2">path</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emitReady</span><span class="s1">();</span>
+      <span class="s3">return true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">dir</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">item</span><span class="s1">)) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">get</span><span class="s1">(</span><span class="s2">full</span><span class="s1">) !== </span><span class="s2">linkPath</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">set</span><span class="s1">(</span><span class="s2">full</span><span class="s1">, </span><span class="s2">linkPath</span><span class="s1">);</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emit</span><span class="s1">(</span><span class="s2">EV_CHANGE</span><span class="s1">, </span><span class="s2">path</span><span class="s1">, </span><span class="s2">entry</span><span class="s1">.</span><span class="s2">stats</span><span class="s1">);</span>
+      <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+      <span class="s2">dir</span><span class="s1">.</span><span class="s2">add</span><span class="s1">(</span><span class="s2">item</span><span class="s1">);</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">set</span><span class="s1">(</span><span class="s2">full</span><span class="s1">, </span><span class="s2">linkPath</span><span class="s1">);</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emit</span><span class="s1">(</span><span class="s2">EV_ADD</span><span class="s1">, </span><span class="s2">path</span><span class="s1">, </span><span class="s2">entry</span><span class="s1">.</span><span class="s2">stats</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emitReady</span><span class="s1">();</span>
+    <span class="s3">return true</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s4">// don't follow the same symlink more than once</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">full</span><span class="s1">)) {</span>
+    <span class="s3">return true</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">set</span><span class="s1">(</span><span class="s2">full</span><span class="s1">, </span><span class="s3">true</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s2">_handleRead</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">target</span><span class="s1">, </span><span class="s2">dir</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">throttler</span><span class="s1">) {</span>
+  <span class="s4">// Normalize the directory name on Windows</span>
+  <span class="s2">directory </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">, </span><span class="s2">EMPTY_STR</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">hasGlob</span><span class="s1">) {</span>
+    <span class="s2">throttler </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_throttle</span><span class="s1">(</span><span class="s0">'readdir'</span><span class="s1">, </span><span class="s2">directory</span><span class="s1">, </span><span class="s5">1000</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">throttler</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">previous </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchedDir</span><span class="s1">(</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">path</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">current </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">();</span>
+
+  <span class="s3">let </span><span class="s2">stream </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_readdirp</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">, {</span>
+    <span class="s2">fileFilter</span><span class="s1">: </span><span class="s2">entry </span><span class="s1">=&gt; </span><span class="s2">wh</span><span class="s1">.</span><span class="s2">filterPath</span><span class="s1">(</span><span class="s2">entry</span><span class="s1">),</span>
+    <span class="s2">directoryFilter</span><span class="s1">: </span><span class="s2">entry </span><span class="s1">=&gt; </span><span class="s2">wh</span><span class="s1">.</span><span class="s2">filterDir</span><span class="s1">(</span><span class="s2">entry</span><span class="s1">),</span>
+    <span class="s2">depth</span><span class="s1">: </span><span class="s5">0</span>
+  <span class="s1">}).</span><span class="s2">on</span><span class="s1">(</span><span class="s2">STR_DATA</span><span class="s1">, </span><span class="s2">async </span><span class="s1">(</span><span class="s2">entry</span><span class="s1">) =&gt; {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) {</span>
+      <span class="s2">stream </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+      <span class="s3">return</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">const </span><span class="s2">item </span><span class="s1">= </span><span class="s2">entry</span><span class="s1">.</span><span class="s2">path</span><span class="s1">;</span>
+    <span class="s3">let </span><span class="s2">path </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">, </span><span class="s2">item</span><span class="s1">);</span>
+    <span class="s2">current</span><span class="s1">.</span><span class="s2">add</span><span class="s1">(</span><span class="s2">item</span><span class="s1">);</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">entry</span><span class="s1">.</span><span class="s2">stats</span><span class="s1">.</span><span class="s2">isSymbolicLink</span><span class="s1">() &amp;&amp; </span><span class="s3">await this</span><span class="s1">.</span><span class="s2">_handleSymlink</span><span class="s1">(</span><span class="s2">entry</span><span class="s1">, </span><span class="s2">directory</span><span class="s1">, </span><span class="s2">path</span><span class="s1">, </span><span class="s2">item</span><span class="s1">)) {</span>
+      <span class="s3">return</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) {</span>
+      <span class="s2">stream </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+      <span class="s3">return</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s4">// Files that present in current directory snapshot</span>
+    <span class="s4">// but absent in previous are added to watch list and</span>
+    <span class="s4">// emit `add` event.</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">item </span><span class="s1">=== </span><span class="s2">target </span><span class="s1">|| !</span><span class="s2">target </span><span class="s1">&amp;&amp; !</span><span class="s2">previous</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">item</span><span class="s1">)) {</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_incrReadyCount</span><span class="s1">();</span>
+
+      <span class="s4">// ensure relativeness of path is preserved in case of watcher reuse</span>
+      <span class="s2">path </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">, </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">relative</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">, </span><span class="s2">path</span><span class="s1">));</span>
+
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">_addToNodeFs</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">depth </span><span class="s1">+ </span><span class="s5">1</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">}).</span><span class="s2">on</span><span class="s1">(</span><span class="s2">EV_ERROR</span><span class="s1">, </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_boundHandleError</span><span class="s1">);</span>
+
+  <span class="s3">return new </span><span class="s2">Promise</span><span class="s1">(</span><span class="s2">resolve </span><span class="s1">=&gt;</span>
+    <span class="s2">stream</span><span class="s1">.</span><span class="s2">once</span><span class="s1">(</span><span class="s2">STR_END</span><span class="s1">, () =&gt; {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) {</span>
+        <span class="s2">stream </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+        <span class="s3">return</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s3">const </span><span class="s2">wasThrottled </span><span class="s1">= </span><span class="s2">throttler </span><span class="s1">? </span><span class="s2">throttler</span><span class="s1">.</span><span class="s2">clear</span><span class="s1">() : </span><span class="s3">false</span><span class="s1">;</span>
+
+      <span class="s2">resolve</span><span class="s1">();</span>
+
+      <span class="s4">// Files that absent in current directory snapshot</span>
+      <span class="s4">// but present in previous emit `remove` event</span>
+      <span class="s4">// and are removed from @watched[directory].</span>
+      <span class="s2">previous</span><span class="s1">.</span><span class="s2">getChildren</span><span class="s1">().</span><span class="s2">filter</span><span class="s1">((</span><span class="s2">item</span><span class="s1">) =&gt; {</span>
+        <span class="s3">return </span><span class="s2">item </span><span class="s1">!== </span><span class="s2">directory </span><span class="s1">&amp;&amp;</span>
+          <span class="s1">!</span><span class="s2">current</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">item</span><span class="s1">) &amp;&amp;</span>
+          <span class="s4">// in case of intersecting globs;</span>
+          <span class="s4">// a path may have been filtered out of this readdir, but</span>
+          <span class="s4">// shouldn't be removed because it matches a different glob</span>
+          <span class="s1">(!</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">hasGlob </span><span class="s1">|| </span><span class="s2">wh</span><span class="s1">.</span><span class="s2">filterPath</span><span class="s1">({</span>
+            <span class="s2">fullPath</span><span class="s1">: </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">resolve</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">, </span><span class="s2">item</span><span class="s1">)</span>
+          <span class="s1">}));</span>
+      <span class="s1">}).</span><span class="s2">forEach</span><span class="s1">((</span><span class="s2">item</span><span class="s1">) =&gt; {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_remove</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">, </span><span class="s2">item</span><span class="s1">);</span>
+      <span class="s1">});</span>
+
+      <span class="s2">stream </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+
+      <span class="s4">// one more time for any missed in case changes came in extremely quickly</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">wasThrottled</span><span class="s1">) </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_handleRead</span><span class="s1">(</span><span class="s2">directory</span><span class="s1">, </span><span class="s3">false</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">target</span><span class="s1">, </span><span class="s2">dir</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">throttler</span><span class="s1">);</span>
+    <span class="s1">})</span>
+  <span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Read directory to add / remove files from `@watched` list and re-read it on change.</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} dir fs path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{fs.Stats} stats</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Boolean} initialAdd</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Number} depth relative to user-supplied path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} target child path targeted for watch</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} wh Common watch helpers for this path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} realpath</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{Promise&lt;Function&gt;} closer for the watcher instance.</span>
+ <span class="s6">*/</span>
+<span class="s2">async _handleDir</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">target</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">realpath</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">parentDir </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchedDir</span><span class="s1">(</span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">dirname</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">));</span>
+  <span class="s3">const </span><span class="s2">tracked </span><span class="s1">= </span><span class="s2">parentDir</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">basename</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">));</span>
+  <span class="s3">if </span><span class="s1">(!(</span><span class="s2">initialAdd </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">options</span><span class="s1">.</span><span class="s2">ignoreInitial</span><span class="s1">) &amp;&amp; !</span><span class="s2">target </span><span class="s1">&amp;&amp; !</span><span class="s2">tracked</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">hasGlob </span><span class="s1">|| </span><span class="s2">wh</span><span class="s1">.</span><span class="s2">globFilter</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">)) </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emit</span><span class="s1">(</span><span class="s2">EV_ADD_DIR</span><span class="s1">, </span><span class="s2">dir</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s4">// ensure dir is tracked (harmless if redundant)</span>
+  <span class="s2">parentDir</span><span class="s1">.</span><span class="s2">add</span><span class="s1">(</span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">basename</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">));</span>
+  <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchedDir</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">);</span>
+  <span class="s3">let </span><span class="s2">throttler</span><span class="s1">;</span>
+  <span class="s3">let </span><span class="s2">closer</span><span class="s1">;</span>
+
+  <span class="s3">const </span><span class="s2">oDepth </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">options</span><span class="s1">.</span><span class="s2">depth</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">((</span><span class="s2">oDepth </span><span class="s1">== </span><span class="s3">null </span><span class="s1">|| </span><span class="s2">depth </span><span class="s1">&lt;= </span><span class="s2">oDepth</span><span class="s1">) &amp;&amp; !</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">realpath</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">target</span><span class="s1">) {</span>
+      <span class="s3">await this</span><span class="s1">.</span><span class="s2">_handleRead</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">target</span><span class="s1">, </span><span class="s2">dir</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">throttler</span><span class="s1">);</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">closer </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_watchWithNodeFs</span><span class="s1">(</span><span class="s2">dir</span><span class="s1">, (</span><span class="s2">dirPath</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">) =&gt; {</span>
+      <span class="s4">// if current directory is removed, do nothing</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">stats </span><span class="s1">&amp;&amp; </span><span class="s2">stats</span><span class="s1">.</span><span class="s2">mtimeMs </span><span class="s1">=== </span><span class="s5">0</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">_handleRead</span><span class="s1">(</span><span class="s2">dirPath</span><span class="s1">, </span><span class="s3">false</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">target</span><span class="s1">, </span><span class="s2">dir</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">throttler</span><span class="s1">);</span>
+    <span class="s1">});</span>
+  <span class="s1">}</span>
+  <span class="s3">return </span><span class="s2">closer</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Handle added file, directory, or glob pattern.</span>
+ <span class="s6">* Delegates call to _handleFile / _handleDir after checks.</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String} path to file or ir</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Boolean} initialAdd was the file added at watch instantiation?</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Object} priorWh depth relative to user-supplied path</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Number} depth Child path actually targeted for watch</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{String=} target Child path actually targeted for watch</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{Promise}</span>
+ <span class="s6">*/</span>
+<span class="s2">async _addToNodeFs</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">, </span><span class="s2">priorWh</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">target</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">ready </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emitReady</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_isIgnored</span><span class="s1">(</span><span class="s2">path</span><span class="s1">) || </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) {</span>
+    <span class="s2">ready</span><span class="s1">();</span>
+    <span class="s3">return false</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">wh </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchHelpers</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">hasGlob </span><span class="s1">&amp;&amp; </span><span class="s2">priorWh</span><span class="s1">) {</span>
+    <span class="s2">wh</span><span class="s1">.</span><span class="s2">hasGlob </span><span class="s1">= </span><span class="s2">priorWh</span><span class="s1">.</span><span class="s2">hasGlob</span><span class="s1">;</span>
+    <span class="s2">wh</span><span class="s1">.</span><span class="s2">globFilter </span><span class="s1">= </span><span class="s2">priorWh</span><span class="s1">.</span><span class="s2">globFilter</span><span class="s1">;</span>
+    <span class="s2">wh</span><span class="s1">.</span><span class="s2">filterPath </span><span class="s1">= </span><span class="s2">entry </span><span class="s1">=&gt; </span><span class="s2">priorWh</span><span class="s1">.</span><span class="s2">filterPath</span><span class="s1">(</span><span class="s2">entry</span><span class="s1">);</span>
+    <span class="s2">wh</span><span class="s1">.</span><span class="s2">filterDir </span><span class="s1">= </span><span class="s2">entry </span><span class="s1">=&gt; </span><span class="s2">priorWh</span><span class="s1">.</span><span class="s2">filterDir</span><span class="s1">(</span><span class="s2">entry</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s4">// evaluate what is at the path we're being asked to watch</span>
+  <span class="s3">try </span><span class="s1">{</span>
+    <span class="s3">const </span><span class="s2">stats </span><span class="s1">= </span><span class="s3">await </span><span class="s2">statMethods</span><span class="s1">[</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">statMethod</span><span class="s1">](</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">watchPath</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_isIgnored</span><span class="s1">(</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">watchPath</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">)) {</span>
+      <span class="s2">ready</span><span class="s1">();</span>
+      <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">const </span><span class="s2">follow </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">options</span><span class="s1">.</span><span class="s2">followSymlinks </span><span class="s1">&amp;&amp; !</span><span class="s2">path</span><span class="s1">.</span><span class="s2">includes</span><span class="s1">(</span><span class="s2">STAR</span><span class="s1">) &amp;&amp; !</span><span class="s2">path</span><span class="s1">.</span><span class="s2">includes</span><span class="s1">(</span><span class="s2">BRACE_START</span><span class="s1">);</span>
+    <span class="s3">let </span><span class="s2">closer</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">stats</span><span class="s1">.</span><span class="s2">isDirectory</span><span class="s1">()) {</span>
+      <span class="s3">const </span><span class="s2">absPath </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">resolve</span><span class="s1">(</span><span class="s2">path</span><span class="s1">);</span>
+      <span class="s3">const </span><span class="s2">targetPath </span><span class="s1">= </span><span class="s2">follow </span><span class="s1">? </span><span class="s3">await </span><span class="s2">fsrealpath</span><span class="s1">(</span><span class="s2">path</span><span class="s1">) : </span><span class="s2">path</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+      <span class="s2">closer </span><span class="s1">= </span><span class="s3">await this</span><span class="s1">.</span><span class="s2">_handleDir</span><span class="s1">(</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">watchPath</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">target</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">targetPath</span><span class="s1">);</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+      <span class="s4">// preserve this symlink's target path</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">absPath </span><span class="s1">!== </span><span class="s2">targetPath </span><span class="s1">&amp;&amp; </span><span class="s2">targetPath </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">set</span><span class="s1">(</span><span class="s2">absPath</span><span class="s1">, </span><span class="s2">targetPath</span><span class="s1">);</span>
+      <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">stats</span><span class="s1">.</span><span class="s2">isSymbolicLink</span><span class="s1">()) {</span>
+      <span class="s3">const </span><span class="s2">targetPath </span><span class="s1">= </span><span class="s2">follow </span><span class="s1">? </span><span class="s3">await </span><span class="s2">fsrealpath</span><span class="s1">(</span><span class="s2">path</span><span class="s1">) : </span><span class="s2">path</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+      <span class="s3">const </span><span class="s2">parent </span><span class="s1">= </span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">dirname</span><span class="s1">(</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">watchPath</span><span class="s1">);</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_getWatchedDir</span><span class="s1">(</span><span class="s2">parent</span><span class="s1">).</span><span class="s2">add</span><span class="s1">(</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">watchPath</span><span class="s1">);</span>
+      <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_emit</span><span class="s1">(</span><span class="s2">EV_ADD</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">.</span><span class="s2">watchPath</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">);</span>
+      <span class="s2">closer </span><span class="s1">= </span><span class="s3">await this</span><span class="s1">.</span><span class="s2">_handleDir</span><span class="s1">(</span><span class="s2">parent</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">, </span><span class="s2">depth</span><span class="s1">, </span><span class="s2">path</span><span class="s1">, </span><span class="s2">wh</span><span class="s1">, </span><span class="s2">targetPath</span><span class="s1">);</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">closed</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+
+      <span class="s4">// preserve this symlink's target path</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">targetPath </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_symlinkPaths</span><span class="s1">.</span><span class="s2">set</span><span class="s1">(</span><span class="s2">sysPath</span><span class="s1">.</span><span class="s2">resolve</span><span class="s1">(</span><span class="s2">path</span><span class="s1">), </span><span class="s2">targetPath</span><span class="s1">);</span>
+      <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+      <span class="s2">closer </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_handleFile</span><span class="s1">(</span><span class="s2">wh</span><span class="s1">.</span><span class="s2">watchPath</span><span class="s1">, </span><span class="s2">stats</span><span class="s1">, </span><span class="s2">initialAdd</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s2">ready</span><span class="s1">();</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_addPathCloser</span><span class="s1">(</span><span class="s2">path</span><span class="s1">, </span><span class="s2">closer</span><span class="s1">);</span>
+    <span class="s3">return false</span><span class="s1">;</span>
+
+  <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">error</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">fsw</span><span class="s1">.</span><span class="s2">_handleError</span><span class="s1">(</span><span class="s2">error</span><span class="s1">)) {</span>
+      <span class="s2">ready</span><span class="s1">();</span>
+      <span class="s3">return </span><span class="s2">path</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s1">}</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports </span><span class="s1">= </span><span class="s2">NodeFsHandler</span><span class="s1">;</span>
+</pre>
+</body>
+</html>

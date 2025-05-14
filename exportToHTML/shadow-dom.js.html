@@ -1,0 +1,307 @@
+<html>
+<head>
+<title>shadow-dom.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #7a7e85;}
+.s5 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+shadow-dom.js</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;use strict&quot;</span><span class="s1">;</span>
+
+<span class="s3">const </span><span class="s2">NODE_TYPE </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;../node-type&quot;</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">nodeRoot </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./node&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">HTML_NS </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./namespaces&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">domSymbolTree </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./internal-constants&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">signalSlotList</span><span class="s1">, </span><span class="s2">queueMutationObserverMicrotask </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./mutation-observers&quot;</span><span class="s1">);</span>
+
+<span class="s4">// Valid host element for ShadowRoot.</span>
+<span class="s4">// Defined in: https://dom.spec.whatwg.org/#dom-element-attachshadow</span>
+<span class="s3">const </span><span class="s2">VALID_HOST_ELEMENT_NAME </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">([</span>
+  <span class="s0">&quot;article&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;aside&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;blockquote&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;body&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;div&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;footer&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;h1&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;h2&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;h3&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;h4&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;h5&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;h6&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;header&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;main&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;nav&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;p&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;section&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;span&quot;</span>
+<span class="s1">]);</span>
+
+<span class="s3">function </span><span class="s2">isValidHostElementName</span><span class="s1">(</span><span class="s2">name</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">VALID_HOST_ELEMENT_NAME</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">name</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s4">// Use an approximation by checking the presence of nodeType instead of instead of using the isImpl from</span>
+<span class="s4">// &quot;../generated/Node&quot; to avoid introduction of circular dependencies.</span>
+<span class="s3">function </span><span class="s2">isNode</span><span class="s1">(</span><span class="s2">nodeImpl</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">Boolean</span><span class="s1">(</span><span class="s2">nodeImpl </span><span class="s1">&amp;&amp; </span><span class="s0">&quot;nodeType&quot; </span><span class="s3">in </span><span class="s2">nodeImpl</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s4">// Use an approximation by checking the value of nodeType and presence of nodeType host instead of instead</span>
+<span class="s4">// of using the isImpl from &quot;../generated/ShadowRoot&quot; to avoid introduction of circular dependencies.</span>
+<span class="s3">function </span><span class="s2">isShadowRoot</span><span class="s1">(</span><span class="s2">nodeImpl</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">Boolean</span><span class="s1">(</span><span class="s2">nodeImpl </span><span class="s1">&amp;&amp; </span><span class="s2">nodeImpl</span><span class="s1">.</span><span class="s2">nodeType </span><span class="s1">=== </span><span class="s2">NODE_TYPE</span><span class="s1">.</span><span class="s2">DOCUMENT_FRAGMENT_NODE </span><span class="s1">&amp;&amp; </span><span class="s0">&quot;host&quot; </span><span class="s3">in </span><span class="s2">nodeImpl</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#concept-slotable</span>
+<span class="s3">function </span><span class="s2">isSlotable</span><span class="s1">(</span><span class="s2">nodeImpl</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">nodeImpl </span><span class="s1">&amp;&amp; (</span><span class="s2">nodeImpl</span><span class="s1">.</span><span class="s2">nodeType </span><span class="s1">=== </span><span class="s2">NODE_TYPE</span><span class="s1">.</span><span class="s2">ELEMENT_NODE </span><span class="s1">|| </span><span class="s2">nodeImpl</span><span class="s1">.</span><span class="s2">nodeType </span><span class="s1">=== </span><span class="s2">NODE_TYPE</span><span class="s1">.</span><span class="s2">TEXT_NODE</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">isSlot</span><span class="s1">(</span><span class="s2">nodeImpl</span><span class="s1">) {</span>
+  <span class="s3">return </span><span class="s2">nodeImpl </span><span class="s1">&amp;&amp; </span><span class="s2">nodeImpl</span><span class="s1">.</span><span class="s2">localName </span><span class="s1">=== </span><span class="s0">&quot;slot&quot; </span><span class="s1">&amp;&amp; </span><span class="s2">nodeImpl</span><span class="s1">.</span><span class="s2">_namespaceURI </span><span class="s1">=== </span><span class="s2">HTML_NS</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#concept-shadow-including-inclusive-ancestor</span>
+<span class="s3">function </span><span class="s2">isShadowInclusiveAncestor</span><span class="s1">(</span><span class="s2">ancestor</span><span class="s1">, </span><span class="s2">node</span><span class="s1">) {</span>
+  <span class="s3">while </span><span class="s1">(</span><span class="s2">isNode</span><span class="s1">(</span><span class="s2">node</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">node </span><span class="s1">=== </span><span class="s2">ancestor</span><span class="s1">) {</span>
+      <span class="s3">return true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isShadowRoot</span><span class="s1">(</span><span class="s2">node</span><span class="s1">)) {</span>
+      <span class="s2">node </span><span class="s1">= </span><span class="s2">node</span><span class="s1">.</span><span class="s2">host</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+      <span class="s2">node </span><span class="s1">= </span><span class="s2">domSymbolTree</span><span class="s1">.</span><span class="s2">parent</span><span class="s1">(</span><span class="s2">node</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return false</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#retarget</span>
+<span class="s3">function </span><span class="s2">retarget</span><span class="s1">(</span><span class="s2">a</span><span class="s1">, </span><span class="s2">b</span><span class="s1">) {</span>
+  <span class="s3">while </span><span class="s1">(</span><span class="s3">true</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">isNode</span><span class="s1">(</span><span class="s2">a</span><span class="s1">)) {</span>
+      <span class="s3">return </span><span class="s2">a</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">const </span><span class="s2">aRoot </span><span class="s1">= </span><span class="s2">nodeRoot</span><span class="s1">(</span><span class="s2">a</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span>
+      <span class="s1">!</span><span class="s2">isShadowRoot</span><span class="s1">(</span><span class="s2">aRoot</span><span class="s1">) ||</span>
+      <span class="s1">(</span><span class="s2">isNode</span><span class="s1">(</span><span class="s2">b</span><span class="s1">) &amp;&amp; </span><span class="s2">isShadowInclusiveAncestor</span><span class="s1">(</span><span class="s2">aRoot</span><span class="s1">, </span><span class="s2">b</span><span class="s1">))</span>
+    <span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">a</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">a </span><span class="s1">= </span><span class="s2">nodeRoot</span><span class="s1">(</span><span class="s2">a</span><span class="s1">).</span><span class="s2">host</span><span class="s1">;</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#get-the-parent</span>
+<span class="s3">function </span><span class="s2">getEventTargetParent</span><span class="s1">(</span><span class="s2">eventTarget</span><span class="s1">, </span><span class="s2">event</span><span class="s1">) {</span>
+  <span class="s4">// _getTheParent will be missing for Window, since it doesn't have an impl class and we don't want to pollute the</span>
+  <span class="s4">// user-visible global scope with a _getTheParent value. TODO: remove this entire function and use _getTheParent</span>
+  <span class="s4">// directly, once Window gets split into impl/wrapper.</span>
+  <span class="s3">return </span><span class="s2">eventTarget</span><span class="s1">.</span><span class="s2">_getTheParent </span><span class="s1">? </span><span class="s2">eventTarget</span><span class="s1">.</span><span class="s2">_getTheParent</span><span class="s1">(</span><span class="s2">event</span><span class="s1">) : </span><span class="s3">null</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#concept-shadow-including-root</span>
+<span class="s3">function </span><span class="s2">shadowIncludingRoot</span><span class="s1">(</span><span class="s2">node</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">root </span><span class="s1">= </span><span class="s2">nodeRoot</span><span class="s1">(</span><span class="s2">node</span><span class="s1">);</span>
+  <span class="s3">return </span><span class="s2">isShadowRoot</span><span class="s1">(</span><span class="s2">root</span><span class="s1">) ? </span><span class="s2">shadowIncludingRoot</span><span class="s1">(</span><span class="s2">root</span><span class="s1">.</span><span class="s2">host</span><span class="s1">) : </span><span class="s2">root</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#assign-a-slot</span>
+<span class="s3">function </span><span class="s2">assignSlot</span><span class="s1">(</span><span class="s2">slotable</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">slot </span><span class="s1">= </span><span class="s2">findSlot</span><span class="s1">(</span><span class="s2">slotable</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">slot</span><span class="s1">) {</span>
+    <span class="s2">assignSlotable</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#assign-slotables</span>
+<span class="s3">function </span><span class="s2">assignSlotable</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">slotables </span><span class="s1">= </span><span class="s2">findSlotable</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+
+  <span class="s3">let </span><span class="s2">shouldFireSlotChange </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">slotables</span><span class="s1">.</span><span class="s2">length </span><span class="s1">!== </span><span class="s2">slot</span><span class="s1">.</span><span class="s2">_assignedNodes</span><span class="s1">.</span><span class="s2">length</span><span class="s1">) {</span>
+    <span class="s2">shouldFireSlotChange </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">let </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">slotables</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">slotables</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] !== </span><span class="s2">slot</span><span class="s1">.</span><span class="s2">_assignedNodes</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]) {</span>
+        <span class="s2">shouldFireSlotChange </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s3">break</span><span class="s1">;</span>
+      <span class="s1">}</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">shouldFireSlotChange</span><span class="s1">) {</span>
+    <span class="s2">signalSlotChange</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s2">slot</span><span class="s1">.</span><span class="s2">_assignedNodes </span><span class="s1">= </span><span class="s2">slotables</span><span class="s1">;</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">slotable of slotables</span><span class="s1">) {</span>
+    <span class="s2">slotable</span><span class="s1">.</span><span class="s2">_assignedSlot </span><span class="s1">= </span><span class="s2">slot</span><span class="s1">;</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#assign-slotables-for-a-tree</span>
+<span class="s3">function </span><span class="s2">assignSlotableForTree</span><span class="s1">(</span><span class="s2">root</span><span class="s1">) {</span>
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">slot of domSymbolTree</span><span class="s1">.</span><span class="s2">treeIterator</span><span class="s1">(</span><span class="s2">root</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isSlot</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">)) {</span>
+      <span class="s2">assignSlotable</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#find-slotables</span>
+<span class="s3">function </span><span class="s2">findSlotable</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">result </span><span class="s1">= [];</span>
+
+  <span class="s3">const </span><span class="s2">root </span><span class="s1">= </span><span class="s2">nodeRoot</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">isShadowRoot</span><span class="s1">(</span><span class="s2">root</span><span class="s1">)) {</span>
+    <span class="s3">return </span><span class="s2">result</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">slotable of domSymbolTree</span><span class="s1">.</span><span class="s2">treeIterator</span><span class="s1">(</span><span class="s2">root</span><span class="s1">.</span><span class="s2">host</span><span class="s1">)) {</span>
+    <span class="s3">const </span><span class="s2">foundSlot </span><span class="s1">= </span><span class="s2">findSlot</span><span class="s1">(</span><span class="s2">slotable</span><span class="s1">);</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">foundSlot </span><span class="s1">=== </span><span class="s2">slot</span><span class="s1">) {</span>
+      <span class="s2">result</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">slotable</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">result</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#find-flattened-slotables</span>
+<span class="s3">function </span><span class="s2">findFlattenedSlotables</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">result </span><span class="s1">= [];</span>
+
+  <span class="s3">const </span><span class="s2">root </span><span class="s1">= </span><span class="s2">nodeRoot</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">isShadowRoot</span><span class="s1">(</span><span class="s2">root</span><span class="s1">)) {</span>
+    <span class="s3">return </span><span class="s2">result</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">slotables </span><span class="s1">= </span><span class="s2">findSlotable</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">slotables</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s5">0</span><span class="s1">) {</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">child of domSymbolTree</span><span class="s1">.</span><span class="s2">childrenIterator</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">)) {</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">isSlotable</span><span class="s1">(</span><span class="s2">child</span><span class="s1">)) {</span>
+        <span class="s2">slotables</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">child</span><span class="s1">);</span>
+      <span class="s1">}</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">node of slotables</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isSlot</span><span class="s1">(</span><span class="s2">node</span><span class="s1">) &amp;&amp; </span><span class="s2">isShadowRoot</span><span class="s1">(</span><span class="s2">nodeRoot</span><span class="s1">(</span><span class="s2">node</span><span class="s1">))) {</span>
+      <span class="s3">const </span><span class="s2">temporaryResult </span><span class="s1">= </span><span class="s2">findFlattenedSlotables</span><span class="s1">(</span><span class="s2">node</span><span class="s1">);</span>
+      <span class="s2">result</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">...temporaryResult</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+      <span class="s2">result</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">node</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return </span><span class="s2">result</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#find-a-slot</span>
+<span class="s3">function </span><span class="s2">findSlot</span><span class="s1">(</span><span class="s2">slotable</span><span class="s1">, </span><span class="s2">openFlag</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s1">{ </span><span class="s2">parentNode</span><span class="s1">: </span><span class="s2">parent </span><span class="s1">} = </span><span class="s2">slotable</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">parent</span><span class="s1">) {</span>
+    <span class="s3">return null</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">shadow </span><span class="s1">= </span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_shadowRoot</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">shadow </span><span class="s1">|| (</span><span class="s2">openFlag </span><span class="s1">&amp;&amp; </span><span class="s2">shadow</span><span class="s1">.</span><span class="s2">mode </span><span class="s1">!== </span><span class="s0">&quot;open&quot;</span><span class="s1">)) {</span>
+    <span class="s3">return null</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">child of domSymbolTree</span><span class="s1">.</span><span class="s2">treeIterator</span><span class="s1">(</span><span class="s2">shadow</span><span class="s1">)) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">isSlot</span><span class="s1">(</span><span class="s2">child</span><span class="s1">) &amp;&amp; </span><span class="s2">child</span><span class="s1">.</span><span class="s2">name </span><span class="s1">=== </span><span class="s2">slotable</span><span class="s1">.</span><span class="s2">_slotableName</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">child</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">return null</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#signal-a-slot-change</span>
+<span class="s3">function </span><span class="s2">signalSlotChange</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">signalSlotList</span><span class="s1">.</span><span class="s2">some</span><span class="s1">(</span><span class="s2">entry </span><span class="s1">=&gt; </span><span class="s2">entry </span><span class="s1">=== </span><span class="s2">slot</span><span class="s1">)) {</span>
+    <span class="s2">signalSlotList</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">slot</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s2">queueMutationObserverMicrotask</span><span class="s1">();</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#concept-shadow-including-descendant</span>
+<span class="s3">function</span><span class="s1">* </span><span class="s2">shadowIncludingInclusiveDescendantsIterator</span><span class="s1">(</span><span class="s2">node</span><span class="s1">) {</span>
+  <span class="s3">yield </span><span class="s2">node</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">_shadowRoot</span><span class="s1">) {</span>
+    <span class="s3">yield</span><span class="s1">* </span><span class="s2">shadowIncludingInclusiveDescendantsIterator</span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">_shadowRoot</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">child of domSymbolTree</span><span class="s1">.</span><span class="s2">childrenIterator</span><span class="s1">(</span><span class="s2">node</span><span class="s1">)) {</span>
+    <span class="s3">yield</span><span class="s1">* </span><span class="s2">shadowIncludingInclusiveDescendantsIterator</span><span class="s1">(</span><span class="s2">child</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s4">// https://dom.spec.whatwg.org/#concept-shadow-including-descendant</span>
+<span class="s3">function</span><span class="s1">* </span><span class="s2">shadowIncludingDescendantsIterator</span><span class="s1">(</span><span class="s2">node</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">_shadowRoot</span><span class="s1">) {</span>
+    <span class="s3">yield</span><span class="s1">* </span><span class="s2">shadowIncludingInclusiveDescendantsIterator</span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">_shadowRoot</span><span class="s1">);</span>
+  <span class="s1">}</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">child of domSymbolTree</span><span class="s1">.</span><span class="s2">childrenIterator</span><span class="s1">(</span><span class="s2">node</span><span class="s1">)) {</span>
+    <span class="s3">yield</span><span class="s1">* </span><span class="s2">shadowIncludingInclusiveDescendantsIterator</span><span class="s1">(</span><span class="s2">child</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports </span><span class="s1">= {</span>
+  <span class="s2">isValidHostElementName</span><span class="s1">,</span>
+
+  <span class="s2">isNode</span><span class="s1">,</span>
+  <span class="s2">isSlotable</span><span class="s1">,</span>
+  <span class="s2">isSlot</span><span class="s1">,</span>
+  <span class="s2">isShadowRoot</span><span class="s1">,</span>
+
+  <span class="s2">isShadowInclusiveAncestor</span><span class="s1">,</span>
+  <span class="s2">retarget</span><span class="s1">,</span>
+  <span class="s2">getEventTargetParent</span><span class="s1">,</span>
+  <span class="s2">shadowIncludingRoot</span><span class="s1">,</span>
+
+  <span class="s2">assignSlot</span><span class="s1">,</span>
+  <span class="s2">assignSlotable</span><span class="s1">,</span>
+  <span class="s2">assignSlotableForTree</span><span class="s1">,</span>
+
+  <span class="s2">findSlot</span><span class="s1">,</span>
+  <span class="s2">findFlattenedSlotables</span><span class="s1">,</span>
+
+  <span class="s2">signalSlotChange</span><span class="s1">,</span>
+
+  <span class="s2">shadowIncludingInclusiveDescendantsIterator</span><span class="s1">,</span>
+  <span class="s2">shadowIncludingDescendantsIterator</span>
+<span class="s1">};</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,456 @@
+<html>
+<head>
+<title>offsets.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #cf8e6d;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+offsets.js</font>
+</center></td></tr></table>
+<pre><span class="s0">// @ts-check</span>
+
+<span class="s2">import </span><span class="s1">bigSign from </span><span class="s3">'../util/bigSign'</span>
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">remapBitfield </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'./remap-bitfield.js'</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{'base' | 'defaults' | 'components' | 'utilities' | 'variants' | 'user'} Layer</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} VariantOption</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} id An unique identifier to identify `matchVariant`</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{function | undefined} sort The sort function</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string|null} value The value we want to compare</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string|null} modifier The modifier that was used (if any)</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint} variant The variant bitmask</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} RuleOffset</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Layer} layer The layer that this rule belongs to</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Layer} parentLayer The layer that this rule originally belonged to. Only different from layer if this is a variant.</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint} arbitrary 0n if false, 1n if true</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint} variants Dynamic size. 1 bit per registered variant. 0n means no variants</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint} parallelIndex Rule index for the parallel variant. 0 if not applicable.</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint} index Index of the rule / utility in its given *parent* layer. Monotonically increasing.</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint} propertyOffset Offset for the arbitrary property. Only valid after sorting.</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} property Name/Value of the arbitrary property.</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{VariantOption[]} options Some information on how we can sort arbitrary variants</span>
+ <span class="s5">*/</span>
+
+<span class="s2">export class </span><span class="s1">Offsets </span><span class="s4">{</span>
+  <span class="s1">constructor</span><span class="s4">() {</span>
+    <span class="s5">/**</span>
+     <span class="s5">* Offsets for the next rule in a given layer</span>
+     <span class="s5">*</span>
+     <span class="s5">* </span><span class="s6">@type </span><span class="s5">{Record&lt;Layer, bigint&gt;}</span>
+     <span class="s5">*/</span>
+    <span class="s2">this</span><span class="s4">.</span><span class="s1">offsets </span><span class="s4">= {</span>
+      <span class="s1">defaults</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">base</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">components</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">utilities</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">variants</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">user</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+    <span class="s4">}</span>
+
+    <span class="s5">/**</span>
+     <span class="s5">* Positions for a given layer</span>
+     <span class="s5">*</span>
+     <span class="s5">* </span><span class="s6">@type </span><span class="s5">{Record&lt;Layer, bigint&gt;}</span>
+     <span class="s5">*/</span>
+    <span class="s2">this</span><span class="s4">.</span><span class="s1">layerPositions </span><span class="s4">= {</span>
+      <span class="s1">defaults</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">base</span><span class="s4">: </span><span class="s7">1n</span><span class="s4">,</span>
+      <span class="s1">components</span><span class="s4">: </span><span class="s7">2n</span><span class="s4">,</span>
+      <span class="s1">utilities</span><span class="s4">: </span><span class="s7">3n</span><span class="s4">,</span>
+
+      <span class="s0">// There isn't technically a &quot;user&quot; layer, but we need to give it a position</span>
+      <span class="s0">// Because it's used for ordering user-css from @apply</span>
+      <span class="s1">user</span><span class="s4">: </span><span class="s7">4n</span><span class="s4">,</span>
+
+      <span class="s1">variants</span><span class="s4">: </span><span class="s7">5n</span><span class="s4">,</span>
+    <span class="s4">}</span>
+
+    <span class="s5">/**</span>
+     <span class="s5">* The total number of functions currently registered across all variants (including arbitrary variants)</span>
+     <span class="s5">*</span>
+     <span class="s5">* </span><span class="s6">@type </span><span class="s5">{bigint}</span>
+     <span class="s5">*/</span>
+    <span class="s2">this</span><span class="s4">.</span><span class="s1">reservedVariantBits </span><span class="s4">= </span><span class="s7">0n</span>
+
+    <span class="s5">/**</span>
+     <span class="s5">* Positions for a given variant</span>
+     <span class="s5">*</span>
+     <span class="s5">* </span><span class="s6">@type </span><span class="s5">{Map&lt;string, bigint&gt;}</span>
+     <span class="s5">*/</span>
+    <span class="s2">this</span><span class="s4">.</span><span class="s1">variantOffsets </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Map</span><span class="s4">()</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Layer} layer</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuleOffset}</span>
+   <span class="s5">*/</span>
+  <span class="s1">create</span><span class="s4">(</span><span class="s1">layer</span><span class="s4">) {</span>
+    <span class="s2">return </span><span class="s4">{</span>
+      <span class="s1">layer</span><span class="s4">,</span>
+      <span class="s1">parentLayer</span><span class="s4">: </span><span class="s1">layer</span><span class="s4">,</span>
+      <span class="s1">arbitrary</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">variants</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">parallelIndex</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">index</span><span class="s4">: </span><span class="s2">this</span><span class="s4">.</span><span class="s1">offsets</span><span class="s4">[</span><span class="s1">layer</span><span class="s4">]++,</span>
+      <span class="s1">propertyOffset</span><span class="s4">: </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s1">property</span><span class="s4">: </span><span class="s3">''</span><span class="s4">,</span>
+      <span class="s1">options</span><span class="s4">: [],</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuleOffset}</span>
+   <span class="s5">*/</span>
+  <span class="s1">arbitraryProperty</span><span class="s4">(</span><span class="s1">name</span><span class="s4">) {</span>
+    <span class="s2">return </span><span class="s4">{</span>
+      <span class="s1">...</span><span class="s2">this</span><span class="s4">.</span><span class="s1">create</span><span class="s4">(</span><span class="s3">'utilities'</span><span class="s4">),</span>
+      <span class="s1">arbitrary</span><span class="s4">: </span><span class="s7">1n</span><span class="s4">,</span>
+      <span class="s1">property</span><span class="s4">: </span><span class="s1">name</span><span class="s4">,</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Get the offset for a variant</span>
+   <span class="s5">*</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} variant</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} index</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuleOffset}</span>
+   <span class="s5">*/</span>
+  <span class="s1">forVariant</span><span class="s4">(</span><span class="s1">variant</span><span class="s4">, </span><span class="s1">index </span><span class="s4">= </span><span class="s7">0</span><span class="s4">) {</span>
+    <span class="s2">let </span><span class="s1">offset </span><span class="s4">= </span><span class="s2">this</span><span class="s4">.</span><span class="s1">variantOffsets</span><span class="s4">.</span><span class="s1">get</span><span class="s4">(</span><span class="s1">variant</span><span class="s4">)</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">offset </span><span class="s4">=== </span><span class="s1">undefined</span><span class="s4">) {</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s4">(</span><span class="s3">`Cannot find offset for unknown variant </span><span class="s1">$</span><span class="s4">{</span><span class="s1">variant</span><span class="s4">}</span><span class="s3">`</span><span class="s4">)</span>
+    <span class="s4">}</span>
+
+    <span class="s2">return </span><span class="s4">{</span>
+      <span class="s1">...</span><span class="s2">this</span><span class="s4">.</span><span class="s1">create</span><span class="s4">(</span><span class="s3">'variants'</span><span class="s4">),</span>
+      <span class="s1">variants</span><span class="s4">: </span><span class="s1">offset </span><span class="s4">&lt;&lt; </span><span class="s1">BigInt</span><span class="s4">(</span><span class="s1">index</span><span class="s4">),</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuleOffset} rule</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuleOffset} variant</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{VariantOption} options</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuleOffset}</span>
+   <span class="s5">*/</span>
+  <span class="s1">applyVariantOffset</span><span class="s4">(</span><span class="s1">rule</span><span class="s4">, </span><span class="s1">variant</span><span class="s4">, </span><span class="s1">options</span><span class="s4">) {</span>
+    <span class="s1">options</span><span class="s4">.</span><span class="s1">variant </span><span class="s4">= </span><span class="s1">variant</span><span class="s4">.</span><span class="s1">variants</span>
+
+    <span class="s2">return </span><span class="s4">{</span>
+      <span class="s1">...rule</span><span class="s4">,</span>
+      <span class="s1">layer</span><span class="s4">: </span><span class="s3">'variants'</span><span class="s4">,</span>
+      <span class="s1">parentLayer</span><span class="s4">: </span><span class="s1">rule</span><span class="s4">.</span><span class="s1">layer </span><span class="s4">=== </span><span class="s3">'variants' </span><span class="s4">? </span><span class="s1">rule</span><span class="s4">.</span><span class="s1">parentLayer </span><span class="s4">: </span><span class="s1">rule</span><span class="s4">.</span><span class="s1">layer</span><span class="s4">,</span>
+      <span class="s1">variants</span><span class="s4">: </span><span class="s1">rule</span><span class="s4">.</span><span class="s1">variants </span><span class="s4">| </span><span class="s1">variant</span><span class="s4">.</span><span class="s1">variants</span><span class="s4">,</span>
+      <span class="s1">options</span><span class="s4">: </span><span class="s1">options</span><span class="s4">.</span><span class="s1">sort </span><span class="s4">? [].</span><span class="s1">concat</span><span class="s4">(</span><span class="s1">options</span><span class="s4">, </span><span class="s1">rule</span><span class="s4">.</span><span class="s1">options</span><span class="s4">) : </span><span class="s1">rule</span><span class="s4">.</span><span class="s1">options</span><span class="s4">,</span>
+
+      <span class="s0">// TODO: Technically this is wrong. We should be handling parallel index on a per variant basis.</span>
+      <span class="s0">// We'll take the max of all the parallel indexes for now.</span>
+      <span class="s0">// @ts-ignore</span>
+      <span class="s1">parallelIndex</span><span class="s4">: </span><span class="s1">max</span><span class="s4">([</span><span class="s1">rule</span><span class="s4">.</span><span class="s1">parallelIndex</span><span class="s4">, </span><span class="s1">variant</span><span class="s4">.</span><span class="s1">parallelIndex</span><span class="s4">]),</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuleOffset} offset</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} parallelIndex</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuleOffset}</span>
+   <span class="s5">*/</span>
+  <span class="s1">applyParallelOffset</span><span class="s4">(</span><span class="s1">offset</span><span class="s4">, </span><span class="s1">parallelIndex</span><span class="s4">) {</span>
+    <span class="s2">return </span><span class="s4">{</span>
+      <span class="s1">...offset</span><span class="s4">,</span>
+      <span class="s1">parallelIndex</span><span class="s4">: </span><span class="s1">BigInt</span><span class="s4">(</span><span class="s1">parallelIndex</span><span class="s4">),</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Each variant gets 1 bit per function / rule registered.</span>
+   <span class="s5">* This is because multiple variants can be applied to a single rule and we need to know which ones are present and which ones are not.</span>
+   <span class="s5">* Additionally, every unique group of variants is grouped together in the stylesheet.</span>
+   <span class="s5">*</span>
+   <span class="s5">* This grouping is order-independent. For instance, we do not differentiate between `hover:focus` and `focus:hover`.</span>
+   <span class="s5">*</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} variants</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(name: string) =&gt; number} getLength</span>
+   <span class="s5">*/</span>
+  <span class="s1">recordVariants</span><span class="s4">(</span><span class="s1">variants</span><span class="s4">, </span><span class="s1">getLength</span><span class="s4">) {</span>
+    <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">variant of variants</span><span class="s4">) {</span>
+      <span class="s2">this</span><span class="s4">.</span><span class="s1">recordVariant</span><span class="s4">(</span><span class="s1">variant</span><span class="s4">, </span><span class="s1">getLength</span><span class="s4">(</span><span class="s1">variant</span><span class="s4">))</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* The same as `recordVariants` but for a single arbitrary variant at runtime.</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} variant</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} fnCount</span>
+   <span class="s5">*</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{RuleOffset} The highest offset for this variant</span>
+   <span class="s5">*/</span>
+  <span class="s1">recordVariant</span><span class="s4">(</span><span class="s1">variant</span><span class="s4">, </span><span class="s1">fnCount </span><span class="s4">= </span><span class="s7">1</span><span class="s4">) {</span>
+    <span class="s2">this</span><span class="s4">.</span><span class="s1">variantOffsets</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">variant</span><span class="s4">, </span><span class="s7">1n </span><span class="s4">&lt;&lt; </span><span class="s2">this</span><span class="s4">.</span><span class="s1">reservedVariantBits</span><span class="s4">)</span>
+
+    <span class="s0">// Ensure space is reserved for each &quot;function&quot; in the parallel variant</span>
+    <span class="s0">// by offsetting the next variant by the number of parallel variants</span>
+    <span class="s0">// in the one we just added.</span>
+
+    <span class="s0">// Single functions that return parallel variants are NOT handled separately here</span>
+    <span class="s0">// They're offset by 1 (or the number of functions) as usual</span>
+    <span class="s0">// And each rule returned is tracked separately since the functions are evaluated lazily.</span>
+    <span class="s0">// @see `RuleOffset.parallelIndex`</span>
+    <span class="s2">this</span><span class="s4">.</span><span class="s1">reservedVariantBits </span><span class="s4">+= </span><span class="s1">BigInt</span><span class="s4">(</span><span class="s1">fnCount</span><span class="s4">)</span>
+
+    <span class="s2">return </span><span class="s4">{</span>
+      <span class="s1">...</span><span class="s2">this</span><span class="s4">.</span><span class="s1">create</span><span class="s4">(</span><span class="s3">'variants'</span><span class="s4">),</span>
+      <span class="s1">variants</span><span class="s4">: </span><span class="s2">this</span><span class="s4">.</span><span class="s1">variantOffsets</span><span class="s4">.</span><span class="s1">get</span><span class="s4">(</span><span class="s1">variant</span><span class="s4">),</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuleOffset} a</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuleOffset} b</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{bigint}</span>
+   <span class="s5">*/</span>
+  <span class="s1">compare</span><span class="s4">(</span><span class="s1">a</span><span class="s4">, </span><span class="s1">b</span><span class="s4">) {</span>
+    <span class="s0">// Sort layers together</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">a</span><span class="s4">.</span><span class="s1">layer </span><span class="s4">!== </span><span class="s1">b</span><span class="s4">.</span><span class="s1">layer</span><span class="s4">) {</span>
+      <span class="s2">return this</span><span class="s4">.</span><span class="s1">layerPositions</span><span class="s4">[</span><span class="s1">a</span><span class="s4">.</span><span class="s1">layer</span><span class="s4">] - </span><span class="s2">this</span><span class="s4">.</span><span class="s1">layerPositions</span><span class="s4">[</span><span class="s1">b</span><span class="s4">.</span><span class="s1">layer</span><span class="s4">]</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// When sorting the `variants` layer, we need to sort based on the parent layer as well within</span>
+    <span class="s0">// this variants layer.</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">a</span><span class="s4">.</span><span class="s1">parentLayer </span><span class="s4">!== </span><span class="s1">b</span><span class="s4">.</span><span class="s1">parentLayer</span><span class="s4">) {</span>
+      <span class="s2">return this</span><span class="s4">.</span><span class="s1">layerPositions</span><span class="s4">[</span><span class="s1">a</span><span class="s4">.</span><span class="s1">parentLayer</span><span class="s4">] - </span><span class="s2">this</span><span class="s4">.</span><span class="s1">layerPositions</span><span class="s4">[</span><span class="s1">b</span><span class="s4">.</span><span class="s1">parentLayer</span><span class="s4">]</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Sort based on the sorting function</span>
+    <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">aOptions of a</span><span class="s4">.</span><span class="s1">options</span><span class="s4">) {</span>
+      <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">bOptions of b</span><span class="s4">.</span><span class="s1">options</span><span class="s4">) {</span>
+        <span class="s2">if </span><span class="s4">(</span><span class="s1">aOptions</span><span class="s4">.</span><span class="s1">id </span><span class="s4">!== </span><span class="s1">bOptions</span><span class="s4">.</span><span class="s1">id</span><span class="s4">) </span><span class="s2">continue</span>
+        <span class="s2">if </span><span class="s4">(!</span><span class="s1">aOptions</span><span class="s4">.</span><span class="s1">sort </span><span class="s4">|| !</span><span class="s1">bOptions</span><span class="s4">.</span><span class="s1">sort</span><span class="s4">) </span><span class="s2">continue</span>
+
+        <span class="s2">let </span><span class="s1">maxFnVariant </span><span class="s4">= </span><span class="s1">max</span><span class="s4">([</span><span class="s1">aOptions</span><span class="s4">.</span><span class="s1">variant</span><span class="s4">, </span><span class="s1">bOptions</span><span class="s4">.</span><span class="s1">variant</span><span class="s4">]) ?? </span><span class="s7">0n</span>
+
+        <span class="s0">// Create a mask of 0s from bits 1..N where N represents the mask of the Nth bit</span>
+        <span class="s2">let </span><span class="s1">mask </span><span class="s4">= ~(</span><span class="s1">maxFnVariant </span><span class="s4">| (</span><span class="s1">maxFnVariant </span><span class="s4">- </span><span class="s7">1n</span><span class="s4">))</span>
+        <span class="s2">let </span><span class="s1">aVariantsAfterFn </span><span class="s4">= </span><span class="s1">a</span><span class="s4">.</span><span class="s1">variants </span><span class="s4">&amp; </span><span class="s1">mask</span>
+        <span class="s2">let </span><span class="s1">bVariantsAfterFn </span><span class="s4">= </span><span class="s1">b</span><span class="s4">.</span><span class="s1">variants </span><span class="s4">&amp; </span><span class="s1">mask</span>
+
+        <span class="s0">// If the variants the same, we _can_ sort them</span>
+        <span class="s2">if </span><span class="s4">(</span><span class="s1">aVariantsAfterFn </span><span class="s4">!== </span><span class="s1">bVariantsAfterFn</span><span class="s4">) {</span>
+          <span class="s2">continue</span>
+        <span class="s4">}</span>
+
+        <span class="s2">let </span><span class="s1">result </span><span class="s4">= </span><span class="s1">aOptions</span><span class="s4">.</span><span class="s1">sort</span><span class="s4">(</span>
+          <span class="s4">{</span>
+            <span class="s1">value</span><span class="s4">: </span><span class="s1">aOptions</span><span class="s4">.</span><span class="s1">value</span><span class="s4">,</span>
+            <span class="s1">modifier</span><span class="s4">: </span><span class="s1">aOptions</span><span class="s4">.</span><span class="s1">modifier</span><span class="s4">,</span>
+          <span class="s4">},</span>
+          <span class="s4">{</span>
+            <span class="s1">value</span><span class="s4">: </span><span class="s1">bOptions</span><span class="s4">.</span><span class="s1">value</span><span class="s4">,</span>
+            <span class="s1">modifier</span><span class="s4">: </span><span class="s1">bOptions</span><span class="s4">.</span><span class="s1">modifier</span><span class="s4">,</span>
+          <span class="s4">}</span>
+        <span class="s4">)</span>
+        <span class="s2">if </span><span class="s4">(</span><span class="s1">result </span><span class="s4">!== </span><span class="s7">0</span><span class="s4">) </span><span class="s2">return </span><span class="s1">result</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Sort variants in the order they were registered</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">a</span><span class="s4">.</span><span class="s1">variants </span><span class="s4">!== </span><span class="s1">b</span><span class="s4">.</span><span class="s1">variants</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">a</span><span class="s4">.</span><span class="s1">variants </span><span class="s4">- </span><span class="s1">b</span><span class="s4">.</span><span class="s1">variants</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Make sure each rule returned by a parallel variant is sorted in ascending order</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">a</span><span class="s4">.</span><span class="s1">parallelIndex </span><span class="s4">!== </span><span class="s1">b</span><span class="s4">.</span><span class="s1">parallelIndex</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">a</span><span class="s4">.</span><span class="s1">parallelIndex </span><span class="s4">- </span><span class="s1">b</span><span class="s4">.</span><span class="s1">parallelIndex</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Always sort arbitrary properties after other utilities</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">a</span><span class="s4">.</span><span class="s1">arbitrary </span><span class="s4">!== </span><span class="s1">b</span><span class="s4">.</span><span class="s1">arbitrary</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">a</span><span class="s4">.</span><span class="s1">arbitrary </span><span class="s4">- </span><span class="s1">b</span><span class="s4">.</span><span class="s1">arbitrary</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Always sort arbitrary properties alphabetically</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">a</span><span class="s4">.</span><span class="s1">propertyOffset </span><span class="s4">!== </span><span class="s1">b</span><span class="s4">.</span><span class="s1">propertyOffset</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">a</span><span class="s4">.</span><span class="s1">propertyOffset </span><span class="s4">- </span><span class="s1">b</span><span class="s4">.</span><span class="s1">propertyOffset</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Sort utilities, components, etc… in the order they were registered</span>
+    <span class="s2">return </span><span class="s1">a</span><span class="s4">.</span><span class="s1">index </span><span class="s4">- </span><span class="s1">b</span><span class="s4">.</span><span class="s1">index</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Arbitrary variants are recorded in the order they're encountered.</span>
+   <span class="s5">* This means that the order is not stable between environments and sets of content files.</span>
+   <span class="s5">*</span>
+   <span class="s5">* In order to make the order stable, we need to remap the arbitrary variant offsets to</span>
+   <span class="s5">* be in alphabetical order starting from the offset of the first arbitrary variant.</span>
+   <span class="s5">*/</span>
+  <span class="s1">recalculateVariantOffsets</span><span class="s4">() {</span>
+    <span class="s0">// Sort the variants by their name</span>
+    <span class="s2">let </span><span class="s1">variants </span><span class="s4">= </span><span class="s1">Array</span><span class="s4">.</span><span class="s1">from</span><span class="s4">(</span><span class="s2">this</span><span class="s4">.</span><span class="s1">variantOffsets</span><span class="s4">.</span><span class="s1">entries</span><span class="s4">())</span>
+      <span class="s4">.</span><span class="s1">filter</span><span class="s4">(([</span><span class="s1">v</span><span class="s4">]) =&gt; </span><span class="s1">v</span><span class="s4">.</span><span class="s1">startsWith</span><span class="s4">(</span><span class="s3">'['</span><span class="s4">))</span>
+      <span class="s4">.</span><span class="s1">sort</span><span class="s4">(([</span><span class="s1">a</span><span class="s4">], [</span><span class="s1">z</span><span class="s4">]) =&gt; </span><span class="s1">fastCompare</span><span class="s4">(</span><span class="s1">a</span><span class="s4">, </span><span class="s1">z</span><span class="s4">))</span>
+
+    <span class="s0">// Sort the list of offsets</span>
+    <span class="s0">// This is not necessarily a discrete range of numbers which is why</span>
+    <span class="s0">// we're using sort instead of creating a range from min/max</span>
+    <span class="s2">let </span><span class="s1">newOffsets </span><span class="s4">= </span><span class="s1">variants</span><span class="s4">.</span><span class="s1">map</span><span class="s4">(([, </span><span class="s1">offset</span><span class="s4">]) =&gt; </span><span class="s1">offset</span><span class="s4">).</span><span class="s1">sort</span><span class="s4">((</span><span class="s1">a</span><span class="s4">, </span><span class="s1">z</span><span class="s4">) =&gt; </span><span class="s1">bigSign</span><span class="s4">(</span><span class="s1">a </span><span class="s4">- </span><span class="s1">z</span><span class="s4">))</span>
+
+    <span class="s0">// Create a map from the old offsets to the new offsets in the new sort order</span>
+    <span class="s5">/** </span><span class="s6">@type </span><span class="s5">{[bigint, bigint][]} */</span>
+    <span class="s2">let </span><span class="s1">mapping </span><span class="s4">= </span><span class="s1">variants</span><span class="s4">.</span><span class="s1">map</span><span class="s4">(([, </span><span class="s1">oldOffset</span><span class="s4">], </span><span class="s1">i</span><span class="s4">) =&gt; [</span><span class="s1">oldOffset</span><span class="s4">, </span><span class="s1">newOffsets</span><span class="s4">[</span><span class="s1">i</span><span class="s4">]])</span>
+
+    <span class="s0">// Remove any variants that will not move letting us skip</span>
+    <span class="s0">// remapping if everything happens to be in order</span>
+    <span class="s2">return </span><span class="s1">mapping</span><span class="s4">.</span><span class="s1">filter</span><span class="s4">(([</span><span class="s1">a</span><span class="s4">, </span><span class="s1">z</span><span class="s4">]) =&gt; </span><span class="s1">a </span><span class="s4">!== </span><span class="s1">z</span><span class="s4">)</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{[RuleOffset, T][]} list</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{[RuleOffset, T][]}</span>
+   <span class="s5">*/</span>
+  <span class="s1">remapArbitraryVariantOffsets</span><span class="s4">(</span><span class="s1">list</span><span class="s4">) {</span>
+    <span class="s2">let </span><span class="s1">mapping </span><span class="s4">= </span><span class="s2">this</span><span class="s4">.</span><span class="s1">recalculateVariantOffsets</span><span class="s4">()</span>
+
+    <span class="s0">// No arbitrary variants? Nothing to do.</span>
+    <span class="s0">// Everyhing already in order? Nothing to do.</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">mapping</span><span class="s4">.</span><span class="s1">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">list</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Remap every variant offset in the list</span>
+    <span class="s2">return </span><span class="s1">list</span><span class="s4">.</span><span class="s1">map</span><span class="s4">((</span><span class="s1">item</span><span class="s4">) =&gt; {</span>
+      <span class="s2">let </span><span class="s4">[</span><span class="s1">offset</span><span class="s4">, </span><span class="s1">rule</span><span class="s4">] = </span><span class="s1">item</span>
+
+      <span class="s1">offset </span><span class="s4">= {</span>
+        <span class="s1">...offset</span><span class="s4">,</span>
+        <span class="s1">variants</span><span class="s4">: </span><span class="s1">remapBitfield</span><span class="s4">(</span><span class="s1">offset</span><span class="s4">.</span><span class="s1">variants</span><span class="s4">, </span><span class="s1">mapping</span><span class="s4">),</span>
+      <span class="s4">}</span>
+
+      <span class="s2">return </span><span class="s4">[</span><span class="s1">offset</span><span class="s4">, </span><span class="s1">rule</span><span class="s4">]</span>
+    <span class="s4">})</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{[RuleOffset, T][]} list</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{[RuleOffset, T][]}</span>
+   <span class="s5">*/</span>
+  <span class="s1">sortArbitraryProperties</span><span class="s4">(</span><span class="s1">list</span><span class="s4">) {</span>
+    <span class="s0">// Collect all known arbitrary properties</span>
+    <span class="s2">let </span><span class="s1">known </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Set</span><span class="s4">()</span>
+
+    <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s4">[</span><span class="s1">offset</span><span class="s4">] </span><span class="s1">of list</span><span class="s4">) {</span>
+      <span class="s2">if </span><span class="s4">(</span><span class="s1">offset</span><span class="s4">.</span><span class="s1">arbitrary </span><span class="s4">=== </span><span class="s7">1n</span><span class="s4">) {</span>
+        <span class="s1">known</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">offset</span><span class="s4">.</span><span class="s1">property</span><span class="s4">)</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// No arbitrary properties? Nothing to do.</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">known</span><span class="s4">.</span><span class="s1">size </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">list</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Sort the properties alphabetically</span>
+    <span class="s2">let </span><span class="s1">properties </span><span class="s4">= </span><span class="s1">Array</span><span class="s4">.</span><span class="s1">from</span><span class="s4">(</span><span class="s1">known</span><span class="s4">).</span><span class="s1">sort</span><span class="s4">()</span>
+
+    <span class="s0">// Create a map from the property name to its offset</span>
+    <span class="s2">let </span><span class="s1">offsets </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Map</span><span class="s4">()</span>
+
+    <span class="s2">let </span><span class="s1">offset </span><span class="s4">= </span><span class="s7">1n</span>
+    <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">property of properties</span><span class="s4">) {</span>
+      <span class="s1">offsets</span><span class="s4">.</span><span class="s1">set</span><span class="s4">(</span><span class="s1">property</span><span class="s4">, </span><span class="s1">offset</span><span class="s4">++)</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Apply the sorted offsets to the list</span>
+    <span class="s2">return </span><span class="s1">list</span><span class="s4">.</span><span class="s1">map</span><span class="s4">((</span><span class="s1">item</span><span class="s4">) =&gt; {</span>
+      <span class="s2">let </span><span class="s4">[</span><span class="s1">offset</span><span class="s4">, </span><span class="s1">rule</span><span class="s4">] = </span><span class="s1">item</span>
+
+      <span class="s1">offset </span><span class="s4">= {</span>
+        <span class="s1">...offset</span><span class="s4">,</span>
+        <span class="s1">propertyOffset</span><span class="s4">: </span><span class="s1">offsets</span><span class="s4">.</span><span class="s1">get</span><span class="s4">(</span><span class="s1">offset</span><span class="s4">.</span><span class="s1">property</span><span class="s4">) ?? </span><span class="s7">0n</span><span class="s4">,</span>
+      <span class="s4">}</span>
+
+      <span class="s2">return </span><span class="s4">[</span><span class="s1">offset</span><span class="s4">, </span><span class="s1">rule</span><span class="s4">]</span>
+    <span class="s4">})</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{[RuleOffset, T][]} list</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{[RuleOffset, T][]}</span>
+   <span class="s5">*/</span>
+  <span class="s1">sort</span><span class="s4">(</span><span class="s1">list</span><span class="s4">) {</span>
+    <span class="s0">// Sort arbitrary variants so they're in alphabetical order</span>
+    <span class="s1">list </span><span class="s4">= </span><span class="s2">this</span><span class="s4">.</span><span class="s1">remapArbitraryVariantOffsets</span><span class="s4">(</span><span class="s1">list</span><span class="s4">)</span>
+
+    <span class="s0">// Sort arbitrary properties so they're in alphabetical order</span>
+    <span class="s1">list </span><span class="s4">= </span><span class="s2">this</span><span class="s4">.</span><span class="s1">sortArbitraryProperties</span><span class="s4">(</span><span class="s1">list</span><span class="s4">)</span>
+
+    <span class="s2">return </span><span class="s1">list</span><span class="s4">.</span><span class="s1">sort</span><span class="s4">(([</span><span class="s1">a</span><span class="s4">], [</span><span class="s1">b</span><span class="s4">]) =&gt; </span><span class="s1">bigSign</span><span class="s4">(</span><span class="s2">this</span><span class="s4">.</span><span class="s1">compare</span><span class="s4">(</span><span class="s1">a</span><span class="s4">, </span><span class="s1">b</span><span class="s4">)))</span>
+  <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{bigint[]} nums</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{bigint|null}</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">max</span><span class="s4">(</span><span class="s1">nums</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">max </span><span class="s4">= </span><span class="s2">null</span>
+
+  <span class="s2">for </span><span class="s4">(</span><span class="s2">const </span><span class="s1">num of nums</span><span class="s4">) {</span>
+    <span class="s1">max </span><span class="s4">= </span><span class="s1">max </span><span class="s4">?? </span><span class="s1">num</span>
+    <span class="s1">max </span><span class="s4">= </span><span class="s1">max </span><span class="s4">&gt; </span><span class="s1">num </span><span class="s4">? </span><span class="s1">max </span><span class="s4">: </span><span class="s1">num</span>
+  <span class="s4">}</span>
+
+  <span class="s2">return </span><span class="s1">max</span>
+<span class="s4">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* A fast ASCII order string comparison function.</span>
+ <span class="s5">*</span>
+ <span class="s5">* Using `.sort()` without a custom compare function is faster</span>
+ <span class="s5">* But you can only use that if you're sorting an array of</span>
+ <span class="s5">* only strings. If you're sorting strings inside objects</span>
+ <span class="s5">* or arrays, you need must use a custom compare function.</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} a</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} b</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">fastCompare</span><span class="s4">(</span><span class="s1">a</span><span class="s4">, </span><span class="s1">b</span><span class="s4">) {</span>
+  <span class="s2">let </span><span class="s1">aLen </span><span class="s4">= </span><span class="s1">a</span><span class="s4">.</span><span class="s1">length</span>
+  <span class="s2">let </span><span class="s1">bLen </span><span class="s4">= </span><span class="s1">b</span><span class="s4">.</span><span class="s1">length</span>
+  <span class="s2">let </span><span class="s1">minLen </span><span class="s4">= </span><span class="s1">aLen </span><span class="s4">&lt; </span><span class="s1">bLen </span><span class="s4">? </span><span class="s1">aLen </span><span class="s4">: </span><span class="s1">bLen</span>
+
+  <span class="s2">for </span><span class="s4">(</span><span class="s2">let </span><span class="s1">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s1">i </span><span class="s4">&lt; </span><span class="s1">minLen</span><span class="s4">; </span><span class="s1">i</span><span class="s4">++) {</span>
+    <span class="s2">let </span><span class="s1">cmp </span><span class="s4">= </span><span class="s1">a</span><span class="s4">.</span><span class="s1">charCodeAt</span><span class="s4">(</span><span class="s1">i</span><span class="s4">) - </span><span class="s1">b</span><span class="s4">.</span><span class="s1">charCodeAt</span><span class="s4">(</span><span class="s1">i</span><span class="s4">)</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">cmp </span><span class="s4">!== </span><span class="s7">0</span><span class="s4">) </span><span class="s2">return </span><span class="s1">cmp</span>
+  <span class="s4">}</span>
+
+  <span class="s2">return </span><span class="s1">aLen </span><span class="s4">- </span><span class="s1">bLen</span>
+<span class="s4">}</span>
+</pre>
+</body>
+</html>

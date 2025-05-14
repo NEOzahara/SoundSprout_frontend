@@ -1,0 +1,526 @@
+<html>
+<head>
+<title>prefer-const.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+prefer-const.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">A rule to suggest using of const declaration for variables that are never reassigned after declared.</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Toru Nagashima</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">FixTracker </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/fix-tracker&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">PATTERN_TYPE </span><span class="s4">= </span><span class="s7">/^(?:.+?Pattern|RestElement|SpreadProperty|ExperimentalRestProperty|Property)$/u</span><span class="s4">;</span>
+<span class="s6">const </span><span class="s2">DECLARATION_HOST_TYPE </span><span class="s4">= </span><span class="s7">/^(?:Program|BlockStatement|StaticBlock|SwitchCase)$/u</span><span class="s4">;</span>
+<span class="s6">const </span><span class="s2">DESTRUCTURING_HOST_TYPE </span><span class="s4">= </span><span class="s7">/^(?:VariableDeclarator|AssignmentExpression)$/u</span><span class="s4">;</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a given node is located at `ForStatement.init` or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is located at `ForStatement.init`.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isInitOfForStatement</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ForStatement&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">init </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a given Identifier node becomes a VariableDeclaration or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} identifier An Identifier node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node can become a VariableDeclaration.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">canBecomeVariableDeclaration</span><span class="s4">(</span><span class="s2">identifier</span><span class="s4">) {</span>
+    <span class="s6">let </span><span class="s2">node </span><span class="s4">= </span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+    <span class="s6">while </span><span class="s4">(</span><span class="s2">PATTERN_TYPE</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)) {</span>
+        <span class="s2">node </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s4">(</span>
+        <span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;VariableDeclarator&quot; </span><span class="s4">||</span>
+        <span class="s4">(</span>
+            <span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;AssignmentExpression&quot; </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ExpressionStatement&quot; </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">DECLARATION_HOST_TYPE</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)</span>
+        <span class="s4">)</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks if an property or element is from outer scope or function parameters</span>
+ <span class="s0">* in destructing pattern.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} name A variable name to be checked.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Scope} initScope A scope to start find.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Indicates if the variable is from outer scope or function parameters.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isOuterVariableInDestructing</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">initScope</span><span class="s4">) {</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">initScope</span><span class="s4">.</span><span class="s2">through</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">ref </span><span class="s4">=&gt; </span><span class="s2">ref</span><span class="s4">.</span><span class="s2">resolved </span><span class="s4">&amp;&amp; </span><span class="s2">ref</span><span class="s4">.</span><span class="s2">resolved</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s2">name</span><span class="s4">)) {</span>
+        <span class="s6">return true</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">const </span><span class="s2">variable </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getVariableByName</span><span class="s4">(</span><span class="s2">initScope</span><span class="s4">, </span><span class="s2">name</span><span class="s4">);</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">variable </span><span class="s4">!== </span><span class="s6">null</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">def </span><span class="s4">=&gt; </span><span class="s2">def</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Parameter&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return false</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Gets the VariableDeclarator/AssignmentExpression node that a given reference</span>
+ <span class="s0">* belongs to.</span>
+ <span class="s0">* This is used to detect a mix of reassigned and never reassigned in a</span>
+ <span class="s0">* destructuring.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Reference} reference A reference to get.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ASTNode|null} A VariableDeclarator/AssignmentExpression node or</span>
+ <span class="s0">*      null.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getDestructuringHost</span><span class="s4">(</span><span class="s2">reference</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">reference</span><span class="s4">.</span><span class="s2">isWrite</span><span class="s4">()) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s6">let </span><span class="s2">node </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+    <span class="s6">while </span><span class="s4">(</span><span class="s2">PATTERN_TYPE</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)) {</span>
+        <span class="s2">node </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">DESTRUCTURING_HOST_TYPE</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s2">node</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines if a destructuring assignment node contains</span>
+ <span class="s0">* any MemberExpression nodes. This is used to determine if a</span>
+ <span class="s0">* variable that is only written once using destructuring can be</span>
+ <span class="s0">* safely converted into a const declaration.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The ObjectPattern or ArrayPattern node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the destructuring pattern contains</span>
+ <span class="s0">*      a MemberExpression, false if not.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">hasMemberExpressionAssignment</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">switch </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+        <span class="s6">case </span><span class="s3">&quot;ObjectPattern&quot;</span><span class="s4">:</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">properties</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">prop </span><span class="s4">=&gt; {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">prop</span><span class="s4">) {</span>
+
+                    <span class="s5">/* 
+                     * Spread elements have an argument property while 
+                     * others have a value property. Because different 
+                     * parsers use different node types for spread elements, 
+                     * we just check if there is an argument property. 
+                     */</span>
+                    <span class="s6">return </span><span class="s2">hasMemberExpressionAssignment</span><span class="s4">(</span><span class="s2">prop</span><span class="s4">.</span><span class="s2">argument </span><span class="s4">|| </span><span class="s2">prop</span><span class="s4">.</span><span class="s2">value</span><span class="s4">);</span>
+                <span class="s4">}</span>
+
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">});</span>
+
+        <span class="s6">case </span><span class="s3">&quot;ArrayPattern&quot;</span><span class="s4">:</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">elements</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">element </span><span class="s4">=&gt; {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">element</span><span class="s4">) {</span>
+                    <span class="s6">return </span><span class="s2">hasMemberExpressionAssignment</span><span class="s4">(</span><span class="s2">element</span><span class="s4">);</span>
+                <span class="s4">}</span>
+
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">});</span>
+
+        <span class="s6">case </span><span class="s3">&quot;AssignmentPattern&quot;</span><span class="s4">:</span>
+            <span class="s6">return </span><span class="s2">hasMemberExpressionAssignment</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">);</span>
+
+        <span class="s6">case </span><span class="s3">&quot;MemberExpression&quot;</span><span class="s4">:</span>
+            <span class="s6">return true</span><span class="s4">;</span>
+
+        <span class="s5">// no default</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return false</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Gets an identifier node of a given variable.</span>
+ <span class="s0">*</span>
+ <span class="s0">* If the initialization exists or one or more reading references exist before</span>
+ <span class="s0">* the first assignment, the identifier node is the node of the declaration.</span>
+ <span class="s0">* Otherwise, the identifier node is the node of the first assignment.</span>
+ <span class="s0">*</span>
+ <span class="s0">* If the variable should not change to const, this function returns null.</span>
+ <span class="s0">* - If the variable is reassigned.</span>
+ <span class="s0">* - If the variable is never initialized nor assigned.</span>
+ <span class="s0">* - If the variable is initialized in a different scope from the declaration.</span>
+ <span class="s0">* - If the unique assignment of the variable cannot change to a declaration.</span>
+ <span class="s0">*   e.g. `if (a) b = 1` / `return (b = 1)`</span>
+ <span class="s0">* - If the variable is declared in the global scope and `eslintUsed` is `true`.</span>
+ <span class="s0">*   `/*exported foo` directive comment makes such variables. This rule does not</span>
+ <span class="s0">*   warn such variables because this rule cannot distinguish whether the</span>
+ <span class="s0">*   exported variables are reassigned or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Variable} variable A variable to get.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} ignoreReadBeforeAssign</span>
+ <span class="s0">*      The value of `ignoreReadBeforeAssign` option.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ASTNode|null}</span>
+ <span class="s0">*      An Identifier node if the variable should change to const.</span>
+ <span class="s0">*      Otherwise, null.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getIdentifierIfShouldBeConst</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">ignoreReadBeforeAssign</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">variable</span><span class="s4">.</span><span class="s2">eslintUsed </span><span class="s4">&amp;&amp; </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;global&quot;</span><span class="s4">) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s5">// Finds the unique WriteReference.</span>
+    <span class="s6">let </span><span class="s2">writer </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+    <span class="s6">let </span><span class="s2">isReadBeforeInit </span><span class="s4">= </span><span class="s6">false</span><span class="s4">;</span>
+    <span class="s6">const </span><span class="s2">references </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">references</span><span class="s4">;</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">references</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">reference </span><span class="s4">= </span><span class="s2">references</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">reference</span><span class="s4">.</span><span class="s2">isWrite</span><span class="s4">()) {</span>
+            <span class="s6">const </span><span class="s2">isReassigned </span><span class="s4">= (</span>
+                <span class="s2">writer </span><span class="s4">!== </span><span class="s6">null </span><span class="s4">&amp;&amp;</span>
+                <span class="s2">writer</span><span class="s4">.</span><span class="s2">identifier </span><span class="s4">!== </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span>
+            <span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">isReassigned</span><span class="s4">) {</span>
+                <span class="s6">return null</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">destructuringHost </span><span class="s4">= </span><span class="s2">getDestructuringHost</span><span class="s4">(</span><span class="s2">reference</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">destructuringHost </span><span class="s4">!== </span><span class="s6">null </span><span class="s4">&amp;&amp; </span><span class="s2">destructuringHost</span><span class="s4">.</span><span class="s2">left </span><span class="s4">!== </span><span class="s6">void </span><span class="s8">0</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">leftNode </span><span class="s4">= </span><span class="s2">destructuringHost</span><span class="s4">.</span><span class="s2">left</span><span class="s4">;</span>
+                <span class="s6">let </span><span class="s2">hasOuterVariables </span><span class="s4">= </span><span class="s6">false</span><span class="s4">,</span>
+                    <span class="s2">hasNonIdentifiers </span><span class="s4">= </span><span class="s6">false</span><span class="s4">;</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">leftNode</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ObjectPattern&quot;</span><span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">properties </span><span class="s4">= </span><span class="s2">leftNode</span><span class="s4">.</span><span class="s2">properties</span><span class="s4">;</span>
+
+                    <span class="s2">hasOuterVariables </span><span class="s4">= </span><span class="s2">properties</span>
+                        <span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">prop </span><span class="s4">=&gt; </span><span class="s2">prop</span><span class="s4">.</span><span class="s2">value</span><span class="s4">)</span>
+                        <span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">prop </span><span class="s4">=&gt; </span><span class="s2">prop</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">name</span><span class="s4">)</span>
+                        <span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">name </span><span class="s4">=&gt; </span><span class="s2">isOuterVariableInDestructing</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">));</span>
+
+                    <span class="s2">hasNonIdentifiers </span><span class="s4">= </span><span class="s2">hasMemberExpressionAssignment</span><span class="s4">(</span><span class="s2">leftNode</span><span class="s4">);</span>
+
+                <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">leftNode</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ArrayPattern&quot;</span><span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">elements </span><span class="s4">= </span><span class="s2">leftNode</span><span class="s4">.</span><span class="s2">elements</span><span class="s4">;</span>
+
+                    <span class="s2">hasOuterVariables </span><span class="s4">= </span><span class="s2">elements</span>
+                        <span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">element </span><span class="s4">=&gt; </span><span class="s2">element </span><span class="s4">&amp;&amp; </span><span class="s2">element</span><span class="s4">.</span><span class="s2">name</span><span class="s4">)</span>
+                        <span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">name </span><span class="s4">=&gt; </span><span class="s2">isOuterVariableInDestructing</span><span class="s4">(</span><span class="s2">name</span><span class="s4">, </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">));</span>
+
+                    <span class="s2">hasNonIdentifiers </span><span class="s4">= </span><span class="s2">hasMemberExpressionAssignment</span><span class="s4">(</span><span class="s2">leftNode</span><span class="s4">);</span>
+                <span class="s4">}</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">hasOuterVariables </span><span class="s4">|| </span><span class="s2">hasNonIdentifiers</span><span class="s4">) {</span>
+                    <span class="s6">return null</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+            <span class="s4">}</span>
+
+            <span class="s2">writer </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">;</span>
+
+        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">reference</span><span class="s4">.</span><span class="s2">isRead</span><span class="s4">() &amp;&amp; </span><span class="s2">writer </span><span class="s4">=== </span><span class="s6">null</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">ignoreReadBeforeAssign</span><span class="s4">) {</span>
+                <span class="s6">return null</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s2">isReadBeforeInit </span><span class="s4">= </span><span class="s6">true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s5">/* 
+     * If the assignment is from a different scope, ignore it. 
+     * If the assignment cannot change to a declaration, ignore it. 
+     */</span>
+    <span class="s6">const </span><span class="s2">shouldBeConst </span><span class="s4">= (</span>
+        <span class="s2">writer </span><span class="s4">!== </span><span class="s6">null </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">writer</span><span class="s4">.</span><span class="s2">from </span><span class="s4">=== </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">canBecomeVariableDeclaration</span><span class="s4">(</span><span class="s2">writer</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">)</span>
+    <span class="s4">);</span>
+
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">shouldBeConst</span><span class="s4">) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">isReadBeforeInit</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">[</span><span class="s8">0</span><span class="s4">].</span><span class="s2">name</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">writer</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Groups by the VariableDeclarator/AssignmentExpression node that each</span>
+ <span class="s0">* reference of given variables belongs to.</span>
+ <span class="s0">* This is used to detect a mix of reassigned and never reassigned in a</span>
+ <span class="s0">* destructuring.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Variable[]} variables Variables to group by destructuring.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} ignoreReadBeforeAssign</span>
+ <span class="s0">*      The value of `ignoreReadBeforeAssign` option.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Map&lt;ASTNode, ASTNode[]&gt;} Grouped identifier nodes.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">groupByDestructuring</span><span class="s4">(</span><span class="s2">variables</span><span class="s4">, </span><span class="s2">ignoreReadBeforeAssign</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">identifierMap </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">();</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">variables</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">variable </span><span class="s4">= </span><span class="s2">variables</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+        <span class="s6">const </span><span class="s2">references </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">references</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">identifier </span><span class="s4">= </span><span class="s2">getIdentifierIfShouldBeConst</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">ignoreReadBeforeAssign</span><span class="s4">);</span>
+        <span class="s6">let </span><span class="s2">prevId </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">j </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">j </span><span class="s4">&lt; </span><span class="s2">references</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">j</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">reference </span><span class="s4">= </span><span class="s2">references</span><span class="s4">[</span><span class="s2">j</span><span class="s4">];</span>
+            <span class="s6">const </span><span class="s2">id </span><span class="s4">= </span><span class="s2">reference</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">;</span>
+
+            <span class="s5">/* 
+             * Avoid counting a reference twice or more for default values of 
+             * destructuring. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">id </span><span class="s4">=== </span><span class="s2">prevId</span><span class="s4">) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s2">prevId </span><span class="s4">= </span><span class="s2">id</span><span class="s4">;</span>
+
+            <span class="s5">// Add the identifier node into the destructuring group.</span>
+            <span class="s6">const </span><span class="s2">group </span><span class="s4">= </span><span class="s2">getDestructuringHost</span><span class="s4">(</span><span class="s2">reference</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">group</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">identifierMap</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">group</span><span class="s4">)) {</span>
+                    <span class="s2">identifierMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">group</span><span class="s4">).</span><span class="s2">push</span><span class="s4">(</span><span class="s2">identifier</span><span class="s4">);</span>
+                <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                    <span class="s2">identifierMap</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">group</span><span class="s4">, [</span><span class="s2">identifier</span><span class="s4">]);</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">identifierMap</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Finds the nearest parent of node with a given type.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to search from.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} type The type field of the parent node.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Function} shouldStop A predicate that returns true if the traversal should stop, and false otherwise.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ASTNode} The closest ancestor with the specified type; null if no such ancestor exists.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">findUp</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">type</span><span class="s4">, </span><span class="s2">shouldStop</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">node </span><span class="s4">|| </span><span class="s2">shouldStop</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s2">type</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">node</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s2">findUp</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">, </span><span class="s2">type</span><span class="s4">, </span><span class="s2">shouldStop</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Require `const` declarations for variables that are never reassigned after declared&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/prefer-const&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">fixable</span><span class="s4">: </span><span class="s3">&quot;code&quot;</span><span class="s4">,</span>
+
+        <span class="s2">schema</span><span class="s4">: [</span>
+            <span class="s4">{</span>
+                <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+                <span class="s2">properties</span><span class="s4">: {</span>
+                    <span class="s2">destructuring</span><span class="s4">: { </span><span class="s6">enum</span><span class="s4">: [</span><span class="s3">&quot;any&quot;</span><span class="s4">, </span><span class="s3">&quot;all&quot;</span><span class="s4">], </span><span class="s6">default</span><span class="s4">: </span><span class="s3">&quot;any&quot; </span><span class="s4">},</span>
+                    <span class="s2">ignoreReadBeforeAssign</span><span class="s4">: { </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span><span class="s4">, </span><span class="s6">default</span><span class="s4">: </span><span class="s6">false </span><span class="s4">}</span>
+                <span class="s4">},</span>
+                <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s6">false</span>
+            <span class="s4">}</span>
+        <span class="s4">],</span>
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">useConst</span><span class="s4">: </span><span class="s3">&quot;'{{name}}' is never reassigned. Use 'const' instead.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">options </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] || {};</span>
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">shouldMatchAnyDestructuredVariable </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">destructuring </span><span class="s4">!== </span><span class="s3">&quot;all&quot;</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">ignoreReadBeforeAssign </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignoreReadBeforeAssign </span><span class="s4">=== </span><span class="s6">true</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">variables </span><span class="s4">= [];</span>
+        <span class="s6">let </span><span class="s2">reportCount </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+        <span class="s6">let </span><span class="s2">checkedId </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+        <span class="s6">let </span><span class="s2">checkedName </span><span class="s4">= </span><span class="s3">&quot;&quot;</span><span class="s4">;</span>
+
+
+        <span class="s0">/**</span>
+         <span class="s0">* Reports given identifier nodes if all of the nodes should be declared</span>
+         <span class="s0">* as const.</span>
+         <span class="s0">*</span>
+         <span class="s0">* The argument 'nodes' is an array of Identifier nodes.</span>
+         <span class="s0">* This node is the result of 'getIdentifierIfShouldBeConst()', so it's</span>
+         <span class="s0">* nullable. In simple declaration or assignment cases, the length of</span>
+         <span class="s0">* the array is 1. In destructuring cases, the length of the array can</span>
+         <span class="s0">* be 2 or more.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{(eslint-scope.Reference|null)[]} nodes</span>
+         <span class="s0">*      References which are grouped by destructuring to report.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkGroup</span><span class="s4">(</span><span class="s2">nodes</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">nodesToReport </span><span class="s4">= </span><span class="s2">nodes</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">Boolean</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">nodes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&amp;&amp; (</span><span class="s2">shouldMatchAnyDestructuredVariable </span><span class="s4">|| </span><span class="s2">nodesToReport</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s2">nodes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">)) {</span>
+                <span class="s6">const </span><span class="s2">varDeclParent </span><span class="s4">= </span><span class="s2">findUp</span><span class="s4">(</span><span class="s2">nodes</span><span class="s4">[</span><span class="s8">0</span><span class="s4">], </span><span class="s3">&quot;VariableDeclaration&quot;</span><span class="s4">, </span><span class="s2">parentNode </span><span class="s4">=&gt; </span><span class="s2">parentNode</span><span class="s4">.</span><span class="s2">type</span><span class="s4">.</span><span class="s2">endsWith</span><span class="s4">(</span><span class="s3">&quot;Statement&quot;</span><span class="s4">));</span>
+                <span class="s6">const </span><span class="s2">isVarDecParentNull </span><span class="s4">= </span><span class="s2">varDeclParent </span><span class="s4">=== </span><span class="s6">null</span><span class="s4">;</span>
+
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">isVarDecParentNull </span><span class="s4">&amp;&amp; </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s8">0</span><span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">firstDeclaration </span><span class="s4">= </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">firstDeclaration</span><span class="s4">.</span><span class="s2">init</span><span class="s4">) {</span>
+                        <span class="s6">const </span><span class="s2">firstDecParent </span><span class="s4">= </span><span class="s2">firstDeclaration</span><span class="s4">.</span><span class="s2">init</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+                        <span class="s5">/* 
+                         * First we check the declaration type and then depending on 
+                         * if the type is a &quot;VariableDeclarator&quot; or its an &quot;ObjectPattern&quot; 
+                         * we compare the name and id from the first identifier, if the names are different 
+                         * we assign the new name, id and reset the count of reportCount and nodeCount in 
+                         * order to check each block for the number of reported errors and base our fix 
+                         * based on comparing nodes.length and nodesToReport.length. 
+                         */</span>
+
+                        <span class="s6">if </span><span class="s4">(</span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;VariableDeclarator&quot;</span><span class="s4">) {</span>
+
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name </span><span class="s4">!== </span><span class="s2">checkedName</span><span class="s4">) {</span>
+                                <span class="s2">checkedName </span><span class="s4">= </span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+                                <span class="s2">reportCount </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+                            <span class="s4">}</span>
+
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ObjectPattern&quot;</span><span class="s4">) {</span>
+                                <span class="s6">if </span><span class="s4">(</span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">init</span><span class="s4">.</span><span class="s2">name </span><span class="s4">!== </span><span class="s2">checkedName</span><span class="s4">) {</span>
+                                    <span class="s2">checkedName </span><span class="s4">= </span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">init</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+                                    <span class="s2">reportCount </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+                                <span class="s4">}</span>
+                            <span class="s4">}</span>
+
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">id </span><span class="s4">!== </span><span class="s2">checkedId</span><span class="s4">) {</span>
+                                <span class="s2">checkedId </span><span class="s4">= </span><span class="s2">firstDecParent</span><span class="s4">.</span><span class="s2">id</span><span class="s4">;</span>
+                                <span class="s2">reportCount </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+                            <span class="s4">}</span>
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+
+                <span class="s6">let </span><span class="s2">shouldFix </span><span class="s4">= </span><span class="s2">varDeclParent </span><span class="s4">&amp;&amp;</span>
+
+                    <span class="s5">// Don't do a fix unless all variables in the declarations are initialized (or it's in a for-in or for-of loop)</span>
+                    <span class="s4">(</span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ForInStatement&quot; </span><span class="s4">|| </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ForOfStatement&quot; </span><span class="s4">||</span>
+                        <span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations</span><span class="s4">.</span><span class="s2">every</span><span class="s4">(</span><span class="s2">declaration </span><span class="s4">=&gt; </span><span class="s2">declaration</span><span class="s4">.</span><span class="s2">init</span><span class="s4">)) &amp;&amp;</span>
+
+                    <span class="s5">/* 
+                     * If options.destructuring is &quot;all&quot;, then this warning will not occur unless 
+                     * every assignment in the destructuring should be const. In that case, it's safe 
+                     * to apply the fix. 
+                     */</span>
+                    <span class="s2">nodesToReport</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s2">nodes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">isVarDecParentNull </span><span class="s4">&amp;&amp; </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations </span><span class="s4">&amp;&amp; </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations</span><span class="s4">.</span><span class="s2">length </span><span class="s4">!== </span><span class="s8">1</span><span class="s4">) {</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">varDeclParent </span><span class="s4">&amp;&amp; </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations </span><span class="s4">&amp;&amp; </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt;= </span><span class="s8">1</span><span class="s4">) {</span>
+
+                        <span class="s5">/* 
+                         * Add nodesToReport.length to a count, then comparing the count to the length 
+                         * of the declarations in the current block. 
+                         */</span>
+
+                        <span class="s2">reportCount </span><span class="s4">+= </span><span class="s2">nodesToReport</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+
+                        <span class="s6">let </span><span class="s2">totalDeclarationsCount </span><span class="s4">= </span><span class="s8">0</span><span class="s4">;</span>
+
+                        <span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">declarations</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">declaration </span><span class="s4">=&gt; {</span>
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">declaration</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ObjectPattern&quot;</span><span class="s4">) {</span>
+                                <span class="s2">totalDeclarationsCount </span><span class="s4">+= </span><span class="s2">declaration</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">properties</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+                            <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">declaration</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ArrayPattern&quot;</span><span class="s4">) {</span>
+                                <span class="s2">totalDeclarationsCount </span><span class="s4">+= </span><span class="s2">declaration</span><span class="s4">.</span><span class="s2">id</span><span class="s4">.</span><span class="s2">elements</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+                            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                                <span class="s2">totalDeclarationsCount </span><span class="s4">+= </span><span class="s8">1</span><span class="s4">;</span>
+                            <span class="s4">}</span>
+                        <span class="s4">});</span>
+
+                        <span class="s2">shouldFix </span><span class="s4">= </span><span class="s2">shouldFix </span><span class="s4">&amp;&amp; (</span><span class="s2">reportCount </span><span class="s4">=== </span><span class="s2">totalDeclarationsCount</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+
+                <span class="s2">nodesToReport</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">node </span><span class="s4">=&gt; {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                        <span class="s2">node</span><span class="s4">,</span>
+                        <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;useConst&quot;</span><span class="s4">,</span>
+                        <span class="s2">data</span><span class="s4">: </span><span class="s2">node</span><span class="s4">,</span>
+                        <span class="s2">fix</span><span class="s4">: </span><span class="s2">shouldFix</span>
+                            <span class="s4">? </span><span class="s2">fixer </span><span class="s4">=&gt; {</span>
+                                <span class="s6">const </span><span class="s2">letKeywordToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getFirstToken</span><span class="s4">(</span><span class="s2">varDeclParent</span><span class="s4">, </span><span class="s2">t </span><span class="s4">=&gt; </span><span class="s2">t</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">kind</span><span class="s4">);</span>
+
+                                <span class="s0">/**</span>
+                                 <span class="s0">* Extend the replacement range to the whole declaration,</span>
+                                 <span class="s0">* in order to prevent other fixes in the same pass</span>
+                                 <span class="s0">* https://github.com/eslint/eslint/issues/13899</span>
+                                 <span class="s0">*/</span>
+                                <span class="s6">return new </span><span class="s2">FixTracker</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">)</span>
+                                    <span class="s4">.</span><span class="s2">retainRange</span><span class="s4">(</span><span class="s2">varDeclParent</span><span class="s4">.</span><span class="s2">range</span><span class="s4">)</span>
+                                    <span class="s4">.</span><span class="s2">replaceTextRange</span><span class="s4">(</span><span class="s2">letKeywordToken</span><span class="s4">.</span><span class="s2">range</span><span class="s4">, </span><span class="s3">&quot;const&quot;</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+                            <span class="s4">: </span><span class="s6">null</span>
+                    <span class="s4">});</span>
+                <span class="s4">});</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s3">&quot;Program:exit&quot;</span><span class="s4">() {</span>
+                <span class="s2">groupByDestructuring</span><span class="s4">(</span><span class="s2">variables</span><span class="s4">, </span><span class="s2">ignoreReadBeforeAssign</span><span class="s4">).</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">checkGroup</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">VariableDeclaration</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">kind </span><span class="s4">=== </span><span class="s3">&quot;let&quot; </span><span class="s4">&amp;&amp; !</span><span class="s2">isInitOfForStatement</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+                    <span class="s2">variables</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">...sourceCode</span><span class="s4">.</span><span class="s2">getDeclaredVariables</span><span class="s4">(</span><span class="s2">node</span><span class="s4">));</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

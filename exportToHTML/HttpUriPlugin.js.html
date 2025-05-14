@@ -1,0 +1,1317 @@
+<html>
+<head>
+<title>HttpUriPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+HttpUriPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">EventEmitter </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;events&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">extname</span><span class="s3">, </span><span class="s1">basename </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;path&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">URL </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;url&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">createGunzip</span><span class="s3">, </span><span class="s1">createBrotliDecompress</span><span class="s3">, </span><span class="s1">createInflate </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;zlib&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">NormalModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../NormalModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createSchemaValidation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/create-schema-validation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createHash </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/createHash&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">mkdirp</span><span class="s3">, </span><span class="s1">dirname</span><span class="s3">, </span><span class="s1">join </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/fs&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">memoize </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/memoize&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;http&quot;).IncomingMessage} IncomingMessage */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;http&quot;).RequestOptions} RequestOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;net&quot;).Socket} Socket */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;stream&quot;).Readable} Readable */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/plugins/schemes/HttpUriPlugin&quot;).HttpUriPluginOptions} HttpUriPluginOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../FileSystemInfo&quot;).Snapshot} Snapshot */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;).BuildInfo} BuildInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../NormalModuleFactory&quot;).ResourceDataWithData} ResourceDataWithData */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/fs&quot;).IntermediateFileSystem} IntermediateFileSystem */</span>
+
+<span class="s4">const </span><span class="s1">getHttp </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;http&quot;</span><span class="s3">));</span>
+<span class="s4">const </span><span class="s1">getHttps </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;https&quot;</span><span class="s3">));</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{typeof import(&quot;http&quot;) | typeof import(&quot;https&quot;)} request request</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | { toString: () =&gt; string } | undefined} proxy proxy</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(url: URL, requestOptions: RequestOptions, callback: (incomingMessage: IncomingMessage) =&gt; void) =&gt; EventEmitter} fn</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">proxyFetch </span><span class="s3">= (</span><span class="s1">request</span><span class="s3">, </span><span class="s1">proxy</span><span class="s3">) =&gt; (</span><span class="s1">url</span><span class="s3">, </span><span class="s1">options</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">eventEmitter </span><span class="s3">= </span><span class="s4">new </span><span class="s1">EventEmitter</span><span class="s3">();</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Socket=} socket socket</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">doRequest </span><span class="s3">= </span><span class="s1">socket </span><span class="s3">=&gt; {</span>
+		<span class="s1">request</span>
+			<span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, { </span><span class="s1">...options</span><span class="s3">, </span><span class="s1">...</span><span class="s3">(</span><span class="s1">socket </span><span class="s3">&amp;&amp; { </span><span class="s1">socket </span><span class="s3">}) }, </span><span class="s1">callback</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">eventEmitter</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span><span class="s1">eventEmitter</span><span class="s3">, </span><span class="s2">&quot;error&quot;</span><span class="s3">));</span>
+	<span class="s3">};</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">proxy</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">hostname</span><span class="s3">: </span><span class="s1">host</span><span class="s3">, </span><span class="s1">port </span><span class="s3">} = </span><span class="s4">new </span><span class="s1">URL</span><span class="s3">(</span><span class="s1">proxy</span><span class="s3">);</span>
+
+		<span class="s1">getHttp</span><span class="s3">()</span>
+			<span class="s3">.</span><span class="s1">request</span><span class="s3">({</span>
+				<span class="s1">host</span><span class="s3">, </span><span class="s0">// IP address of proxy server</span>
+				<span class="s1">port</span><span class="s3">, </span><span class="s0">// port of proxy server</span>
+				<span class="s1">method</span><span class="s3">: </span><span class="s2">&quot;CONNECT&quot;</span><span class="s3">,</span>
+				<span class="s1">path</span><span class="s3">: </span><span class="s1">url</span><span class="s3">.</span><span class="s1">host</span>
+			<span class="s3">})</span>
+			<span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;connect&quot;</span><span class="s3">, (</span><span class="s1">res</span><span class="s3">, </span><span class="s1">socket</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode </span><span class="s3">=== </span><span class="s7">200</span><span class="s3">) {</span>
+					<span class="s0">// connected to proxy server</span>
+					<span class="s1">doRequest</span><span class="s3">(</span><span class="s1">socket</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">})</span>
+			<span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+				<span class="s1">eventEmitter</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span>
+					<span class="s2">&quot;error&quot;</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+						<span class="s2">`Failed to connect to proxy server &quot;</span><span class="s1">$</span><span class="s3">{</span><span class="s1">proxy</span><span class="s3">}</span><span class="s2">&quot;: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">err</span><span class="s3">.</span><span class="s1">message</span><span class="s3">}</span><span class="s2">`</span>
+					<span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s3">})</span>
+			<span class="s3">.</span><span class="s1">end</span><span class="s3">();</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s1">doRequest</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s4">return </span><span class="s1">eventEmitter</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{() =&gt; void} InProgressWriteItem */</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{InProgressWriteItem[] | undefined} */</span>
+<span class="s4">let </span><span class="s1">inProgressWrite</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">validate </span><span class="s3">= </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/schemes/HttpUriPlugin.check.js&quot;</span><span class="s3">),</span>
+	<span class="s3">() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/schemes/HttpUriPlugin.json&quot;</span><span class="s3">),</span>
+	<span class="s3">{</span>
+		<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;Http Uri Plugin&quot;</span><span class="s3">,</span>
+		<span class="s1">baseDataPath</span><span class="s3">: </span><span class="s2">&quot;options&quot;</span>
+	<span class="s3">}</span>
+<span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} str path</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} safe path</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">toSafePath </span><span class="s3">= </span><span class="s1">str </span><span class="s3">=&gt;</span>
+	<span class="s1">str</span>
+		<span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">)</span>
+		<span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/[^a-zA-Z0-9._-]+/g</span><span class="s3">, </span><span class="s2">&quot;_&quot;</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Buffer} content content</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} integrity</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">computeIntegrity </span><span class="s3">= </span><span class="s1">content </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">createHash</span><span class="s3">(</span><span class="s2">&quot;sha512&quot;</span><span class="s3">);</span>
+	<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">content</span><span class="s3">);</span>
+	<span class="s4">const </span><span class="s1">integrity </span><span class="s3">= </span><span class="s2">`sha512-</span><span class="s1">$</span><span class="s3">{</span><span class="s1">hash</span><span class="s3">.</span><span class="s1">digest</span><span class="s3">(</span><span class="s2">&quot;base64&quot;</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s1">integrity</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Buffer} content content</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} integrity integrity</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, if integrity matches</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">verifyIntegrity </span><span class="s3">= (</span><span class="s1">content</span><span class="s3">, </span><span class="s1">integrity</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">integrity </span><span class="s3">=== </span><span class="s2">&quot;ignore&quot;</span><span class="s3">) </span><span class="s4">return true</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s1">computeIntegrity</span><span class="s3">(</span><span class="s1">content</span><span class="s3">) === </span><span class="s1">integrity</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} str input</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Record&lt;string, string&gt;} parsed</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">parseKeyValuePairs </span><span class="s3">= </span><span class="s1">str </span><span class="s3">=&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, string&gt;} */</span>
+	<span class="s4">const </span><span class="s1">result </span><span class="s3">= {};</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of str</span><span class="s3">.</span><span class="s1">split</span><span class="s3">(</span><span class="s2">&quot;,&quot;</span><span class="s3">)) {</span>
+		<span class="s4">const </span><span class="s1">i </span><span class="s3">= </span><span class="s1">item</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s2">&quot;=&quot;</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">i </span><span class="s3">&gt;= </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s1">item</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s1">i</span><span class="s3">).</span><span class="s1">trim</span><span class="s3">();</span>
+			<span class="s4">const </span><span class="s1">value </span><span class="s3">= </span><span class="s1">item</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">).</span><span class="s1">trim</span><span class="s3">();</span>
+			<span class="s1">result</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">value</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s1">item</span><span class="s3">.</span><span class="s1">trim</span><span class="s3">();</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">key</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+			<span class="s1">result</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">key</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | undefined} cacheControl Cache-Control header</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} requestTime timestamp of request</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{{storeCache: boolean, storeLock: boolean, validUntil: number}} Logic for storing in cache and lockfile cache</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">parseCacheControl </span><span class="s3">= (</span><span class="s1">cacheControl</span><span class="s3">, </span><span class="s1">requestTime</span><span class="s3">) =&gt; {</span>
+	<span class="s0">// When false resource is not stored in cache</span>
+	<span class="s4">let </span><span class="s1">storeCache </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+	<span class="s0">// When false resource is not stored in lockfile cache</span>
+	<span class="s4">let </span><span class="s1">storeLock </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+	<span class="s0">// Resource is only revalidated, after that timestamp and when upgrade is chosen</span>
+	<span class="s4">let </span><span class="s1">validUntil </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheControl</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">parsed </span><span class="s3">= </span><span class="s1">parseKeyValuePairs</span><span class="s3">(</span><span class="s1">cacheControl</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">parsed</span><span class="s3">[</span><span class="s2">&quot;no-cache&quot;</span><span class="s3">]) </span><span class="s1">storeCache </span><span class="s3">= </span><span class="s1">storeLock </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">parsed</span><span class="s3">[</span><span class="s2">&quot;max-age&quot;</span><span class="s3">] &amp;&amp; !</span><span class="s1">Number</span><span class="s3">.</span><span class="s1">isNaN</span><span class="s3">(</span><span class="s1">Number</span><span class="s3">(</span><span class="s1">parsed</span><span class="s3">[</span><span class="s2">&quot;max-age&quot;</span><span class="s3">]))) {</span>
+			<span class="s1">validUntil </span><span class="s3">= </span><span class="s1">requestTime </span><span class="s3">+ </span><span class="s1">Number</span><span class="s3">(</span><span class="s1">parsed</span><span class="s3">[</span><span class="s2">&quot;max-age&quot;</span><span class="s3">]) * </span><span class="s7">1000</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">parsed</span><span class="s3">[</span><span class="s2">&quot;must-revalidate&quot;</span><span class="s3">]) </span><span class="s1">validUntil </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s3">{</span>
+		<span class="s1">storeLock</span><span class="s3">,</span>
+		<span class="s1">storeCache</span><span class="s3">,</span>
+		<span class="s1">validUntil</span>
+	<span class="s3">};</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} LockfileEntry</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} resolved</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} integrity</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} contentType</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LockfileEntry} a first lockfile entry</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LockfileEntry} b second lockfile entry</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true when equal, otherwise false</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">areLockfileEntriesEqual </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt;</span>
+	<span class="s1">a</span><span class="s3">.</span><span class="s1">resolved </span><span class="s3">=== </span><span class="s1">b</span><span class="s3">.</span><span class="s1">resolved </span><span class="s3">&amp;&amp;</span>
+	<span class="s1">a</span><span class="s3">.</span><span class="s1">integrity </span><span class="s3">=== </span><span class="s1">b</span><span class="s3">.</span><span class="s1">integrity </span><span class="s3">&amp;&amp;</span>
+	<span class="s1">a</span><span class="s3">.</span><span class="s1">contentType </span><span class="s3">=== </span><span class="s1">b</span><span class="s3">.</span><span class="s1">contentType</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LockfileEntry} entry lockfile entry</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{`resolved: ${string}, integrity: ${string}, contentType: ${*}`} stringified entry</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">entryToString </span><span class="s3">= </span><span class="s1">entry </span><span class="s3">=&gt;</span>
+	<span class="s2">`resolved: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">}</span><span class="s2">, integrity: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span><span class="s3">}</span><span class="s2">, contentType: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">contentType</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">Lockfile </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">version </span><span class="s3">= </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, LockfileEntry | &quot;ignore&quot; | &quot;no-cache&quot;&gt;} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">entries </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} content content of the lockfile</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Lockfile} lockfile</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">parse</span><span class="s3">(</span><span class="s1">content</span><span class="s3">) {</span>
+		<span class="s0">// TODO handle merge conflicts</span>
+		<span class="s4">const </span><span class="s1">data </span><span class="s3">= </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">parse</span><span class="s3">(</span><span class="s1">content</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">version </span><span class="s3">!== </span><span class="s7">1</span><span class="s3">)</span>
+			<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">`Unsupported lockfile version </span><span class="s1">$</span><span class="s3">{</span><span class="s1">data</span><span class="s3">.</span><span class="s1">version</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">lockfile </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Lockfile</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">data</span><span class="s3">)) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">key </span><span class="s3">=== </span><span class="s2">&quot;version&quot;</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">entry </span><span class="s3">= </span><span class="s1">data</span><span class="s3">[</span><span class="s1">key</span><span class="s3">];</span>
+			<span class="s1">lockfile</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+				<span class="s1">key</span><span class="s3">,</span>
+				<span class="s4">typeof </span><span class="s1">entry </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span>
+					<span class="s3">? </span><span class="s1">entry</span>
+					<span class="s3">: {</span>
+							<span class="s1">resolved</span><span class="s3">: </span><span class="s1">key</span><span class="s3">,</span>
+							<span class="s1">...entry</span>
+						<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">lockfile</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} stringified lockfile</span>
+	 <span class="s5">*/</span>
+	<span class="s1">toString</span><span class="s3">() {</span>
+		<span class="s4">let </span><span class="s1">str </span><span class="s3">= </span><span class="s2">&quot;{</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">entries </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">).</span><span class="s1">sort</span><span class="s3">(([</span><span class="s1">a</span><span class="s3">], [</span><span class="s1">b</span><span class="s3">]) =&gt;</span>
+			<span class="s1">a </span><span class="s3">&lt; </span><span class="s1">b </span><span class="s3">? -</span><span class="s7">1 </span><span class="s3">: </span><span class="s7">1</span>
+		<span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">] </span><span class="s1">of entries</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">entry </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+				<span class="s1">str </span><span class="s3">+= </span><span class="s2">`  </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">key</span><span class="s3">)}</span><span class="s2">: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">)}</span><span class="s2">,</span><span class="s4">\n</span><span class="s2">`</span><span class="s3">;</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">str </span><span class="s3">+= </span><span class="s2">`  </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">key</span><span class="s3">)}</span><span class="s2">: { `</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved </span><span class="s3">!== </span><span class="s1">key</span><span class="s3">)</span>
+					<span class="s1">str </span><span class="s3">+= </span><span class="s2">`&quot;resolved&quot;: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">)}</span><span class="s2">, `</span><span class="s3">;</span>
+				<span class="s1">str </span><span class="s3">+= </span><span class="s2">`&quot;integrity&quot;: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+					<span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span>
+				<span class="s3">)}</span><span class="s2">, &quot;contentType&quot;: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">contentType</span><span class="s3">)} </span><span class="s2">},</span><span class="s4">\n</span><span class="s2">`</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s1">str </span><span class="s3">+= </span><span class="s2">`  &quot;version&quot;: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">version</span><span class="s3">}</span><span class="s4">\n</span><span class="s2">}</span><span class="s4">\n</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">str</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(err: Error | null, result?: R) =&gt; void}  FnWithoutKeyCallback</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(callback: FnWithoutKeyCallback&lt;R&gt;) =&gt; void} FnWithoutKey</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FnWithoutKey&lt;R&gt;} fn function</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{FnWithoutKey&lt;R&gt;} cached function</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">cachedWithoutKey </span><span class="s3">= </span><span class="s1">fn </span><span class="s3">=&gt; {</span>
+	<span class="s4">let </span><span class="s1">inFlight </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Error | undefined} */</span>
+	<span class="s4">let </span><span class="s1">cachedError</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{R | undefined} */</span>
+	<span class="s4">let </span><span class="s1">cachedResult</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{FnWithoutKeyCallback&lt;R&gt;[] | undefined} */</span>
+	<span class="s4">let </span><span class="s1">cachedCallbacks</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s1">callback </span><span class="s3">=&gt; {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">inFlight</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedResult </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">cachedResult</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedError </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">cachedError</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedCallbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">cachedCallbacks </span><span class="s3">= [</span><span class="s1">callback</span><span class="s3">];</span>
+			<span class="s4">else </span><span class="s1">cachedCallbacks</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s1">inFlight </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s1">fn</span><span class="s3">((</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s1">cachedError </span><span class="s3">= </span><span class="s1">err</span><span class="s3">;</span>
+			<span class="s4">else </span><span class="s1">cachedResult </span><span class="s3">= </span><span class="s1">result</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">callbacks </span><span class="s3">= </span><span class="s1">cachedCallbacks</span><span class="s3">;</span>
+			<span class="s1">cachedCallbacks </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+			<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">callbacks </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cb of callbacks</span><span class="s3">) </span><span class="s1">cb</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">};</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(err: Error | null, result?: R) =&gt; void} FnWithKeyCallback</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(item: T, callback: FnWithKeyCallback&lt;R&gt;) =&gt; void} FnWithKey</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FnWithKey&lt;T, R&gt;} fn function</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FnWithKey&lt;T, R&gt;=} forceFn function for the second try</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(FnWithKey&lt;T, R&gt;) &amp; { force: FnWithKey&lt;T, R&gt; }} cached function</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">cachedWithKey </span><span class="s3">= (</span><span class="s1">fn</span><span class="s3">, </span><span class="s1">forceFn </span><span class="s3">= </span><span class="s1">fn</span><span class="s3">) =&gt; {</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+	 <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{{ result?: R, error?: Error, callbacks?: FnWithKeyCallback&lt;R&gt;[], force?: true }} CacheEntry</span>
+	 <span class="s5">*/</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;T, CacheEntry&lt;R&gt;&gt;} */</span>
+	<span class="s4">const </span><span class="s1">cache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} arg arg</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FnWithKeyCallback&lt;R&gt;} callback callback</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">resultFn </span><span class="s3">= (</span><span class="s1">arg</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+		<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">result </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+				<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">result</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">error </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">error</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">callbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">callbacks </span><span class="s3">= [</span><span class="s1">callback</span><span class="s3">];</span>
+			<span class="s4">else </span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">callbacks</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{CacheEntry&lt;R&gt;} */</span>
+		<span class="s4">const </span><span class="s1">newCacheEntry </span><span class="s3">= {</span>
+			<span class="s1">result</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">error</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">callbacks</span><span class="s3">: </span><span class="s1">undefined</span>
+		<span class="s3">};</span>
+		<span class="s1">cache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">, </span><span class="s1">newCacheEntry</span><span class="s3">);</span>
+		<span class="s1">fn</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">error </span><span class="s3">= </span><span class="s1">err</span><span class="s3">;</span>
+			<span class="s4">else </span><span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">result </span><span class="s3">= </span><span class="s1">result</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">callbacks </span><span class="s3">= </span><span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">callbacks</span><span class="s3">;</span>
+			<span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">callbacks </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+			<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">callbacks </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cb of callbacks</span><span class="s3">) </span><span class="s1">cb</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">};</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} arg arg</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FnWithKeyCallback&lt;R&gt;} callback callback</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">resultFn</span><span class="s3">.</span><span class="s1">force </span><span class="s3">= (</span><span class="s1">arg</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+		<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">force</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">result </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+				<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">result</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">error </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">error</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">callbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">callbacks </span><span class="s3">= [</span><span class="s1">callback</span><span class="s3">];</span>
+			<span class="s4">else </span><span class="s1">cacheEntry</span><span class="s3">.</span><span class="s1">callbacks</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{CacheEntry&lt;R&gt;} */</span>
+		<span class="s4">const </span><span class="s1">newCacheEntry </span><span class="s3">= {</span>
+			<span class="s1">result</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">error</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">callbacks</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">force</span><span class="s3">: </span><span class="s4">true</span>
+		<span class="s3">};</span>
+		<span class="s1">cache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">, </span><span class="s1">newCacheEntry</span><span class="s3">);</span>
+		<span class="s1">forceFn</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">error </span><span class="s3">= </span><span class="s1">err</span><span class="s3">;</span>
+			<span class="s4">else </span><span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">result </span><span class="s3">= </span><span class="s1">result</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">callbacks </span><span class="s3">= </span><span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">callbacks</span><span class="s3">;</span>
+			<span class="s1">newCacheEntry</span><span class="s3">.</span><span class="s1">callbacks </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+			<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">callbacks </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cb of callbacks</span><span class="s3">) </span><span class="s1">cb</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">};</span>
+	<span class="s4">return </span><span class="s1">resultFn</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} LockfileCache</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Lockfile} lockfile lockfile</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Snapshot} snapshot snapshot</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ResolveContentResult</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{LockfileEntry} entry lockfile entry</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Buffer} content content</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} storeLock need store lockfile</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{ storeCache: boolean, storeLock: boolean, validUntil: number, etag: string | undefined, fresh: boolean }} FetchResultMeta */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{FetchResultMeta &amp; { location: string }} RedirectFetchResult */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{FetchResultMeta &amp; { entry: LockfileEntry, content: Buffer }} ContentFetchResult */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{RedirectFetchResult | ContentFetchResult} FetchResult */</span>
+
+<span class="s4">class </span><span class="s1">HttpUriPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{HttpUriPluginOptions} options options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s1">validate</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_lockfileLocation </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">lockfileLocation</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheLocation </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">cacheLocation</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_upgrade </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">upgrade</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_frozen </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">frozen</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_allowedUris </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">allowedUris</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_proxy </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">proxy</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">proxy </span><span class="s3">=</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_proxy </span><span class="s3">|| </span><span class="s1">process</span><span class="s3">.</span><span class="s1">env</span><span class="s3">.</span><span class="s1">http_proxy </span><span class="s3">|| </span><span class="s1">process</span><span class="s3">.</span><span class="s1">env</span><span class="s3">.</span><span class="s1">HTTP_PROXY</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">schemes </span><span class="s3">= [</span>
+			<span class="s3">{</span>
+				<span class="s1">scheme</span><span class="s3">: </span><span class="s2">&quot;http&quot;</span><span class="s3">,</span>
+				<span class="s1">fetch</span><span class="s3">: </span><span class="s1">proxyFetch</span><span class="s3">(</span><span class="s1">getHttp</span><span class="s3">(), </span><span class="s1">proxy</span><span class="s3">)</span>
+			<span class="s3">},</span>
+			<span class="s3">{</span>
+				<span class="s1">scheme</span><span class="s3">: </span><span class="s2">&quot;https&quot;</span><span class="s3">,</span>
+				<span class="s1">fetch</span><span class="s3">: </span><span class="s1">proxyFetch</span><span class="s3">(</span><span class="s1">getHttps</span><span class="s3">(), </span><span class="s1">proxy</span><span class="s3">)</span>
+			<span class="s3">}</span>
+		<span class="s3">];</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LockfileCache} */</span>
+		<span class="s4">let </span><span class="s1">lockfileCache</span><span class="s3">;</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;HttpUriPlugin&quot;</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">intermediateFs </span><span class="s3">=</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{IntermediateFileSystem} */</span>
+					<span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">intermediateFileSystem</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">fs </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">inputFileSystem</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">cache </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getCache</span><span class="s3">(</span><span class="s2">&quot;webpack.HttpUriPlugin&quot;</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s2">&quot;webpack.HttpUriPlugin&quot;</span><span class="s3">);</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+				<span class="s4">const </span><span class="s1">lockfileLocation </span><span class="s3">=</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">_lockfileLocation </span><span class="s3">||</span>
+					<span class="s1">join</span><span class="s3">(</span>
+						<span class="s1">intermediateFs</span><span class="s3">,</span>
+						<span class="s1">compiler</span><span class="s3">.</span><span class="s1">context</span><span class="s3">,</span>
+						<span class="s1">compiler</span><span class="s3">.</span><span class="s1">name</span>
+							<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">toSafePath</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">name</span><span class="s3">)}</span><span class="s2">.webpack.lock`</span>
+							<span class="s3">: </span><span class="s2">&quot;webpack.lock&quot;</span>
+					<span class="s3">);</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string | false} */</span>
+				<span class="s4">const </span><span class="s1">cacheLocation </span><span class="s3">=</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheLocation </span><span class="s3">!== </span><span class="s1">undefined</span>
+						<span class="s3">? </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheLocation</span>
+						<span class="s3">: </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">lockfileLocation</span><span class="s3">}</span><span class="s2">.data`</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">upgrade </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_upgrade </span><span class="s3">|| </span><span class="s4">false</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">frozen </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_frozen </span><span class="s3">|| </span><span class="s4">false</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">hashFunction </span><span class="s3">= </span><span class="s2">&quot;sha512&quot;</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">hashDigest </span><span class="s3">= </span><span class="s2">&quot;hex&quot;</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">hashDigestLength </span><span class="s3">= </span><span class="s7">20</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">allowedUris </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_allowedUris</span><span class="s3">;</span>
+
+				<span class="s4">let </span><span class="s1">warnedAboutEol </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, string&gt;} */</span>
+				<span class="s4">const </span><span class="s1">cacheKeyCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url the url</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} the key</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">getCacheKey </span><span class="s3">= </span><span class="s1">url </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">cachedResult </span><span class="s3">= </span><span class="s1">cacheKeyCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">url</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedResult </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cachedResult</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">_getCacheKey</span><span class="s3">(</span><span class="s1">url</span><span class="s3">);</span>
+					<span class="s1">cacheKeyCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+					<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+				<span class="s3">};</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url the url</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} the key</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">_getCacheKey </span><span class="s3">= </span><span class="s1">url </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">parsedUrl </span><span class="s3">= </span><span class="s4">new </span><span class="s1">URL</span><span class="s3">(</span><span class="s1">url</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">folder </span><span class="s3">= </span><span class="s1">toSafePath</span><span class="s3">(</span><span class="s1">parsedUrl</span><span class="s3">.</span><span class="s1">origin</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">toSafePath</span><span class="s3">(</span><span class="s1">parsedUrl</span><span class="s3">.</span><span class="s1">pathname</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">query </span><span class="s3">= </span><span class="s1">toSafePath</span><span class="s3">(</span><span class="s1">parsedUrl</span><span class="s3">.</span><span class="s1">search</span><span class="s3">);</span>
+					<span class="s4">let </span><span class="s1">ext </span><span class="s3">= </span><span class="s1">extname</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">ext</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">20</span><span class="s3">) </span><span class="s1">ext </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">basename </span><span class="s3">= </span><span class="s1">ext </span><span class="s3">? </span><span class="s1">name</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, -</span><span class="s1">ext</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) : </span><span class="s1">name</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">createHash</span><span class="s3">(</span><span class="s1">hashFunction</span><span class="s3">);</span>
+					<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">url</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">digest </span><span class="s3">= </span><span class="s1">hash</span><span class="s3">.</span><span class="s1">digest</span><span class="s3">(</span><span class="s1">hashDigest</span><span class="s3">).</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s1">hashDigestLength</span><span class="s3">);</span>
+					<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">folder</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(-</span><span class="s7">50</span><span class="s3">)}</span><span class="s2">/</span><span class="s1">$</span><span class="s3">{</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">basename</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span>
+						<span class="s1">query </span><span class="s3">? </span><span class="s2">`_</span><span class="s1">$</span><span class="s3">{</span><span class="s1">query</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s2">&quot;&quot;</span>
+					<span class="s3">}</span><span class="s2">`</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, </span><span class="s7">150</span><span class="s3">)}</span><span class="s2">_</span><span class="s1">$</span><span class="s3">{</span><span class="s1">digest</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">ext</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+				<span class="s3">};</span>
+
+				<span class="s4">const </span><span class="s1">getLockfile </span><span class="s3">= </span><span class="s1">cachedWithoutKey</span><span class="s3">(</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err: Error | null, lockfile?: Lockfile) =&gt; void} callback callback</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s1">callback </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">readLockfile </span><span class="s3">= () =&gt; {</span>
+							<span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">readFile</span><span class="s3">(</span><span class="s1">lockfileLocation</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">buffer</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err </span><span class="s3">&amp;&amp; </span><span class="s1">err</span><span class="s3">.</span><span class="s1">code </span><span class="s3">!== </span><span class="s2">&quot;ENOENT&quot;</span><span class="s3">) {</span>
+									<span class="s1">compilation</span><span class="s3">.</span><span class="s1">missingDependencies</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">lockfileLocation</span><span class="s3">);</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">lockfileLocation</span><span class="s3">);</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">fileSystemInfo</span><span class="s3">.</span><span class="s1">createSnapshot</span><span class="s3">(</span>
+									<span class="s1">compiler</span><span class="s3">.</span><span class="s1">fsStartTime</span><span class="s3">,</span>
+									<span class="s1">buffer </span><span class="s3">? [</span><span class="s1">lockfileLocation</span><span class="s3">] : [],</span>
+									<span class="s3">[],</span>
+									<span class="s1">buffer </span><span class="s3">? [] : [</span><span class="s1">lockfileLocation</span><span class="s3">],</span>
+									<span class="s3">{ </span><span class="s1">timestamp</span><span class="s3">: </span><span class="s4">true </span><span class="s3">},</span>
+									<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">s</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s4">const </span><span class="s1">lockfile </span><span class="s3">= </span><span class="s1">buffer</span>
+											<span class="s3">? </span><span class="s1">Lockfile</span><span class="s3">.</span><span class="s1">parse</span><span class="s3">(</span><span class="s1">buffer</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;utf-8&quot;</span><span class="s3">))</span>
+											<span class="s3">: </span><span class="s4">new </span><span class="s1">Lockfile</span><span class="s3">();</span>
+										<span class="s1">lockfileCache </span><span class="s3">= {</span>
+											<span class="s1">lockfile</span><span class="s3">,</span>
+											<span class="s1">snapshot</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Snapshot} */ </span><span class="s3">(</span><span class="s1">s</span><span class="s3">)</span>
+										<span class="s3">};</span>
+										<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">lockfile</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">);</span>
+							<span class="s3">});</span>
+						<span class="s3">};</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">lockfileCache</span><span class="s3">) {</span>
+							<span class="s1">compilation</span><span class="s3">.</span><span class="s1">fileSystemInfo</span><span class="s3">.</span><span class="s1">checkSnapshotValid</span><span class="s3">(</span>
+								<span class="s1">lockfileCache</span><span class="s3">.</span><span class="s1">snapshot</span><span class="s3">,</span>
+								<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">valid</span><span class="s3">) =&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">valid</span><span class="s3">) </span><span class="s4">return </span><span class="s1">readLockfile</span><span class="s3">();</span>
+									<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">lockfileCache</span><span class="s3">.</span><span class="s1">lockfile</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">);</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s1">readLockfile</span><span class="s3">();</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+
+				<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;string, LockfileEntry | &quot;ignore&quot; | &quot;no-cache&quot;&gt;} LockfileUpdates */</span>
+
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LockfileUpdates | undefined} */</span>
+				<span class="s4">let </span><span class="s1">lockfileUpdates</span><span class="s3">;</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Lockfile} lockfile lockfile instance</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url url to store</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LockfileEntry | &quot;ignore&quot; | &quot;no-cache&quot;} entry lockfile entry</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">storeLockEntry </span><span class="s3">= (</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s1">oldEntry </span><span class="s3">= </span><span class="s1">lockfile</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">url</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">lockfileUpdates </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">lockfileUpdates </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+					<span class="s1">lockfileUpdates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">);</span>
+					<span class="s1">lockfile</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">oldEntry</span><span class="s3">) {</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">added to lockfile`</span><span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">oldEntry </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">entry </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">updated in lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">oldEntry</span><span class="s3">} </span><span class="s2">-&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+								<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">updated in lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">oldEntry</span><span class="s3">} </span><span class="s2">-&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">}</span><span class="s2">`</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">entry </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">updated in lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">oldEntry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">} </span><span class="s2">-&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">}</span><span class="s2">`</span>
+						<span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">oldEntry</span><span class="s3">.</span><span class="s1">resolved </span><span class="s3">!== </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">) {</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">updated in lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">oldEntry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">} </span><span class="s2">-&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">}</span><span class="s2">`</span>
+						<span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">oldEntry</span><span class="s3">.</span><span class="s1">integrity </span><span class="s3">!== </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span><span class="s3">) {</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">updated in lockfile: content changed`</span><span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">oldEntry</span><span class="s3">.</span><span class="s1">contentType </span><span class="s3">!== </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">contentType</span><span class="s3">) {</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">updated in lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">oldEntry</span><span class="s3">.</span><span class="s1">contentType</span><span class="s3">} </span><span class="s2">-&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">contentType</span><span class="s3">}</span><span class="s2">`</span>
+						<span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">updated in lockfile`</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">};</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Lockfile} lockfile lockfile</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url url</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveContentResult} result result</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err: Error | null, result?: ResolveContentResult) =&gt; void} callback callback</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">storeResult </span><span class="s3">= (</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">result</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">result</span><span class="s3">.</span><span class="s1">storeLock</span><span class="s3">) {</span>
+						<span class="s1">storeLockEntry</span><span class="s3">(</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">cacheLocation </span><span class="s3">|| !</span><span class="s1">result</span><span class="s3">.</span><span class="s1">content</span><span class="s3">)</span>
+							<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s1">getCacheKey</span><span class="s3">(</span><span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">filePath </span><span class="s3">= </span><span class="s1">join</span><span class="s3">(</span><span class="s1">intermediateFs</span><span class="s3">, </span><span class="s1">cacheLocation</span><span class="s3">, </span><span class="s1">key</span><span class="s3">);</span>
+						<span class="s1">mkdirp</span><span class="s3">(</span><span class="s1">intermediateFs</span><span class="s3">, </span><span class="s1">dirname</span><span class="s3">(</span><span class="s1">intermediateFs</span><span class="s3">, </span><span class="s1">filePath</span><span class="s3">), </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+							<span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">writeFile</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">, </span><span class="s1">result</span><span class="s3">.</span><span class="s1">content</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+							<span class="s3">});</span>
+						<span class="s3">});</span>
+					<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+						<span class="s1">storeLockEntry</span><span class="s3">(</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s2">&quot;no-cache&quot;</span><span class="s3">);</span>
+						<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">};</span>
+
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">{ </span><span class="s1">scheme</span><span class="s3">, </span><span class="s1">fetch </span><span class="s3">} </span><span class="s1">of schemes</span><span class="s3">) {</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url URL</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | null} integrity integrity</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err: Error | null, resolveContentResult?: ResolveContentResult) =&gt; void} callback callback</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">resolveContent </span><span class="s3">= (</span><span class="s1">url</span><span class="s3">, </span><span class="s1">integrity</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Error | null} err error</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{TODO} result result result</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+						 <span class="s5">*/</span>
+						<span class="s4">const </span><span class="s1">handleResult </span><span class="s3">= (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;location&quot; </span><span class="s4">in </span><span class="s1">result</span><span class="s3">) {</span>
+								<span class="s4">return </span><span class="s1">resolveContent</span><span class="s3">(</span>
+									<span class="s1">result</span><span class="s3">.</span><span class="s1">location</span><span class="s3">,</span>
+									<span class="s1">integrity</span><span class="s3">,</span>
+									<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">innerResult</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s4">const </span><span class="s3">{ </span><span class="s1">entry</span><span class="s3">, </span><span class="s1">content</span><span class="s3">, </span><span class="s1">storeLock </span><span class="s3">} =</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveContentResult} */ </span><span class="s3">(</span><span class="s1">innerResult</span><span class="s3">);</span>
+										<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, {</span>
+											<span class="s1">entry</span><span class="s3">,</span>
+											<span class="s1">content</span><span class="s3">,</span>
+											<span class="s1">storeLock</span><span class="s3">: </span><span class="s1">storeLock </span><span class="s3">&amp;&amp; </span><span class="s1">result</span><span class="s3">.</span><span class="s1">storeLock</span>
+										<span class="s3">});</span>
+									<span class="s3">}</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s3">!</span><span class="s1">result</span><span class="s3">.</span><span class="s1">fresh </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">integrity </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity </span><span class="s3">!== </span><span class="s1">integrity </span><span class="s3">&amp;&amp;</span>
+								<span class="s3">!</span><span class="s1">verifyIntegrity</span><span class="s3">(</span><span class="s1">result</span><span class="s3">.</span><span class="s1">content</span><span class="s3">, </span><span class="s1">integrity</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">return </span><span class="s1">fetchContent</span><span class="s3">.</span><span class="s1">force</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">handleResult</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, {</span>
+								<span class="s1">entry</span><span class="s3">: </span><span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">,</span>
+								<span class="s1">content</span><span class="s3">: </span><span class="s1">result</span><span class="s3">.</span><span class="s1">content</span><span class="s3">,</span>
+								<span class="s1">storeLock</span><span class="s3">: </span><span class="s1">result</span><span class="s3">.</span><span class="s1">storeLock</span>
+							<span class="s3">});</span>
+						<span class="s3">};</span>
+						<span class="s1">fetchContent</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">handleResult</span><span class="s3">);</span>
+					<span class="s3">};</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url URL</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FetchResult | RedirectFetchResult | undefined} cachedResult result from cache</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err: Error | null, fetchResult?: FetchResult) =&gt; void} callback callback</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">fetchContentRaw </span><span class="s3">= (</span><span class="s1">url</span><span class="s3">, </span><span class="s1">cachedResult</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s1">requestTime </span><span class="s3">= </span><span class="s1">Date</span><span class="s3">.</span><span class="s1">now</span><span class="s3">();</span>
+						<span class="s1">fetch</span><span class="s3">(</span>
+							<span class="s4">new </span><span class="s1">URL</span><span class="s3">(</span><span class="s1">url</span><span class="s3">),</span>
+							<span class="s3">{</span>
+								<span class="s1">headers</span><span class="s3">: {</span>
+									<span class="s2">&quot;accept-encoding&quot;</span><span class="s3">: </span><span class="s2">&quot;gzip, deflate, br&quot;</span><span class="s3">,</span>
+									<span class="s2">&quot;user-agent&quot;</span><span class="s3">: </span><span class="s2">&quot;webpack&quot;</span><span class="s3">,</span>
+									<span class="s2">&quot;if-none-match&quot;</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */ </span><span class="s3">(</span>
+										<span class="s1">cachedResult </span><span class="s3">? </span><span class="s1">cachedResult</span><span class="s3">.</span><span class="s1">etag </span><span class="s3">|| </span><span class="s4">null </span><span class="s3">: </span><span class="s4">null</span>
+									<span class="s3">)</span>
+								<span class="s3">}</span>
+							<span class="s3">},</span>
+							<span class="s1">res </span><span class="s3">=&gt; {</span>
+								<span class="s4">const </span><span class="s1">etag </span><span class="s3">= </span><span class="s1">res</span><span class="s3">.</span><span class="s1">headers</span><span class="s3">.</span><span class="s1">etag</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">location </span><span class="s3">= </span><span class="s1">res</span><span class="s3">.</span><span class="s1">headers</span><span class="s3">.</span><span class="s1">location</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">cacheControl </span><span class="s3">= </span><span class="s1">res</span><span class="s3">.</span><span class="s1">headers</span><span class="s3">[</span><span class="s2">&quot;cache-control&quot;</span><span class="s3">];</span>
+								<span class="s4">const </span><span class="s3">{ </span><span class="s1">storeLock</span><span class="s3">, </span><span class="s1">storeCache</span><span class="s3">, </span><span class="s1">validUntil </span><span class="s3">} = </span><span class="s1">parseCacheControl</span><span class="s3">(</span>
+									<span class="s1">cacheControl</span><span class="s3">,</span>
+									<span class="s1">requestTime</span>
+								<span class="s3">);</span>
+								<span class="s5">/**</span>
+								 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Partial&lt;Pick&lt;FetchResultMeta, &quot;fresh&quot;&gt;&gt; &amp; (Pick&lt;RedirectFetchResult, &quot;location&quot;&gt; | Pick&lt;ContentFetchResult, &quot;content&quot; | &quot;entry&quot;&gt;)} partialResult result</span>
+								 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+								 <span class="s5">*/</span>
+								<span class="s4">const </span><span class="s1">finishWith </span><span class="s3">= </span><span class="s1">partialResult </span><span class="s3">=&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;location&quot; </span><span class="s4">in </span><span class="s1">partialResult</span><span class="s3">) {</span>
+										<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span>
+											<span class="s2">`GET </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode</span><span class="s3">}</span><span class="s2">] -&gt; </span><span class="s1">$</span><span class="s3">{</span><span class="s1">partialResult</span><span class="s3">.</span><span class="s1">location</span><span class="s3">}</span><span class="s2">`</span>
+										<span class="s3">);</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span>
+											<span class="s2">`GET </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode</span><span class="s3">}</span><span class="s2">] </span><span class="s1">$</span><span class="s3">{</span><span class="s1">Math</span><span class="s3">.</span><span class="s1">ceil</span><span class="s3">(</span>
+												<span class="s1">partialResult</span><span class="s3">.</span><span class="s1">content</span><span class="s3">.</span><span class="s1">length </span><span class="s3">/ </span><span class="s7">1024</span>
+											<span class="s3">)} </span><span class="s2">kB</span><span class="s1">$</span><span class="s3">{!</span><span class="s1">storeLock </span><span class="s3">? </span><span class="s2">&quot; no-cache&quot; </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">}</span><span class="s2">`</span>
+										<span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s4">const </span><span class="s1">result </span><span class="s3">= {</span>
+										<span class="s1">...partialResult</span><span class="s3">,</span>
+										<span class="s1">fresh</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+										<span class="s1">storeLock</span><span class="s3">,</span>
+										<span class="s1">storeCache</span><span class="s3">,</span>
+										<span class="s1">validUntil</span><span class="s3">,</span>
+										<span class="s1">etag</span>
+									<span class="s3">};</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">storeCache</span><span class="s3">) {</span>
+										<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+											<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">can't be stored in cache, due to Cache-Control header: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">cacheControl</span><span class="s3">}</span><span class="s2">`</span>
+										<span class="s3">);</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">cache</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span>
+										<span class="s1">url</span><span class="s3">,</span>
+										<span class="s4">null</span><span class="s3">,</span>
+										<span class="s3">{</span>
+											<span class="s1">...result</span><span class="s3">,</span>
+											<span class="s1">fresh</span><span class="s3">: </span><span class="s4">false</span>
+										<span class="s3">},</span>
+										<span class="s1">err </span><span class="s3">=&gt; {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+												<span class="s1">logger</span><span class="s3">.</span><span class="s1">warn</span><span class="s3">(</span>
+													<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">can't be stored in cache: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">err</span><span class="s3">.</span><span class="s1">message</span><span class="s3">}</span><span class="s2">`</span>
+												<span class="s3">);</span>
+												<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span><span class="s1">err</span><span class="s3">.</span><span class="s1">stack</span><span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+										<span class="s3">}</span>
+									<span class="s3">);</span>
+								<span class="s3">};</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode </span><span class="s3">=== </span><span class="s7">304</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{FetchResult} */ </span><span class="s3">(</span><span class="s1">cachedResult</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s1">result</span><span class="s3">.</span><span class="s1">validUntil </span><span class="s3">&lt; </span><span class="s1">validUntil </span><span class="s3">||</span>
+										<span class="s1">result</span><span class="s3">.</span><span class="s1">storeLock </span><span class="s3">!== </span><span class="s1">storeLock </span><span class="s3">||</span>
+										<span class="s1">result</span><span class="s3">.</span><span class="s1">storeCache </span><span class="s3">!== </span><span class="s1">storeCache </span><span class="s3">||</span>
+										<span class="s1">result</span><span class="s3">.</span><span class="s1">etag </span><span class="s3">!== </span><span class="s1">etag</span>
+									<span class="s3">) {</span>
+										<span class="s4">return </span><span class="s1">finishWith</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span><span class="s2">`GET </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode</span><span class="s3">}</span><span class="s2">] (unchanged)`</span><span class="s3">);</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, { </span><span class="s1">...result</span><span class="s3">, </span><span class="s1">fresh</span><span class="s3">: </span><span class="s4">true </span><span class="s3">});</span>
+								<span class="s3">}</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s1">location </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode </span><span class="s3">&gt;= </span><span class="s7">301 </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode </span><span class="s3">&lt;= </span><span class="s7">308</span>
+								<span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">result </span><span class="s3">= {</span>
+										<span class="s1">location</span><span class="s3">: </span><span class="s4">new </span><span class="s1">URL</span><span class="s3">(</span><span class="s1">location</span><span class="s3">, </span><span class="s1">url</span><span class="s3">).</span><span class="s1">href</span>
+									<span class="s3">};</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s3">!</span><span class="s1">cachedResult </span><span class="s3">||</span>
+										<span class="s3">!(</span><span class="s2">&quot;location&quot; </span><span class="s4">in </span><span class="s1">cachedResult</span><span class="s3">) ||</span>
+										<span class="s1">cachedResult</span><span class="s3">.</span><span class="s1">location </span><span class="s3">!== </span><span class="s1">result</span><span class="s3">.</span><span class="s1">location </span><span class="s3">||</span>
+										<span class="s1">cachedResult</span><span class="s3">.</span><span class="s1">validUntil </span><span class="s3">&lt; </span><span class="s1">validUntil </span><span class="s3">||</span>
+										<span class="s1">cachedResult</span><span class="s3">.</span><span class="s1">storeLock </span><span class="s3">!== </span><span class="s1">storeLock </span><span class="s3">||</span>
+										<span class="s1">cachedResult</span><span class="s3">.</span><span class="s1">storeCache </span><span class="s3">!== </span><span class="s1">storeCache </span><span class="s3">||</span>
+										<span class="s1">cachedResult</span><span class="s3">.</span><span class="s1">etag </span><span class="s3">!== </span><span class="s1">etag</span>
+									<span class="s3">) {</span>
+										<span class="s4">return </span><span class="s1">finishWith</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span><span class="s2">`GET </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode</span><span class="s3">}</span><span class="s2">] (unchanged)`</span><span class="s3">);</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, {</span>
+										<span class="s1">...result</span><span class="s3">,</span>
+										<span class="s1">fresh</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+										<span class="s1">storeLock</span><span class="s3">,</span>
+										<span class="s1">storeCache</span><span class="s3">,</span>
+										<span class="s1">validUntil</span><span class="s3">,</span>
+										<span class="s1">etag</span>
+									<span class="s3">});</span>
+								<span class="s3">}</span>
+								<span class="s4">const </span><span class="s1">contentType </span><span class="s3">= </span><span class="s1">res</span><span class="s3">.</span><span class="s1">headers</span><span class="s3">[</span><span class="s2">&quot;content-type&quot;</span><span class="s3">] || </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Buffer[]} */</span>
+								<span class="s4">const </span><span class="s1">bufferArr </span><span class="s3">= [];</span>
+
+								<span class="s4">const </span><span class="s1">contentEncoding </span><span class="s3">= </span><span class="s1">res</span><span class="s3">.</span><span class="s1">headers</span><span class="s3">[</span><span class="s2">&quot;content-encoding&quot;</span><span class="s3">];</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Readable} */</span>
+								<span class="s4">let </span><span class="s1">stream </span><span class="s3">= </span><span class="s1">res</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">contentEncoding </span><span class="s3">=== </span><span class="s2">&quot;gzip&quot;</span><span class="s3">) {</span>
+									<span class="s1">stream </span><span class="s3">= </span><span class="s1">stream</span><span class="s3">.</span><span class="s1">pipe</span><span class="s3">(</span><span class="s1">createGunzip</span><span class="s3">());</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">contentEncoding </span><span class="s3">=== </span><span class="s2">&quot;br&quot;</span><span class="s3">) {</span>
+									<span class="s1">stream </span><span class="s3">= </span><span class="s1">stream</span><span class="s3">.</span><span class="s1">pipe</span><span class="s3">(</span><span class="s1">createBrotliDecompress</span><span class="s3">());</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">contentEncoding </span><span class="s3">=== </span><span class="s2">&quot;deflate&quot;</span><span class="s3">) {</span>
+									<span class="s1">stream </span><span class="s3">= </span><span class="s1">stream</span><span class="s3">.</span><span class="s1">pipe</span><span class="s3">(</span><span class="s1">createInflate</span><span class="s3">());</span>
+								<span class="s3">}</span>
+
+								<span class="s1">stream</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;data&quot;</span><span class="s3">, </span><span class="s1">chunk </span><span class="s3">=&gt; {</span>
+									<span class="s1">bufferArr</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+								<span class="s3">});</span>
+
+								<span class="s1">stream</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;end&quot;</span><span class="s3">, () =&gt; {</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">res</span><span class="s3">.</span><span class="s1">complete</span><span class="s3">) {</span>
+										<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`GET </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode</span><span class="s3">}</span><span class="s2">] (terminated)`</span><span class="s3">);</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">request was terminated`</span><span class="s3">));</span>
+									<span class="s3">}</span>
+
+									<span class="s4">const </span><span class="s1">content </span><span class="s3">= </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">bufferArr</span><span class="s3">);</span>
+
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode </span><span class="s3">!== </span><span class="s7">200</span><span class="s3">) {</span>
+										<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`GET </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode</span><span class="s3">}</span><span class="s2">]`</span><span class="s3">);</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+											<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+												<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">request status code = </span><span class="s1">$</span><span class="s3">{</span>
+													<span class="s1">res</span><span class="s3">.</span><span class="s1">statusCode</span>
+												<span class="s3">}</span><span class="s4">\n</span><span class="s1">$</span><span class="s3">{</span><span class="s1">content</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;utf-8&quot;</span><span class="s3">)}</span><span class="s2">`</span>
+											<span class="s3">)</span>
+										<span class="s3">);</span>
+									<span class="s3">}</span>
+
+									<span class="s4">const </span><span class="s1">integrity </span><span class="s3">= </span><span class="s1">computeIntegrity</span><span class="s3">(</span><span class="s1">content</span><span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">entry </span><span class="s3">= { </span><span class="s1">resolved</span><span class="s3">: </span><span class="s1">url</span><span class="s3">, </span><span class="s1">integrity</span><span class="s3">, </span><span class="s1">contentType </span><span class="s3">};</span>
+
+									<span class="s1">finishWith</span><span class="s3">({</span>
+										<span class="s1">entry</span><span class="s3">,</span>
+										<span class="s1">content</span>
+									<span class="s3">});</span>
+								<span class="s3">});</span>
+							<span class="s3">}</span>
+						<span class="s3">).</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`GET </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">(error)`</span><span class="s3">);</span>
+							<span class="s1">err</span><span class="s3">.</span><span class="s1">message </span><span class="s3">+= </span><span class="s2">`</span><span class="s4">\n</span><span class="s2">while fetching </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+							<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+						<span class="s3">});</span>
+					<span class="s3">};</span>
+
+					<span class="s4">const </span><span class="s1">fetchContent </span><span class="s3">= </span><span class="s1">cachedWithKey</span><span class="s3">(</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url URL</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err: Error | null, result?: { validUntil: number, etag?: string, entry: LockfileEntry, content: Buffer, fresh: boolean } | { validUntil: number, etag?: string, location: string, fresh: boolean }) =&gt; void} callback callback</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+						 <span class="s5">*/</span>
+						<span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s1">cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">cachedResult</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedResult</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">isValid </span><span class="s3">= </span><span class="s1">cachedResult</span><span class="s3">.</span><span class="s1">validUntil </span><span class="s3">&gt;= </span><span class="s1">Date</span><span class="s3">.</span><span class="s1">now</span><span class="s3">();</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">isValid</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">cachedResult</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">fetchContentRaw</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">cachedResult</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+							<span class="s3">});</span>
+						<span class="s3">},</span>
+						<span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; </span><span class="s1">fetchContentRaw</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">)</span>
+					<span class="s3">);</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} uri uri</span>
+					 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true when allowed, otherwise false</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">isAllowed </span><span class="s3">= </span><span class="s1">uri </span><span class="s3">=&gt; {</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">allowed of allowedUris</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">allowed </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">uri</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s1">allowed</span><span class="s3">)) </span><span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">allowed </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">allowed</span><span class="s3">(</span><span class="s1">uri</span><span class="s3">)) </span><span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">allowed</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">uri</span><span class="s3">)) {</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+						<span class="s4">return false</span><span class="s3">;</span>
+					<span class="s3">};</span>
+
+					<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{ entry: LockfileEntry, content: Buffer }} Info */</span>
+
+					<span class="s4">const </span><span class="s1">getInfo </span><span class="s3">= </span><span class="s1">cachedWithKey</span><span class="s3">(</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} url the url</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err: Error | null, info?: Info) =&gt; void} callback callback</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+						 <span class="s5">*/</span>
+						<span class="s0">// eslint-disable-next-line no-loop-func</span>
+						<span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">isAllowed</span><span class="s3">(</span><span class="s1">url</span><span class="s3">)) {</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+									<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+										<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">doesn't match the allowedUris policy. These URIs are allowed:</span><span class="s4">\n</span><span class="s1">$</span><span class="s3">{</span><span class="s1">allowedUris</span>
+											<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">uri </span><span class="s3">=&gt; </span><span class="s2">` - </span><span class="s1">$</span><span class="s3">{</span><span class="s1">uri</span><span class="s3">}</span><span class="s2">`</span><span class="s3">)</span>
+											<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">`</span>
+									<span class="s3">)</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s1">getLockfile</span><span class="s3">((</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_lockfile</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">lockfile </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Lockfile} */ </span><span class="s3">(</span><span class="s1">_lockfile</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">entryOrString </span><span class="s3">= </span><span class="s1">lockfile</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">url</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">entryOrString</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">frozen</span><span class="s3">) {</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+											<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+												<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">has no lockfile entry and lockfile is frozen`</span>
+											<span class="s3">)</span>
+										<span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">resolveContent</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s1">storeResult</span><span class="s3">(</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Lockfile} */</span>
+											<span class="s3">(</span><span class="s1">lockfile</span><span class="s3">),</span>
+											<span class="s1">url</span><span class="s3">,</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveContentResult} */</span>
+											<span class="s3">(</span><span class="s1">result</span><span class="s3">),</span>
+											<span class="s1">callback</span>
+										<span class="s3">);</span>
+									<span class="s3">});</span>
+									<span class="s4">return</span><span class="s3">;</span>
+								<span class="s3">}</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">entryOrString </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">entryTag </span><span class="s3">= </span><span class="s1">entryOrString</span><span class="s3">;</span>
+									<span class="s1">resolveContent</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_result</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s4">const </span><span class="s1">result </span><span class="s3">=</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveContentResult} */</span>
+											<span class="s3">(</span><span class="s1">_result</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">result</span><span class="s3">.</span><span class="s1">storeLock </span><span class="s3">|| </span><span class="s1">entryTag </span><span class="s3">=== </span><span class="s2">&quot;ignore&quot;</span><span class="s3">)</span>
+											<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">frozen</span><span class="s3">) {</span>
+											<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+												<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+													<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">used to have </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entryTag</span><span class="s3">} </span><span class="s2">lockfile entry and has content now, but lockfile is frozen`</span>
+												<span class="s3">)</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">upgrade</span><span class="s3">) {</span>
+											<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+												<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+													<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">used to have </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entryTag</span><span class="s3">} </span><span class="s2">lockfile entry and has content now. 
+This should be reflected in the lockfile, so this lockfile entry must be upgraded, but upgrading is not enabled. 
+Remove this line from the lockfile to force upgrading.`</span>
+												<span class="s3">)</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">storeResult</span><span class="s3">(</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">result</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+									<span class="s3">});</span>
+									<span class="s4">return</span><span class="s3">;</span>
+								<span class="s3">}</span>
+								<span class="s4">let </span><span class="s1">entry </span><span class="s3">= </span><span class="s1">entryOrString</span><span class="s3">;</span>
+								<span class="s5">/**</span>
+								 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Buffer=} lockedContent locked content</span>
+								 <span class="s5">*/</span>
+								<span class="s4">const </span><span class="s1">doFetch </span><span class="s3">= </span><span class="s1">lockedContent </span><span class="s3">=&gt; {</span>
+									<span class="s1">resolveContent</span><span class="s3">(</span><span class="s1">url</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_result</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">lockedContent</span><span class="s3">) {</span>
+												<span class="s1">logger</span><span class="s3">.</span><span class="s1">warn</span><span class="s3">(</span>
+													<span class="s2">`Upgrade request to </span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">failed: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">err</span><span class="s3">.</span><span class="s1">message</span><span class="s3">}</span><span class="s2">`</span>
+												<span class="s3">);</span>
+												<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span><span class="s1">err</span><span class="s3">.</span><span class="s1">stack</span><span class="s3">);</span>
+												<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, {</span>
+													<span class="s1">entry</span><span class="s3">,</span>
+													<span class="s1">content</span><span class="s3">: </span><span class="s1">lockedContent</span>
+												<span class="s3">});</span>
+											<span class="s3">}</span>
+											<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s4">const </span><span class="s1">result </span><span class="s3">=</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveContentResult} */</span>
+											<span class="s3">(</span><span class="s1">_result</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">result</span><span class="s3">.</span><span class="s1">storeLock</span><span class="s3">) {</span>
+											<span class="s0">// When the lockfile entry should be no-cache</span>
+											<span class="s0">// we need to update the lockfile</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">frozen</span><span class="s3">) {</span>
+												<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+													<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+														<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">has a lockfile entry and is no-cache now, but lockfile is frozen</span><span class="s4">\n</span><span class="s2">Lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entryToString</span><span class="s3">(</span>
+															<span class="s1">entry</span>
+														<span class="s3">)}</span><span class="s2">`</span>
+													<span class="s3">)</span>
+												<span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s1">storeResult</span><span class="s3">(</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">result</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+											<span class="s4">return</span><span class="s3">;</span>
+										<span class="s3">}</span>
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">areLockfileEntriesEqual</span><span class="s3">(</span><span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">)) {</span>
+											<span class="s0">// When the lockfile entry is outdated</span>
+											<span class="s0">// we need to update the lockfile</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">frozen</span><span class="s3">) {</span>
+												<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+													<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+														<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">has an outdated lockfile entry, but lockfile is frozen</span><span class="s4">\n</span><span class="s2">Lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entryToString</span><span class="s3">(</span>
+															<span class="s1">entry</span>
+														<span class="s3">)}</span><span class="s4">\n</span><span class="s2">Expected: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entryToString</span><span class="s3">(</span><span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">)}</span><span class="s2">`</span>
+													<span class="s3">)</span>
+												<span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s1">storeResult</span><span class="s3">(</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">result</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+											<span class="s4">return</span><span class="s3">;</span>
+										<span class="s3">}</span>
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">lockedContent </span><span class="s3">&amp;&amp; </span><span class="s1">cacheLocation</span><span class="s3">) {</span>
+											<span class="s0">// When the lockfile cache content is missing</span>
+											<span class="s0">// we need to update the lockfile</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">frozen</span><span class="s3">) {</span>
+												<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+													<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+														<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">url</span><span class="s3">} </span><span class="s2">is missing content in the lockfile cache, but lockfile is frozen</span><span class="s4">\n</span><span class="s2">Lockfile: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">entryToString</span><span class="s3">(</span>
+															<span class="s1">entry</span>
+														<span class="s3">)}</span><span class="s2">`</span>
+													<span class="s3">)</span>
+												<span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s1">storeResult</span><span class="s3">(</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">result</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+											<span class="s4">return</span><span class="s3">;</span>
+										<span class="s3">}</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+									<span class="s3">});</span>
+								<span class="s3">};</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheLocation</span><span class="s3">) {</span>
+									<span class="s0">// When there is a lockfile cache</span>
+									<span class="s0">// we read the content from there</span>
+									<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s1">getCacheKey</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span><span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">filePath </span><span class="s3">= </span><span class="s1">join</span><span class="s3">(</span><span class="s1">intermediateFs</span><span class="s3">, </span><span class="s1">cacheLocation</span><span class="s3">, </span><span class="s1">key</span><span class="s3">);</span>
+									<span class="s1">fs</span><span class="s3">.</span><span class="s1">readFile</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">.</span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;ENOENT&quot;</span><span class="s3">) </span><span class="s4">return </span><span class="s1">doFetch</span><span class="s3">();</span>
+											<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s4">const </span><span class="s1">content </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Buffer} */ </span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+										<span class="s5">/**</span>
+										 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Buffer | undefined} _result result</span>
+										 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+										 <span class="s5">*/</span>
+										<span class="s4">const </span><span class="s1">continueWithCachedContent </span><span class="s3">= </span><span class="s1">_result </span><span class="s3">=&gt; {</span>
+											<span class="s4">if </span><span class="s3">(!</span><span class="s1">upgrade</span><span class="s3">) {</span>
+												<span class="s0">// When not in upgrade mode, we accept the result from the lockfile cache</span>
+												<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, { </span><span class="s1">entry</span><span class="s3">, </span><span class="s1">content </span><span class="s3">});</span>
+											<span class="s3">}</span>
+											<span class="s4">return </span><span class="s1">doFetch</span><span class="s3">(</span><span class="s1">content</span><span class="s3">);</span>
+										<span class="s3">};</span>
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">verifyIntegrity</span><span class="s3">(</span><span class="s1">content</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span><span class="s3">)) {</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Buffer | undefined} */</span>
+											<span class="s4">let </span><span class="s1">contentWithChangedEol</span><span class="s3">;</span>
+											<span class="s4">let </span><span class="s1">isEolChanged </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+											<span class="s4">try </span><span class="s3">{</span>
+												<span class="s1">contentWithChangedEol </span><span class="s3">= </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+													<span class="s1">content</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;utf-8&quot;</span><span class="s3">).</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/\r\n/g</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">)</span>
+												<span class="s3">);</span>
+												<span class="s1">isEolChanged </span><span class="s3">= </span><span class="s1">verifyIntegrity</span><span class="s3">(</span>
+													<span class="s1">contentWithChangedEol</span><span class="s3">,</span>
+													<span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span>
+												<span class="s3">);</span>
+											<span class="s3">} </span><span class="s4">catch </span><span class="s3">(</span><span class="s1">_err</span><span class="s3">) {</span>
+												<span class="s0">// ignore</span>
+											<span class="s3">}</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">isEolChanged</span><span class="s3">) {</span>
+												<span class="s4">if </span><span class="s3">(!</span><span class="s1">warnedAboutEol</span><span class="s3">) {</span>
+													<span class="s4">const </span><span class="s1">explainer </span><span class="s3">= </span><span class="s2">`Incorrect end of line sequence was detected in the lockfile cache. 
+The lockfile cache is protected by integrity checks, so any external modification will lead to a corrupted lockfile cache. 
+When using git make sure to configure .gitattributes correctly for the lockfile cache: 
+  **/*webpack.lock.data/** -text 
+This will avoid that the end of line sequence is changed by git on Windows.`</span><span class="s3">;</span>
+													<span class="s4">if </span><span class="s3">(</span><span class="s1">frozen</span><span class="s3">) {</span>
+														<span class="s1">logger</span><span class="s3">.</span><span class="s1">error</span><span class="s3">(</span><span class="s1">explainer</span><span class="s3">);</span>
+													<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+														<span class="s1">logger</span><span class="s3">.</span><span class="s1">warn</span><span class="s3">(</span><span class="s1">explainer</span><span class="s3">);</span>
+														<span class="s1">logger</span><span class="s3">.</span><span class="s1">info</span><span class="s3">(</span>
+															<span class="s2">&quot;Lockfile cache will be automatically fixed now, but when lockfile is frozen this would result in an error.&quot;</span>
+														<span class="s3">);</span>
+													<span class="s3">}</span>
+													<span class="s1">warnedAboutEol </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+												<span class="s3">}</span>
+												<span class="s4">if </span><span class="s3">(!</span><span class="s1">frozen</span><span class="s3">) {</span>
+													<span class="s0">// &quot;fix&quot; the end of line sequence of the lockfile content</span>
+													<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+														<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filePath</span><span class="s3">} </span><span class="s2">fixed end of line sequence (</span><span class="s4">\\</span><span class="s2">r</span><span class="s4">\\</span><span class="s2">n instead of </span><span class="s4">\\</span><span class="s2">n).`</span>
+													<span class="s3">);</span>
+													<span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">writeFile</span><span class="s3">(</span>
+														<span class="s1">filePath</span><span class="s3">,</span>
+														<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Buffer} */</span>
+														<span class="s3">(</span><span class="s1">contentWithChangedEol</span><span class="s3">),</span>
+														<span class="s1">err </span><span class="s3">=&gt; {</span>
+															<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+															<span class="s1">continueWithCachedContent</span><span class="s3">(</span>
+																<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Buffer} */</span>
+																<span class="s3">(</span><span class="s1">contentWithChangedEol</span><span class="s3">)</span>
+															<span class="s3">);</span>
+														<span class="s3">}</span>
+													<span class="s3">);</span>
+													<span class="s4">return</span><span class="s3">;</span>
+												<span class="s3">}</span>
+											<span class="s3">}</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">frozen</span><span class="s3">) {</span>
+												<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+													<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+														<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+															<span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span>
+														<span class="s3">} </span><span class="s2">integrity mismatch, expected content with integrity </span><span class="s1">$</span><span class="s3">{</span>
+															<span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span>
+														<span class="s3">} </span><span class="s2">but got </span><span class="s1">$</span><span class="s3">{</span><span class="s1">computeIntegrity</span><span class="s3">(</span><span class="s1">content</span><span class="s3">)}</span><span class="s2">. 
+Lockfile corrupted (</span><span class="s1">$</span><span class="s3">{</span>
+															<span class="s1">isEolChanged</span>
+																<span class="s3">? </span><span class="s2">&quot;end of line sequence was unexpectedly changed&quot;</span>
+																<span class="s3">: </span><span class="s2">&quot;incorrectly merged? changed by other tools?&quot;</span>
+														<span class="s3">}</span><span class="s2">). 
+Run build with un-frozen lockfile to automatically fix lockfile.`</span>
+													<span class="s3">)</span>
+												<span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s0">// &quot;fix&quot; the lockfile entry to the correct integrity</span>
+											<span class="s0">// the content has priority over the integrity value</span>
+											<span class="s1">entry </span><span class="s3">= {</span>
+												<span class="s1">...entry</span><span class="s3">,</span>
+												<span class="s1">integrity</span><span class="s3">: </span><span class="s1">computeIntegrity</span><span class="s3">(</span><span class="s1">content</span><span class="s3">)</span>
+											<span class="s3">};</span>
+											<span class="s1">storeLockEntry</span><span class="s3">(</span><span class="s1">lockfile</span><span class="s3">, </span><span class="s1">url</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">continueWithCachedContent</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+									<span class="s3">});</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">doFetch</span><span class="s3">();</span>
+								<span class="s3">}</span>
+							<span class="s3">});</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{URL} url url</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResourceDataWithData} resourceData resource data</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err: Error | null, result: true | void) =&gt; void} callback callback</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">respondWithUrlModule </span><span class="s3">= (</span><span class="s1">url</span><span class="s3">, </span><span class="s1">resourceData</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s1">getInfo</span><span class="s3">(</span><span class="s1">url</span><span class="s3">.</span><span class="s1">href</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_result</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Info} */ </span><span class="s3">(</span><span class="s1">_result</span><span class="s3">);</span>
+							<span class="s1">resourceData</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">= </span><span class="s1">url</span><span class="s3">.</span><span class="s1">href</span><span class="s3">;</span>
+							<span class="s1">resourceData</span><span class="s3">.</span><span class="s1">path </span><span class="s3">= </span><span class="s1">url</span><span class="s3">.</span><span class="s1">origin </span><span class="s3">+ </span><span class="s1">url</span><span class="s3">.</span><span class="s1">pathname</span><span class="s3">;</span>
+							<span class="s1">resourceData</span><span class="s3">.</span><span class="s1">query </span><span class="s3">= </span><span class="s1">url</span><span class="s3">.</span><span class="s1">search</span><span class="s3">;</span>
+							<span class="s1">resourceData</span><span class="s3">.</span><span class="s1">fragment </span><span class="s3">= </span><span class="s1">url</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">;</span>
+							<span class="s1">resourceData</span><span class="s3">.</span><span class="s1">context </span><span class="s3">= </span><span class="s4">new </span><span class="s1">URL</span><span class="s3">(</span>
+								<span class="s2">&quot;.&quot;</span><span class="s3">,</span>
+								<span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">resolved</span>
+							<span class="s3">).</span><span class="s1">href</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">0</span><span class="s3">, -</span><span class="s7">1</span><span class="s3">);</span>
+							<span class="s1">resourceData</span><span class="s3">.</span><span class="s1">data</span><span class="s3">.</span><span class="s1">mimetype </span><span class="s3">= </span><span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">contentType</span><span class="s3">;</span>
+							<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+						<span class="s3">});</span>
+					<span class="s3">};</span>
+					<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">resolveForScheme</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">scheme</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+							<span class="s2">&quot;HttpUriPlugin&quot;</span><span class="s3">,</span>
+							<span class="s3">(</span><span class="s1">resourceData</span><span class="s3">, </span><span class="s1">resolveData</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+								<span class="s1">respondWithUrlModule</span><span class="s3">(</span>
+									<span class="s4">new </span><span class="s1">URL</span><span class="s3">(</span><span class="s1">resourceData</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">),</span>
+									<span class="s1">resourceData</span><span class="s3">,</span>
+									<span class="s1">callback</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">);</span>
+					<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">resolveInScheme</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">scheme</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span><span class="s2">&quot;HttpUriPlugin&quot;</span><span class="s3">, (</span><span class="s1">resourceData</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s0">// Only handle relative urls (./xxx, ../xxx, /xxx, //xxx)</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">data</span><span class="s3">.</span><span class="s1">dependencyType </span><span class="s3">!== </span><span class="s2">&quot;url&quot; </span><span class="s3">&amp;&amp;</span>
+								<span class="s3">!</span><span class="s8">/^\.{0,2}\//</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">resourceData</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+							<span class="s1">respondWithUrlModule</span><span class="s3">(</span>
+								<span class="s4">new </span><span class="s1">URL</span><span class="s3">(</span><span class="s1">resourceData</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">, </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">data</span><span class="s3">.</span><span class="s1">context</span><span class="s3">}</span><span class="s2">/`</span><span class="s3">),</span>
+								<span class="s1">resourceData</span><span class="s3">,</span>
+								<span class="s1">callback</span>
+							<span class="s3">);</span>
+						<span class="s3">});</span>
+					<span class="s4">const </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">NormalModule</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+					<span class="s1">hooks</span><span class="s3">.</span><span class="s1">readResourceForScheme</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">scheme</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span><span class="s2">&quot;HttpUriPlugin&quot;</span><span class="s3">, (</span><span class="s1">resource</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt;</span>
+							<span class="s1">getInfo</span><span class="s3">(</span><span class="s1">resource</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_result</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Info} */ </span><span class="s3">(</span><span class="s1">_result</span><span class="s3">);</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+								<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">resourceIntegrity </span><span class="s3">= </span><span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity</span><span class="s3">;</span>
+								<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">.</span><span class="s1">content</span><span class="s3">);</span>
+							<span class="s3">})</span>
+						<span class="s3">);</span>
+					<span class="s1">hooks</span><span class="s3">.</span><span class="s1">needBuild</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+						<span class="s2">&quot;HttpUriPlugin&quot;</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">context</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">module</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">scheme</span><span class="s3">}</span><span class="s2">://`</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s1">getInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_result</span><span class="s3">) =&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Info} */ </span><span class="s3">(</span><span class="s1">_result</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s1">result</span><span class="s3">.</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">integrity </span><span class="s3">!==</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+										<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">resourceIntegrity</span>
+									<span class="s3">) {</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">callback</span><span class="s3">();</span>
+								<span class="s3">});</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">finishModules</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+					<span class="s2">&quot;HttpUriPlugin&quot;</span><span class="s3">,</span>
+					<span class="s3">(</span><span class="s1">modules</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">lockfileUpdates</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+						<span class="s4">const </span><span class="s1">ext </span><span class="s3">= </span><span class="s1">extname</span><span class="s3">(</span><span class="s1">lockfileLocation</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">tempFile </span><span class="s3">= </span><span class="s1">join</span><span class="s3">(</span>
+							<span class="s1">intermediateFs</span><span class="s3">,</span>
+							<span class="s1">dirname</span><span class="s3">(</span><span class="s1">intermediateFs</span><span class="s3">, </span><span class="s1">lockfileLocation</span><span class="s3">),</span>
+							<span class="s2">`.</span><span class="s1">$</span><span class="s3">{</span><span class="s1">basename</span><span class="s3">(</span><span class="s1">lockfileLocation</span><span class="s3">, </span><span class="s1">ext</span><span class="s3">)}</span><span class="s2">.</span><span class="s1">$</span><span class="s3">{</span>
+								<span class="s3">(</span><span class="s1">Math</span><span class="s3">.</span><span class="s1">random</span><span class="s3">() * </span><span class="s7">10000</span><span class="s3">) | </span><span class="s7">0</span>
+							<span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">ext</span><span class="s3">}</span><span class="s2">`</span>
+						<span class="s3">);</span>
+
+						<span class="s4">const </span><span class="s1">writeDone </span><span class="s3">= () =&gt; {</span>
+							<span class="s4">const </span><span class="s1">nextOperation </span><span class="s3">=</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{InProgressWriteItem[]} */</span>
+								<span class="s3">(</span><span class="s1">inProgressWrite</span><span class="s3">).</span><span class="s1">shift</span><span class="s3">();</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">nextOperation</span><span class="s3">) {</span>
+								<span class="s1">nextOperation</span><span class="s3">();</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s1">inProgressWrite </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">};</span>
+						<span class="s4">const </span><span class="s1">runWrite </span><span class="s3">= () =&gt; {</span>
+							<span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">readFile</span><span class="s3">(</span><span class="s1">lockfileLocation</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">buffer</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err </span><span class="s3">&amp;&amp; </span><span class="s1">err</span><span class="s3">.</span><span class="s1">code </span><span class="s3">!== </span><span class="s2">&quot;ENOENT&quot;</span><span class="s3">) {</span>
+									<span class="s1">writeDone</span><span class="s3">();</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s4">const </span><span class="s1">lockfile </span><span class="s3">= </span><span class="s1">buffer</span>
+									<span class="s3">? </span><span class="s1">Lockfile</span><span class="s3">.</span><span class="s1">parse</span><span class="s3">(</span><span class="s1">buffer</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;utf-8&quot;</span><span class="s3">))</span>
+									<span class="s3">: </span><span class="s4">new </span><span class="s1">Lockfile</span><span class="s3">();</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">value</span><span class="s3">] </span><span class="s1">of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LockfileUpdates} */ </span><span class="s3">(</span>
+									<span class="s1">lockfileUpdates</span>
+								<span class="s3">)) {</span>
+									<span class="s1">lockfile</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">value</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">writeFile</span><span class="s3">(</span><span class="s1">tempFile</span><span class="s3">, </span><span class="s1">lockfile</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">(), </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+										<span class="s1">writeDone</span><span class="s3">();</span>
+										<span class="s4">return </span><span class="s3">(</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;IntermediateFileSystem[&quot;unlink&quot;]&gt;} */</span>
+											<span class="s3">(</span><span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">unlink</span><span class="s3">)(</span><span class="s1">tempFile</span><span class="s3">, () =&gt; </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">))</span>
+										<span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">rename</span><span class="s3">(</span><span class="s1">tempFile</span><span class="s3">, </span><span class="s1">lockfileLocation</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+											<span class="s1">writeDone</span><span class="s3">();</span>
+											<span class="s4">return </span><span class="s3">(</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;IntermediateFileSystem[&quot;unlink&quot;]&gt;} */</span>
+												<span class="s3">(</span><span class="s1">intermediateFs</span><span class="s3">.</span><span class="s1">unlink</span><span class="s3">)(</span><span class="s1">tempFile</span><span class="s3">, () =&gt; </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">))</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">writeDone</span><span class="s3">();</span>
+										<span class="s1">callback</span><span class="s3">();</span>
+									<span class="s3">});</span>
+								<span class="s3">});</span>
+							<span class="s3">});</span>
+						<span class="s3">};</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">inProgressWrite</span><span class="s3">) {</span>
+							<span class="s1">inProgressWrite</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">runWrite</span><span class="s3">);</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s1">inProgressWrite </span><span class="s3">= [];</span>
+							<span class="s1">runWrite</span><span class="s3">();</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">HttpUriPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

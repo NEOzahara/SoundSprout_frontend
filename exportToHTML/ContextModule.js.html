@@ -1,0 +1,1280 @@
+<html>
+<head>
+<title>ContextModule.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ContextModule.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">OriginalSource</span><span class="s3">, </span><span class="s1">RawSource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;webpack-sources&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">AsyncDependenciesBlock </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AsyncDependenciesBlock&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">makeWebpackError </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HookWebpackError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Module </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Module&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">JS_TYPES </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleSourceTypesConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleTypeConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">RuntimeGlobals </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./RuntimeGlobals&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Template </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Template&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WebpackError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./WebpackError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">compareLocations</span><span class="s3">,</span>
+	<span class="s1">concatComparators</span><span class="s3">,</span>
+	<span class="s1">compareSelect</span><span class="s3">,</span>
+	<span class="s1">keepOriginalOrder</span><span class="s3">,</span>
+	<span class="s1">compareModulesById</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">contextify</span><span class="s3">,</span>
+	<span class="s1">parseResource</span><span class="s3">,</span>
+	<span class="s1">makePathsRelative</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/identifier&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">makeSerializable </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/makeSerializable&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../declarations/WebpackOptions&quot;).WebpackOptionsNormalized} WebpackOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Chunk&quot;).ChunkId} ChunkId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;).ModuleId} ModuleId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGroup&quot;).RawChunkGroupOptions} RawChunkGroupOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;)} Compilation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;)} Dependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./DependencyTemplates&quot;)} DependencyTemplates */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Generator&quot;).SourceTypes} SourceTypes */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).BuildCallback} BuildCallback */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).BuildInfo} BuildInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).BuildMeta} BuildMeta */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).CodeGenerationContext} CodeGenerationContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).CodeGenerationResult} CodeGenerationResult */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).LibIdentOptions} LibIdentOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).NeedBuildCallback} NeedBuildCallback */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).NeedBuildContext} NeedBuildContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./RequestShortener&quot;)} RequestShortener */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ResolverFactory&quot;).ResolverWithOptions} ResolverWithOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./RuntimeTemplate&quot;)} RuntimeTemplate */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./dependencies/ContextElementDependency&quot;)} ContextElementDependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/JavascriptParser&quot;).ImportAttributes} ImportAttributes */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./serialization/ObjectMiddleware&quot;).ObjectDeserializerContext} ObjectDeserializerContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./serialization/ObjectMiddleware&quot;).ObjectSerializerContext} ObjectSerializerContext */</span>
+<span class="s5">/** </span><span class="s6">@template </span><span class="s5">T @typedef {import(&quot;./util/LazySet&quot;)&lt;T&gt;} LazySet&lt;T&gt; */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).InputFileSystem} InputFileSystem */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{&quot;sync&quot; | &quot;eager&quot; | &quot;weak&quot; | &quot;async-weak&quot; | &quot;lazy&quot; | &quot;lazy-once&quot;} ContextMode Context mode */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ContextOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ContextMode} mode</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} recursive</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RegExp} regExp</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(&quot;strict&quot; | boolean)=} namespaceObject</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} addon</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(string | null)=} chunkName</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(RegExp | null)=} include</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(RegExp | null)=} exclude</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RawChunkGroupOptions=} groupOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} typePrefix</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} category</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(string[][] | null)=} referencedExports exports referenced from modules (won't be mangled)</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} layer</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ImportAttributes=} attributes</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ContextModuleOptionsExtras</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{false|string|string[]} resource</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} resourceQuery</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string=} resourceFragment</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{TODO} resolveOptions</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{ContextOptions &amp; ContextModuleOptionsExtras} ContextModuleOptions */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">ResolveDependenciesCallback</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Error | null} err</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContextElementDependency[]=} dependencies</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">ResolveDependencies</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{InputFileSystem} fs</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContextModuleOptions} options</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveDependenciesCallback} callback</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{1 | 3 | 7 | 9} FakeMapType */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Record&lt;ModuleId, FakeMapType&gt;} FakeMap */</span>
+
+<span class="s4">const </span><span class="s1">SNAPSHOT_OPTIONS </span><span class="s3">= { </span><span class="s1">timestamp</span><span class="s3">: </span><span class="s4">true </span><span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">ContextModule </span><span class="s4">extends </span><span class="s1">Module </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveDependencies} resolveDependencies function to get dependencies in this context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ContextModuleOptions} options options object</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">resolveDependencies</span><span class="s3">, </span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">options </span><span class="s3">|| </span><span class="s4">typeof </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">parsed </span><span class="s3">= </span><span class="s1">parseResource</span><span class="s3">(</span>
+				<span class="s1">options </span><span class="s3">? </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">) : </span><span class="s2">&quot;&quot;</span>
+			<span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">resource </span><span class="s3">= </span><span class="s1">parsed</span><span class="s3">.</span><span class="s1">path</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">resourceQuery </span><span class="s3">= (</span><span class="s1">options </span><span class="s3">&amp;&amp; </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceQuery</span><span class="s3">) || </span><span class="s1">parsed</span><span class="s3">.</span><span class="s1">query</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">resourceFragment </span><span class="s3">=</span>
+				<span class="s3">(</span><span class="s1">options </span><span class="s3">&amp;&amp; </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceFragment</span><span class="s3">) || </span><span class="s1">parsed</span><span class="s3">.</span><span class="s1">fragment</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">layer </span><span class="s3">= </span><span class="s1">options </span><span class="s3">&amp;&amp; </span><span class="s1">options</span><span class="s3">.</span><span class="s1">layer</span><span class="s3">;</span>
+
+			<span class="s4">super</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span><span class="s3">, </span><span class="s1">resource</span><span class="s3">, </span><span class="s1">layer</span><span class="s3">);</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextModuleOptions} */</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= {</span>
+				<span class="s1">...options</span><span class="s3">,</span>
+				<span class="s1">resource</span><span class="s3">,</span>
+				<span class="s1">resourceQuery</span><span class="s3">,</span>
+				<span class="s1">resourceFragment</span>
+			<span class="s3">};</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">super</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">, </span><span class="s1">options</span><span class="s3">.</span><span class="s1">layer</span><span class="s3">);</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextModuleOptions} */</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= {</span>
+				<span class="s1">...options</span><span class="s3">,</span>
+				<span class="s1">resource</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">,</span>
+				<span class="s1">resourceQuery</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceQuery </span><span class="s3">|| </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+				<span class="s1">resourceFragment</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceFragment </span><span class="s3">|| </span><span class="s2">&quot;&quot;</span>
+			<span class="s3">};</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Info from Factory</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveDependencies | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">resolveDependencies </span><span class="s3">= </span><span class="s1">resolveDependencies</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">options </span><span class="s3">&amp;&amp; </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resolveOptions </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">resolveOptions </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">resolveOptions</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">options </span><span class="s3">&amp;&amp; </span><span class="s4">typeof </span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode </span><span class="s3">!== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+			<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;options.mode is a required option&quot;</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_identifier </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_createIdentifier</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_forceBuild </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{SourceTypes} types available (do not mutate)</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getSourceTypes</span><span class="s3">() {</span>
+		<span class="s4">return </span><span class="s1">JS_TYPES</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Assuming this module is in the cache. Update the (cached) module with</span>
+	 <span class="s5">* the fresh module from the factory. Usually updates internal references</span>
+	 <span class="s5">* and properties.</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module fresh module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">updateCacheModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">m </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextModule} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">resolveDependencies </span><span class="s3">= </span><span class="s1">m</span><span class="s3">.</span><span class="s1">resolveDependencies</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">m</span><span class="s3">.</span><span class="s1">options</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Assuming this module is in the cache. Remove internal references to allow freeing some memory.</span>
+	 <span class="s5">*/</span>
+	<span class="s1">cleanupForCache</span><span class="s3">() {</span>
+		<span class="s4">super</span><span class="s3">.</span><span class="s1">cleanupForCache</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">resolveDependencies </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@private</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RegExp} regexString RegExp as a string</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean=} stripSlash do we need to strip a slsh</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} pretty RegExp</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s1">regexString</span><span class="s3">, </span><span class="s1">stripSlash </span><span class="s3">= </span><span class="s4">true</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">str </span><span class="s3">= </span><span class="s1">stripSlash</span>
+			<span class="s3">? </span><span class="s1">regexString</span><span class="s3">.</span><span class="s1">source </span><span class="s3">+ </span><span class="s1">regexString</span><span class="s3">.</span><span class="s1">flags</span>
+			<span class="s3">: </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">regexString</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">str</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s7">/!/g</span><span class="s3">, </span><span class="s2">&quot;%21&quot;</span><span class="s3">).</span><span class="s1">replace</span><span class="s3">(</span><span class="s7">/\|/g</span><span class="s3">, </span><span class="s2">&quot;%7C&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">_createIdentifier</span><span class="s3">() {</span>
+		<span class="s4">let </span><span class="s1">identifier </span><span class="s3">=</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">context </span><span class="s3">||</span>
+			<span class="s3">(</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s2">&quot;string&quot; </span><span class="s3">||</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s4">false</span>
+				<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">}</span><span class="s2">`</span>
+				<span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;|&quot;</span><span class="s3">));</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceQuery</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceQuery</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceFragment</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceFragment</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">recursive</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">&quot;|nonrecursive&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">addon</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">addon</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">, </span><span class="s4">false</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">include</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|include: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">include</span><span class="s3">,</span>
+				<span class="s4">false</span>
+			<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exclude</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|exclude: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exclude</span><span class="s3">,</span>
+				<span class="s4">false</span>
+			<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|referencedExports: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span>
+			<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|chunkName: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|groupOptions: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">groupOptions</span>
+			<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespaceObject </span><span class="s3">=== </span><span class="s2">&quot;strict&quot;</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">&quot;|strict namespace object&quot;</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespaceObject</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">&quot;|namespace object&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">layer</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">`|layer: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">layer</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return </span><span class="s1">identifier</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} a unique identifier of the module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">identifier</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">_identifier</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener the request shortener</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} a user readable identifier of the module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">readableIdentifier</span><span class="s3">(</span><span class="s1">requestShortener</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">identifier</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">requestShortener</span><span class="s3">.</span><span class="s1">shorten</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context</span><span class="s3">)}</span><span class="s2">/`</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+			<span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s2">&quot;string&quot; </span><span class="s3">||</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s4">false</span>
+		<span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">requestShortener</span><span class="s3">.</span><span class="s1">shorten</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">}</span><span class="s2">`</span><span class="s3">)}</span><span class="s2">/`</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">identifier </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span>
+				<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">r </span><span class="s3">=&gt; </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">requestShortener</span><span class="s3">.</span><span class="s1">shorten</span><span class="s3">(</span><span class="s1">r</span><span class="s3">)}</span><span class="s2">/`</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot; &quot;</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceQuery</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resourceQuery</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">recursive</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">&quot; nonrecursive&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">addon</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s1">requestShortener</span><span class="s3">.</span><span class="s1">shorten</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">addon</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">include</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` include: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">include</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exclude</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` exclude: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exclude</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` referencedExports: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span>
+				<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">e </span><span class="s3">=&gt; </span><span class="s1">e</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">))</span>
+				<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` chunkName: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">groupOptions </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">;</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">groupOptions</span><span class="s3">)) {</span>
+				<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">}</span><span class="s2">: </span><span class="s1">$</span><span class="s3">{</span>
+					<span class="s1">groupOptions</span><span class="s3">[</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{keyof RawChunkGroupOptions} */ </span><span class="s3">(</span><span class="s1">key</span><span class="s3">)]</span>
+				<span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespaceObject </span><span class="s3">=== </span><span class="s2">&quot;strict&quot;</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">&quot; strict namespace object&quot;</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespaceObject</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">&quot; namespace object&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return </span><span class="s1">identifier</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibIdentOptions} options options</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | null} an identifier for library inclusion</span>
+	 <span class="s5">*/</span>
+	<span class="s1">libIdent</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">identifier</span><span class="s3">;</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">= </span><span class="s1">contextify</span><span class="s3">(</span>
+				<span class="s1">options</span><span class="s3">.</span><span class="s1">context</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">context</span><span class="s3">,</span>
+				<span class="s1">options</span><span class="s3">.</span><span class="s1">associatedObjectForCache</span>
+			<span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">= </span><span class="s1">contextify</span><span class="s3">(</span>
+				<span class="s1">options</span><span class="s3">.</span><span class="s1">context</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">,</span>
+				<span class="s1">options</span><span class="s3">.</span><span class="s1">associatedObjectForCache</span>
+			<span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">= </span><span class="s2">&quot;false&quot;</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">identifier </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span>
+				<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">res </span><span class="s3">=&gt;</span>
+					<span class="s1">contextify</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">context</span><span class="s3">, </span><span class="s1">res</span><span class="s3">, </span><span class="s1">options</span><span class="s3">.</span><span class="s1">associatedObjectForCache</span><span class="s3">)</span>
+				<span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot; &quot;</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">layer</span><span class="s3">) </span><span class="s1">identifier </span><span class="s3">= </span><span class="s2">`(</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">layer</span><span class="s3">}</span><span class="s2">)/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">identifier</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">recursive</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">&quot; recursive&quot;</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">addon</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s1">contextify</span><span class="s3">(</span>
+				<span class="s1">options</span><span class="s3">.</span><span class="s1">context</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">addon</span><span class="s3">,</span>
+				<span class="s1">options</span><span class="s3">.</span><span class="s1">associatedObjectForCache</span>
+			<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">regExp</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">include</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` include: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">include</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exclude</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` exclude: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_prettyRegExp</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">exclude</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span><span class="s3">) {</span>
+			<span class="s1">identifier </span><span class="s3">+= </span><span class="s2">` referencedExports: </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">referencedExports</span>
+				<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">e </span><span class="s3">=&gt; </span><span class="s1">e</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">))</span>
+				<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return </span><span class="s1">identifier</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">invalidateBuild</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_forceBuild </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NeedBuildContext} context context info</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{NeedBuildCallback} callback callback function, returns true, if the module needs a rebuild</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">needBuild</span><span class="s3">({ </span><span class="s1">fileSystemInfo </span><span class="s3">}, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s0">// build if enforced</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_forceBuild</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">buildInfo </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">);</span>
+
+		<span class="s0">// always build when we have no snapshot and context</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">snapshot</span><span class="s3">)</span>
+			<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">Boolean</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context </span><span class="s3">|| </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">));</span>
+
+		<span class="s1">fileSystemInfo</span><span class="s3">.</span><span class="s1">checkSnapshotValid</span><span class="s3">(</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">snapshot</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">valid</span><span class="s3">) =&gt; {</span>
+			<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, !</span><span class="s1">valid</span><span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{WebpackOptions} options webpack options</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolverWithOptions} resolver the resolver</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{InputFileSystem} fs the file system</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{BuildCallback} callback callback function</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">build</span><span class="s3">(</span><span class="s1">options</span><span class="s3">, </span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">resolver</span><span class="s3">, </span><span class="s1">fs</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_forceBuild </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildMeta} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">buildMeta </span><span class="s3">= {</span>
+			<span class="s1">exportsType</span><span class="s3">: </span><span class="s2">&quot;default&quot;</span><span class="s3">,</span>
+			<span class="s1">defaultObject</span><span class="s3">: </span><span class="s2">&quot;redirect-warn&quot;</span>
+		<span class="s3">};</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">buildInfo </span><span class="s3">= {</span>
+			<span class="s1">snapshot</span><span class="s3">: </span><span class="s1">undefined</span>
+		<span class="s3">};</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s8">0</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s8">0</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">startTime </span><span class="s3">= </span><span class="s1">Date</span><span class="s3">.</span><span class="s1">now</span><span class="s3">();</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveDependencies} */</span>
+		<span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">resolveDependencies</span><span class="s3">)(</span><span class="s1">fs</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">dependencies</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+				<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+					<span class="s1">makeWebpackError</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s2">&quot;ContextModule.resolveDependencies&quot;</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// abort if something failed</span>
+			<span class="s0">// this will create an empty context</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">dependencies</span><span class="s3">) {</span>
+				<span class="s1">callback</span><span class="s3">();</span>
+				<span class="s4">return</span><span class="s3">;</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// enhance dependencies with meta info</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of dependencies</span><span class="s3">) {</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= {</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">userRequest</span>
+				<span class="s3">};</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">request </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">addon </span><span class="s3">+ </span><span class="s1">dep</span><span class="s3">.</span><span class="s1">request</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s1">dependencies</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span>
+				<span class="s1">concatComparators</span><span class="s3">(</span>
+					<span class="s1">compareSelect</span><span class="s3">(</span><span class="s1">a </span><span class="s3">=&gt; </span><span class="s1">a</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">, </span><span class="s1">compareLocations</span><span class="s3">),</span>
+					<span class="s1">keepOriginalOrder</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">)</span>
+				<span class="s3">)</span>
+			<span class="s3">);</span>
+
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode </span><span class="s3">=== </span><span class="s2">&quot;sync&quot; </span><span class="s3">|| </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode </span><span class="s3">=== </span><span class="s2">&quot;eager&quot;</span><span class="s3">) {</span>
+				<span class="s0">// if we have an sync or eager context</span>
+				<span class="s0">// just add all dependencies and continue</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies </span><span class="s3">= </span><span class="s1">dependencies</span><span class="s3">;</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode </span><span class="s3">=== </span><span class="s2">&quot;lazy-once&quot;</span><span class="s3">) {</span>
+				<span class="s0">// for the lazy-once mode create a new async dependency block</span>
+				<span class="s0">// and add that block to this context</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">block </span><span class="s3">= </span><span class="s4">new </span><span class="s1">AsyncDependenciesBlock</span><span class="s3">({</span>
+						<span class="s1">...</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">,</span>
+						<span class="s1">name</span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkName</span>
+					<span class="s3">});</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of dependencies</span><span class="s3">) {</span>
+						<span class="s1">block</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">addBlock</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode </span><span class="s3">=== </span><span class="s2">&quot;weak&quot; </span><span class="s3">||</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode </span><span class="s3">=== </span><span class="s2">&quot;async-weak&quot;</span>
+			<span class="s3">) {</span>
+				<span class="s0">// we mark all dependencies as weak</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of dependencies</span><span class="s3">) {</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">weak </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies </span><span class="s3">= </span><span class="s1">dependencies</span><span class="s3">;</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode </span><span class="s3">=== </span><span class="s2">&quot;lazy&quot;</span><span class="s3">) {</span>
+				<span class="s0">// if we are lazy create a new async dependency block per dependency</span>
+				<span class="s0">// and add all blocks to this context</span>
+				<span class="s4">let </span><span class="s1">index </span><span class="s3">= </span><span class="s8">0</span><span class="s3">;</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of dependencies</span><span class="s3">) {</span>
+					<span class="s4">let </span><span class="s1">chunkName </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">) {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s7">/\[(index|request)\]/</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">)) {</span>
+							<span class="s1">chunkName </span><span class="s3">+= </span><span class="s2">&quot;[index]&quot;</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s1">chunkName </span><span class="s3">= </span><span class="s1">chunkName</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s7">/\[index\]/g</span><span class="s3">, </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">index</span><span class="s3">++}</span><span class="s2">`</span><span class="s3">);</span>
+						<span class="s1">chunkName </span><span class="s3">= </span><span class="s1">chunkName</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span>
+							<span class="s7">/\[request\]/g</span><span class="s3">,</span>
+							<span class="s1">Template</span><span class="s3">.</span><span class="s1">toPath</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">)</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">const </span><span class="s1">block </span><span class="s3">= </span><span class="s4">new </span><span class="s1">AsyncDependenciesBlock</span><span class="s3">(</span>
+						<span class="s3">{</span>
+							<span class="s1">...</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">,</span>
+							<span class="s1">name</span><span class="s3">: </span><span class="s1">chunkName</span>
+						<span class="s3">},</span>
+						<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">,</span>
+						<span class="s1">dep</span><span class="s3">.</span><span class="s1">userRequest</span>
+					<span class="s3">);</span>
+					<span class="s1">block</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">addBlock</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">callback</span><span class="s3">(</span>
+					<span class="s4">new </span><span class="s1">WebpackError</span><span class="s3">(</span><span class="s2">`Unsupported mode &quot;</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">}</span><span class="s2">&quot; in context`</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s4">return</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context </span><span class="s3">&amp;&amp; !</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">fileSystemInfo</span><span class="s3">.</span><span class="s1">createSnapshot</span><span class="s3">(</span>
+				<span class="s1">startTime</span><span class="s3">,</span>
+				<span class="s4">null</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">context</span>
+					<span class="s3">? [</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context</span><span class="s3">]</span>
+					<span class="s3">: </span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span>
+						<span class="s3">? [</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">]</span>
+						<span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">),</span>
+				<span class="s4">null</span><span class="s3">,</span>
+				<span class="s1">SNAPSHOT_OPTIONS</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">snapshot</span><span class="s3">) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+					<span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">snapshot </span><span class="s3">= </span><span class="s1">snapshot</span><span class="s3">;</span>
+					<span class="s1">callback</span><span class="s3">();</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LazySet&lt;string&gt;} fileDependencies set where file dependencies are added to</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LazySet&lt;string&gt;} contextDependencies set where context dependencies are added to</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LazySet&lt;string&gt;} missingDependencies set where missing dependencies are added to</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LazySet&lt;string&gt;} buildDependencies set where build dependencies are added to</span>
+	 <span class="s5">*/</span>
+	<span class="s1">addCacheDependencies</span><span class="s3">(</span>
+		<span class="s1">fileDependencies</span><span class="s3">,</span>
+		<span class="s1">contextDependencies</span><span class="s3">,</span>
+		<span class="s1">missingDependencies</span><span class="s3">,</span>
+		<span class="s1">buildDependencies</span>
+	<span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context</span><span class="s3">) {</span>
+			<span class="s1">contextDependencies</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">context</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+			<span class="s1">contextDependencies</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+			<span class="s0">// Do nothing</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">res of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">) </span><span class="s1">contextDependencies</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">res</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency[]} dependencies all dependencies</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Map&lt;string, string | number&gt;} map with user requests</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getUserRequestMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+		<span class="s0">// if we filter first we get a new array</span>
+		<span class="s0">// therefore we don't need to create a clone of dependencies explicitly</span>
+		<span class="s0">// therefore the order of this is !important!</span>
+		<span class="s4">const </span><span class="s1">sortedDependencies </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextElementDependency[]} */</span>
+			<span class="s3">(</span><span class="s1">dependencies</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">dependency </span><span class="s3">=&gt; </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">))</span>
+				<span class="s3">.</span><span class="s1">sort</span><span class="s3">((</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">=== </span><span class="s1">b</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">) {</span>
+						<span class="s4">return </span><span class="s8">0</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s4">return </span><span class="s1">a</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">&lt; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">? -</span><span class="s8">1 </span><span class="s3">: </span><span class="s8">1</span><span class="s3">;</span>
+				<span class="s3">});</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of sortedDependencies</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">));</span>
+			<span class="s1">map</span><span class="s3">[</span><span class="s1">dep</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">] = </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">map</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency[]} dependencies all dependencies</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{FakeMap | FakeMapType} fake map</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getFakeMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespaceObject</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s8">9</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+		<span class="s0">// bitfield</span>
+		<span class="s4">let </span><span class="s1">hasType </span><span class="s3">= </span><span class="s8">0</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">comparator </span><span class="s3">= </span><span class="s1">compareModulesById</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s0">// if we filter first we get a new array</span>
+		<span class="s0">// therefore we don't need to create a clone of dependencies explicitly</span>
+		<span class="s0">// therefore the order of this is !important!</span>
+		<span class="s4">const </span><span class="s1">sortedModules </span><span class="s3">= </span><span class="s1">dependencies</span>
+			<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span>
+				<span class="s1">dependency </span><span class="s3">=&gt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">))</span>
+			<span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">Boolean</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span><span class="s1">comparator</span><span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{FakeMap} */</span>
+		<span class="s4">const </span><span class="s1">fakeMap </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of sortedModules</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">exportsType </span><span class="s3">= </span><span class="s1">module</span><span class="s3">.</span><span class="s1">getExportsType</span><span class="s3">(</span>
+				<span class="s1">moduleGraph</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespaceObject </span><span class="s3">=== </span><span class="s2">&quot;strict&quot;</span>
+			<span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">id </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">module</span><span class="s3">));</span>
+			<span class="s4">switch </span><span class="s3">(</span><span class="s1">exportsType</span><span class="s3">) {</span>
+				<span class="s4">case </span><span class="s2">&quot;namespace&quot;</span><span class="s3">:</span>
+					<span class="s1">fakeMap</span><span class="s3">[</span><span class="s1">id</span><span class="s3">] = </span><span class="s8">9</span><span class="s3">;</span>
+					<span class="s1">hasType </span><span class="s3">|= </span><span class="s8">1</span><span class="s3">;</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s4">case </span><span class="s2">&quot;dynamic&quot;</span><span class="s3">:</span>
+					<span class="s1">fakeMap</span><span class="s3">[</span><span class="s1">id</span><span class="s3">] = </span><span class="s8">7</span><span class="s3">;</span>
+					<span class="s1">hasType </span><span class="s3">|= </span><span class="s8">2</span><span class="s3">;</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s4">case </span><span class="s2">&quot;default-only&quot;</span><span class="s3">:</span>
+					<span class="s1">fakeMap</span><span class="s3">[</span><span class="s1">id</span><span class="s3">] = </span><span class="s8">1</span><span class="s3">;</span>
+					<span class="s1">hasType </span><span class="s3">|= </span><span class="s8">4</span><span class="s3">;</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s4">case </span><span class="s2">&quot;default-with-named&quot;</span><span class="s3">:</span>
+					<span class="s1">fakeMap</span><span class="s3">[</span><span class="s1">id</span><span class="s3">] = </span><span class="s8">3</span><span class="s3">;</span>
+					<span class="s1">hasType </span><span class="s3">|= </span><span class="s8">8</span><span class="s3">;</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s4">default</span><span class="s3">:</span>
+					<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">`Unexpected exports type </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportsType</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hasType </span><span class="s3">=== </span><span class="s8">1</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s8">9</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hasType </span><span class="s3">=== </span><span class="s8">2</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s8">7</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hasType </span><span class="s3">=== </span><span class="s8">4</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s8">1</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hasType </span><span class="s3">=== </span><span class="s8">8</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s8">3</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hasType </span><span class="s3">=== </span><span class="s8">0</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s8">9</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">fakeMap</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FakeMap | FakeMapType} fakeMap fake map</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} fake map init statement</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getFakeMapInitStatement</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">) {</span>
+		<span class="s4">return typeof </span><span class="s1">fakeMap </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span>
+			<span class="s3">? </span><span class="s2">`var fakeMap = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\t</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">;`</span>
+			<span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FakeMapType} type type</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean=} asyncModule is async module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} return result</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getReturn</span><span class="s3">(</span><span class="s1">type</span><span class="s3">, </span><span class="s1">asyncModule</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">type </span><span class="s3">=== </span><span class="s8">9</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span><span class="s3">}</span><span class="s2">(id)`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">createFakeNamespaceObject</span><span class="s3">}</span><span class="s2">(id, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span>
+			<span class="s1">asyncModule </span><span class="s3">? </span><span class="s2">&quot; | 16&quot; </span><span class="s3">: </span><span class="s2">&quot;&quot;</span>
+		<span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FakeMap | FakeMapType} fakeMap fake map</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean=} asyncModule us async module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string=} fakeMapDataExpression fake map data expression</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} module object source</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getReturnModuleObjectSource</span><span class="s3">(</span>
+		<span class="s1">fakeMap</span><span class="s3">,</span>
+		<span class="s1">asyncModule</span><span class="s3">,</span>
+		<span class="s1">fakeMapDataExpression </span><span class="s3">= </span><span class="s2">&quot;fakeMap[id]&quot;</span>
+	<span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">fakeMap </span><span class="s3">=== </span><span class="s2">&quot;number&quot;</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s2">`return </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getReturn</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">, </span><span class="s1">asyncModule</span><span class="s3">)}</span><span class="s2">;`</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s2">`return </span><span class="s1">$</span><span class="s3">{</span>
+			<span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">createFakeNamespaceObject</span>
+		<span class="s3">}</span><span class="s2">(id, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">fakeMapDataExpression</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">asyncModule </span><span class="s3">? </span><span class="s2">&quot; | 16&quot; </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency[]} dependencies dependencies</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getSyncSource</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getUserRequestMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">fakeMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">returnModuleObject </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getReturnModuleObjectSource</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">);</span>
+
+		<span class="s4">return </span><span class="s2">`var map = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\t</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">; 
+</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMapInitStatement</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">)}</span>
+
+<span class="s2">function webpackContext(req) { 
+    var id = webpackContextResolve(req); 
+    </span><span class="s1">$</span><span class="s3">{</span><span class="s1">returnModuleObject</span><span class="s3">}</span>
+<span class="s2">} 
+function webpackContextResolve(req) { 
+    if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(map, req)) { 
+        var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+        e.code = 'MODULE_NOT_FOUND'; 
+        throw e; 
+    } 
+    return map[req]; 
+} 
+webpackContext.keys = function webpackContextKeys() { 
+    return Object.keys(map); 
+}; 
+webpackContext.resolve = webpackContextResolve; 
+module.exports = webpackContext; 
+webpackContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency[]} dependencies dependencies</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getWeakSyncSource</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getUserRequestMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">fakeMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">returnModuleObject </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getReturnModuleObjectSource</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">);</span>
+
+		<span class="s4">return </span><span class="s2">`var map = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\t</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">; 
+</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMapInitStatement</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">)}</span>
+
+<span class="s2">function webpackContext(req) { 
+    var id = webpackContextResolve(req); 
+    if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">moduleFactories</span><span class="s3">}</span><span class="s2">[id]) { 
+        var e = new Error(&quot;Module '&quot; + req + &quot;' ('&quot; + id + &quot;') is not available (weak dependency)&quot;); 
+        e.code = 'MODULE_NOT_FOUND'; 
+        throw e; 
+    } 
+    </span><span class="s1">$</span><span class="s3">{</span><span class="s1">returnModuleObject</span><span class="s3">}</span>
+<span class="s2">} 
+function webpackContextResolve(req) { 
+    if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(map, req)) { 
+        var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+        e.code = 'MODULE_NOT_FOUND'; 
+        throw e; 
+    } 
+    return map[req]; 
+} 
+webpackContext.keys = function webpackContextKeys() { 
+    return Object.keys(map); 
+}; 
+webpackContext.resolve = webpackContextResolve; 
+webpackContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">; 
+module.exports = webpackContext;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency[]} dependencies dependencies</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} context context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} context.chunkGraph the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} context.runtimeTemplate the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getAsyncWeakSource</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, { </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">runtimeTemplate </span><span class="s3">}) {</span>
+		<span class="s4">const </span><span class="s1">arrow </span><span class="s3">= </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">supportsArrowFunction</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getUserRequestMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">fakeMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">returnModuleObject </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getReturnModuleObjectSource</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+
+		<span class="s4">return </span><span class="s2">`var map = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\t</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">; 
+</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMapInitStatement</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">)}</span>
+
+<span class="s2">function webpackAsyncContext(req) { 
+    return webpackAsyncContextResolve(req).then(</span><span class="s1">$</span><span class="s3">{</span>
+		<span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;id =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function(id)&quot;</span>
+	<span class="s3">} </span><span class="s2">{ 
+        if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">moduleFactories</span><span class="s3">}</span><span class="s2">[id]) { 
+            var e = new Error(&quot;Module '&quot; + req + &quot;' ('&quot; + id + &quot;') is not available (weak dependency)&quot;); 
+            e.code = 'MODULE_NOT_FOUND'; 
+            throw e; 
+        } 
+        </span><span class="s1">$</span><span class="s3">{</span><span class="s1">returnModuleObject</span><span class="s3">}</span>
+	<span class="s2">}); 
+} 
+function webpackAsyncContextResolve(req) { 
+    // Here Promise.resolve().then() is used instead of new Promise() to prevent 
+    // uncaught exception popping up in devtools 
+    return Promise.resolve().then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;() =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function()&quot;</span><span class="s3">} </span><span class="s2">{ 
+        if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(map, req)) { 
+            var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+            e.code = 'MODULE_NOT_FOUND'; 
+            throw e; 
+        } 
+        return map[req]; 
+    }); 
+} 
+webpackAsyncContext.keys = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">returningFunction</span><span class="s3">(</span>
+			<span class="s2">&quot;Object.keys(map)&quot;</span>
+		<span class="s3">)}</span><span class="s2">; 
+webpackAsyncContext.resolve = webpackAsyncContextResolve; 
+webpackAsyncContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">; 
+module.exports = webpackAsyncContext;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency[]} dependencies dependencies</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} context context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} context.chunkGraph the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} context.runtimeTemplate the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getEagerSource</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, { </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">runtimeTemplate </span><span class="s3">}) {</span>
+		<span class="s4">const </span><span class="s1">arrow </span><span class="s3">= </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">supportsArrowFunction</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getUserRequestMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">fakeMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">thenFunction </span><span class="s3">=</span>
+			<span class="s1">fakeMap </span><span class="s3">!== </span><span class="s8">9</span>
+				<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;id =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function(id)&quot;</span><span class="s3">} </span><span class="s2">{ 
+        </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getReturnModuleObjectSource</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">, </span><span class="s4">true</span><span class="s3">)}</span>
+	<span class="s2">}`</span>
+				<span class="s3">: </span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s2">`var map = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\t</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">; 
+</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMapInitStatement</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">)}</span>
+
+<span class="s2">function webpackAsyncContext(req) { 
+    return webpackAsyncContextResolve(req).then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">thenFunction</span><span class="s3">}</span><span class="s2">); 
+} 
+function webpackAsyncContextResolve(req) { 
+    // Here Promise.resolve().then() is used instead of new Promise() to prevent 
+    // uncaught exception popping up in devtools 
+    return Promise.resolve().then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;() =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function()&quot;</span><span class="s3">} </span><span class="s2">{ 
+        if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(map, req)) { 
+            var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+            e.code = 'MODULE_NOT_FOUND'; 
+            throw e; 
+        } 
+        return map[req]; 
+    }); 
+} 
+webpackAsyncContext.keys = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">returningFunction</span><span class="s3">(</span>
+			<span class="s2">&quot;Object.keys(map)&quot;</span>
+		<span class="s3">)}</span><span class="s2">; 
+webpackAsyncContext.resolve = webpackAsyncContextResolve; 
+webpackAsyncContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">; 
+module.exports = webpackAsyncContext;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AsyncDependenciesBlock} block block</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency[]} dependencies dependencies</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} options options object</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} options.runtimeTemplate the runtime template</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} options.chunkGraph the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getLazyOnceSource</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, { </span><span class="s1">runtimeTemplate</span><span class="s3">, </span><span class="s1">chunkGraph </span><span class="s3">}) {</span>
+		<span class="s4">const </span><span class="s1">promise </span><span class="s3">= </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">blockPromise</span><span class="s3">({</span>
+			<span class="s1">chunkGraph</span><span class="s3">,</span>
+			<span class="s1">block</span><span class="s3">,</span>
+			<span class="s1">message</span><span class="s3">: </span><span class="s2">&quot;lazy-once context&quot;</span><span class="s3">,</span>
+			<span class="s1">runtimeRequirements</span><span class="s3">: </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">()</span>
+		<span class="s3">});</span>
+		<span class="s4">const </span><span class="s1">arrow </span><span class="s3">= </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">supportsArrowFunction</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getUserRequestMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">fakeMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMap</span><span class="s3">(</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">thenFunction </span><span class="s3">=</span>
+			<span class="s1">fakeMap </span><span class="s3">!== </span><span class="s8">9</span>
+				<span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;id =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function(id)&quot;</span><span class="s3">} </span><span class="s2">{ 
+        </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getReturnModuleObjectSource</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">, </span><span class="s4">true</span><span class="s3">)}</span><span class="s2">; 
+    }`</span>
+				<span class="s3">: </span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span><span class="s3">;</span>
+
+		<span class="s4">return </span><span class="s2">`var map = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\t</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">; 
+</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMapInitStatement</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">)}</span>
+
+<span class="s2">function webpackAsyncContext(req) { 
+    return webpackAsyncContextResolve(req).then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">thenFunction</span><span class="s3">}</span><span class="s2">); 
+} 
+function webpackAsyncContextResolve(req) { 
+    return </span><span class="s1">$</span><span class="s3">{</span><span class="s1">promise</span><span class="s3">}</span><span class="s2">.then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;() =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function()&quot;</span><span class="s3">} </span><span class="s2">{ 
+        if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(map, req)) { 
+            var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+            e.code = 'MODULE_NOT_FOUND'; 
+            throw e; 
+        } 
+        return map[req]; 
+    }); 
+} 
+webpackAsyncContext.keys = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">returningFunction</span><span class="s3">(</span>
+			<span class="s2">&quot;Object.keys(map)&quot;</span>
+		<span class="s3">)}</span><span class="s2">; 
+webpackAsyncContext.resolve = webpackAsyncContextResolve; 
+webpackAsyncContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">; 
+module.exports = webpackAsyncContext;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AsyncDependenciesBlock[]} blocks blocks</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{object} context context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} context.chunkGraph the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} context.runtimeTemplate the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getLazySource</span><span class="s3">(</span><span class="s1">blocks</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, { </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">runtimeTemplate </span><span class="s3">}) {</span>
+		<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">arrow </span><span class="s3">= </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">supportsArrowFunction</span><span class="s3">();</span>
+		<span class="s4">let </span><span class="s1">hasMultipleOrNoChunks </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">hasNoChunk </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">fakeMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMap</span><span class="s3">(</span>
+			<span class="s1">blocks</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">b </span><span class="s3">=&gt; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">[</span><span class="s8">0</span><span class="s3">]),</span>
+			<span class="s1">chunkGraph</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">hasFakeMap </span><span class="s3">= </span><span class="s4">typeof </span><span class="s1">fakeMap </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{userRequest: string, dependency: ContextElementDependency, chunks: undefined | Chunk[], module: Module, block: AsyncDependenciesBlock}} Item */</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{Item[]}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">items </span><span class="s3">= </span><span class="s1">blocks</span>
+			<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">block </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">dependency </span><span class="s3">=</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextElementDependency} */</span>
+					<span class="s3">(</span><span class="s1">block</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">[</span><span class="s8">0</span><span class="s3">]);</span>
+				<span class="s4">return </span><span class="s3">{</span>
+					<span class="s1">dependency</span><span class="s3">,</span>
+					<span class="s1">module</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">)),</span>
+					<span class="s1">block</span><span class="s3">,</span>
+					<span class="s1">userRequest</span><span class="s3">: </span><span class="s1">dependency</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">,</span>
+					<span class="s1">chunks</span><span class="s3">: </span><span class="s1">undefined</span>
+				<span class="s3">};</span>
+			<span class="s3">})</span>
+			<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">item </span><span class="s3">=&gt; </span><span class="s1">item</span><span class="s3">.</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of items</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">chunkGroup </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getBlockChunkGroup</span><span class="s3">(</span><span class="s1">item</span><span class="s3">.</span><span class="s1">block</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">chunks </span><span class="s3">= (</span><span class="s1">chunkGroup </span><span class="s3">&amp;&amp; </span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) || [];</span>
+			<span class="s1">item</span><span class="s3">.</span><span class="s1">chunks </span><span class="s3">= </span><span class="s1">chunks</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">chunks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">) {</span>
+				<span class="s1">hasNoChunk </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">chunks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">!== </span><span class="s8">1</span><span class="s3">) {</span>
+				<span class="s1">hasMultipleOrNoChunks </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">shortMode </span><span class="s3">= </span><span class="s1">hasNoChunk </span><span class="s3">&amp;&amp; !</span><span class="s1">hasFakeMap</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">sortedItems </span><span class="s3">= </span><span class="s1">items</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">((</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">=== </span><span class="s1">b</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">) </span><span class="s4">return </span><span class="s8">0</span><span class="s3">;</span>
+			<span class="s4">return </span><span class="s1">a</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">&lt; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">userRequest </span><span class="s3">? -</span><span class="s8">1 </span><span class="s3">: </span><span class="s8">1</span><span class="s3">;</span>
+		<span class="s3">});</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, ModuleId | (ModuleId[] | ChunkId[])&gt;} */</span>
+		<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of sortedItems</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">moduleId </span><span class="s3">=</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */</span>
+				<span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">item</span><span class="s3">.</span><span class="s1">module</span><span class="s3">));</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">shortMode</span><span class="s3">) {</span>
+				<span class="s1">map</span><span class="s3">[</span><span class="s1">item</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">] = </span><span class="s1">moduleId</span><span class="s3">;</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{(ModuleId | ChunkId)[]} */</span>
+				<span class="s4">const </span><span class="s1">arrayStart </span><span class="s3">= [</span><span class="s1">moduleId</span><span class="s3">];</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">hasFakeMap</span><span class="s3">) {</span>
+					<span class="s1">arrayStart</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">fakeMap</span><span class="s3">[</span><span class="s1">moduleId</span><span class="s3">]);</span>
+				<span class="s3">}</span>
+				<span class="s1">map</span><span class="s3">[</span><span class="s1">item</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">] = </span><span class="s1">arrayStart</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Chunk[]} */</span>
+					<span class="s3">(</span><span class="s1">item</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">).</span><span class="s1">map</span><span class="s3">(</span><span class="s1">chunk </span><span class="s3">=&gt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId} */ </span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">))</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s4">const </span><span class="s1">chunksStartPosition </span><span class="s3">= </span><span class="s1">hasFakeMap </span><span class="s3">? </span><span class="s8">2 </span><span class="s3">: </span><span class="s8">1</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">requestPrefix </span><span class="s3">= </span><span class="s1">hasNoChunk</span>
+			<span class="s3">? </span><span class="s2">&quot;Promise.resolve()&quot;</span>
+			<span class="s3">: </span><span class="s1">hasMultipleOrNoChunks</span>
+				<span class="s3">? </span><span class="s2">`Promise.all(ids.slice(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunksStartPosition</span><span class="s3">}</span><span class="s2">).map(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">ensureChunk</span><span class="s3">}</span><span class="s2">))`</span>
+				<span class="s3">: </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">ensureChunk</span><span class="s3">}</span><span class="s2">(ids[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunksStartPosition</span><span class="s3">}</span><span class="s2">])`</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">returnModuleObject </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getReturnModuleObjectSource</span><span class="s3">(</span>
+			<span class="s1">fakeMap</span><span class="s3">,</span>
+			<span class="s4">true</span><span class="s3">,</span>
+			<span class="s1">shortMode </span><span class="s3">? </span><span class="s2">&quot;invalid&quot; </span><span class="s3">: </span><span class="s2">&quot;ids[1]&quot;</span>
+		<span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">webpackAsyncContext </span><span class="s3">=</span>
+			<span class="s1">requestPrefix </span><span class="s3">=== </span><span class="s2">&quot;Promise.resolve()&quot;</span>
+				<span class="s3">? </span><span class="s2">`</span>
+<span class="s2">function webpackAsyncContext(req) { 
+    return Promise.resolve().then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;() =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function()&quot;</span><span class="s3">} </span><span class="s2">{ 
+        if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(map, req)) { 
+            var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+            e.code = 'MODULE_NOT_FOUND'; 
+            throw e; 
+        } 
+ 
+        </span><span class="s1">$</span><span class="s3">{</span><span class="s1">shortMode </span><span class="s3">? </span><span class="s2">&quot;var id = map[req];&quot; </span><span class="s3">: </span><span class="s2">&quot;var ids = map[req], id = ids[0];&quot;</span><span class="s3">}</span>
+		<span class="s1">$</span><span class="s3">{</span><span class="s1">returnModuleObject</span><span class="s3">}</span>
+	<span class="s2">}); 
+}`</span>
+				<span class="s3">: </span><span class="s2">`function webpackAsyncContext(req) { 
+    if(!</span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">}</span><span class="s2">(map, req)) { 
+        return Promise.resolve().then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;() =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function()&quot;</span><span class="s3">} </span><span class="s2">{ 
+            var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+            e.code = 'MODULE_NOT_FOUND'; 
+            throw e; 
+        }); 
+    } 
+ 
+    var ids = map[req], id = ids[0]; 
+    return </span><span class="s1">$</span><span class="s3">{</span><span class="s1">requestPrefix</span><span class="s3">}</span><span class="s2">.then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;() =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function()&quot;</span><span class="s3">} </span><span class="s2">{ 
+        </span><span class="s1">$</span><span class="s3">{</span><span class="s1">returnModuleObject</span><span class="s3">}</span>
+	<span class="s2">}); 
+}`</span><span class="s3">;</span>
+
+		<span class="s4">return </span><span class="s2">`var map = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\t</span><span class="s2">&quot;</span><span class="s3">)}</span><span class="s2">; 
+</span><span class="s1">$</span><span class="s3">{</span><span class="s1">webpackAsyncContext</span><span class="s3">}</span>
+<span class="s2">webpackAsyncContext.keys = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">returningFunction</span><span class="s3">(</span>
+			<span class="s2">&quot;Object.keys(map)&quot;</span>
+		<span class="s3">)}</span><span class="s2">; 
+webpackAsyncContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">; 
+module.exports = webpackAsyncContext;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} runtimeTemplate runtime template</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source for empty async context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getSourceForEmptyContext</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s2">`function webpackEmptyContext(req) { 
+    var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+    e.code = 'MODULE_NOT_FOUND'; 
+    throw e; 
+} 
+webpackEmptyContext.keys = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">returningFunction</span><span class="s3">(</span><span class="s2">&quot;[]&quot;</span><span class="s3">)}</span><span class="s2">; 
+webpackEmptyContext.resolve = webpackEmptyContext; 
+webpackEmptyContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">; 
+module.exports = webpackEmptyContext;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleId} id module id</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeTemplate} runtimeTemplate runtime template</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} source for empty async context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getSourceForEmptyAsyncContext</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">arrow </span><span class="s3">= </span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">supportsArrowFunction</span><span class="s3">();</span>
+		<span class="s4">return </span><span class="s2">`function webpackEmptyAsyncContext(req) { 
+    // Here Promise.resolve().then() is used instead of new Promise() to prevent 
+    // uncaught exception popping up in devtools 
+    return Promise.resolve().then(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">arrow </span><span class="s3">? </span><span class="s2">&quot;() =&gt;&quot; </span><span class="s3">: </span><span class="s2">&quot;function()&quot;</span><span class="s3">} </span><span class="s2">{ 
+        var e = new Error(&quot;Cannot find module '&quot; + req + &quot;'&quot;); 
+        e.code = 'MODULE_NOT_FOUND'; 
+        throw e; 
+    }); 
+} 
+webpackEmptyAsyncContext.keys = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">returningFunction</span><span class="s3">(</span><span class="s2">&quot;[]&quot;</span><span class="s3">)}</span><span class="s2">; 
+webpackEmptyAsyncContext.resolve = webpackEmptyAsyncContext; 
+webpackEmptyAsyncContext.id = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">id</span><span class="s3">)}</span><span class="s2">; 
+module.exports = webpackEmptyAsyncContext;`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} asyncMode module mode</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CodeGenerationContext} context context info</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} the source code</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getSourceString</span><span class="s3">(</span><span class="s1">asyncMode</span><span class="s3">, { </span><span class="s1">runtimeTemplate</span><span class="s3">, </span><span class="s1">chunkGraph </span><span class="s3">}) {</span>
+		<span class="s4">const </span><span class="s1">id </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s4">this</span><span class="s3">));</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;lazy&quot;</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">blocks </span><span class="s3">&amp;&amp; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">) {</span>
+				<span class="s4">return this</span><span class="s3">.</span><span class="s1">getLazySource</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, {</span>
+					<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+					<span class="s1">chunkGraph</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">getSourceForEmptyAsyncContext</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;eager&quot;</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies </span><span class="s3">&amp;&amp; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">) {</span>
+				<span class="s4">return this</span><span class="s3">.</span><span class="s1">getEagerSource</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, {</span>
+					<span class="s1">chunkGraph</span><span class="s3">,</span>
+					<span class="s1">runtimeTemplate</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">getSourceForEmptyAsyncContext</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;lazy-once&quot;</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">block </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">[</span><span class="s8">0</span><span class="s3">];</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">block</span><span class="s3">) {</span>
+				<span class="s4">return this</span><span class="s3">.</span><span class="s1">getLazyOnceSource</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s1">block</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, {</span>
+					<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+					<span class="s1">chunkGraph</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">getSourceForEmptyAsyncContext</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;async-weak&quot;</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies </span><span class="s3">&amp;&amp; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">) {</span>
+				<span class="s4">return this</span><span class="s3">.</span><span class="s1">getAsyncWeakSource</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, {</span>
+					<span class="s1">chunkGraph</span><span class="s3">,</span>
+					<span class="s1">runtimeTemplate</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">getSourceForEmptyAsyncContext</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span>
+			<span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;weak&quot; </span><span class="s3">&amp;&amp;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies </span><span class="s3">&amp;&amp;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span>
+		<span class="s3">) {</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">getWeakSyncSource</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies </span><span class="s3">&amp;&amp; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">) {</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">getSyncSource</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">, </span><span class="s1">id</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">getSourceForEmptyContext</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">runtimeTemplate</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} sourceString source content</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation=} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Source} generated source</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getSource</span><span class="s3">(</span><span class="s1">sourceString</span><span class="s3">, </span><span class="s1">compilation</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">useSourceMap </span><span class="s3">|| </span><span class="s4">this</span><span class="s3">.</span><span class="s1">useSimpleSourceMap</span><span class="s3">) {</span>
+			<span class="s4">return new </span><span class="s1">OriginalSource</span><span class="s3">(</span>
+				<span class="s1">sourceString</span><span class="s3">,</span>
+				<span class="s2">`webpack://</span><span class="s1">$</span><span class="s3">{</span><span class="s1">makePathsRelative</span><span class="s3">(</span>
+					<span class="s3">(</span><span class="s1">compilation </span><span class="s3">&amp;&amp; </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">context</span><span class="s3">) || </span><span class="s2">&quot;&quot;</span><span class="s3">,</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(),</span>
+					<span class="s1">compilation </span><span class="s3">&amp;&amp; </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">root</span>
+				<span class="s3">)}</span><span class="s2">`</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">sourceString</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CodeGenerationContext} context context for code generation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CodeGenerationResult} result</span>
+	 <span class="s5">*/</span>
+	<span class="s1">codeGeneration</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">} = </span><span class="s1">context</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">sources </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s1">sources</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+			<span class="s2">&quot;javascript&quot;</span><span class="s3">,</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">getSource</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">getSourceString</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">, </span><span class="s1">context</span><span class="s3">),</span>
+				<span class="s1">compilation</span>
+			<span class="s3">)</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">set </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">const </span><span class="s1">allDeps </span><span class="s3">=</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span>
+				<span class="s3">? </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextElementDependency[]} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">).</span><span class="s1">slice</span><span class="s3">()</span>
+				<span class="s3">: [];</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">block of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">)</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of block</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">)</span>
+				<span class="s1">allDeps</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextElementDependency} */ </span><span class="s3">(</span><span class="s1">dep</span><span class="s3">));</span>
+		<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hasOwnProperty</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">allDeps</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">asyncMode </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">mode</span><span class="s3">;</span>
+			<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">require</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;weak&quot;</span><span class="s3">) {</span>
+				<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">moduleFactories</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;async-weak&quot;</span><span class="s3">) {</span>
+				<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">moduleFactories</span><span class="s3">);</span>
+				<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">ensureChunk</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;lazy&quot; </span><span class="s3">|| </span><span class="s1">asyncMode </span><span class="s3">=== </span><span class="s2">&quot;lazy-once&quot;</span><span class="s3">) {</span>
+				<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">ensureChunk</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getFakeMap</span><span class="s3">(</span><span class="s1">allDeps</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">) !== </span><span class="s8">9</span><span class="s3">) {</span>
+				<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">createFakeNamespaceObject</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s3">{</span>
+			<span class="s1">sources</span><span class="s3">,</span>
+			<span class="s1">runtimeRequirements</span><span class="s3">: </span><span class="s1">set</span>
+		<span class="s3">};</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string=} type the source type for which the size should be estimated</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} the estimated size of the module (must be non-zero)</span>
+	 <span class="s5">*/</span>
+	<span class="s1">size</span><span class="s3">(</span><span class="s1">type</span><span class="s3">) {</span>
+		<span class="s0">// base penalty</span>
+		<span class="s4">let </span><span class="s1">size </span><span class="s3">= </span><span class="s8">160</span><span class="s3">;</span>
+
+		<span class="s0">// if we don't have dependencies we stop here.</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dependency of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">element </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ContextElementDependency} */ </span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+			<span class="s1">size </span><span class="s3">+= </span><span class="s8">5 </span><span class="s3">+ </span><span class="s1">element</span><span class="s3">.</span><span class="s1">userRequest</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">size</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectSerializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">serialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">write </span><span class="s3">} = </span><span class="s1">context</span><span class="s3">;</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_identifier</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_forceBuild</span><span class="s3">);</span>
+		<span class="s4">super</span><span class="s3">.</span><span class="s1">serialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectDeserializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">deserialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">read </span><span class="s3">} = </span><span class="s1">context</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_identifier </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_forceBuild </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">super</span><span class="s3">.</span><span class="s1">deserialize</span><span class="s3">(</span><span class="s1">context</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">makeSerializable</span><span class="s3">(</span><span class="s1">ContextModule</span><span class="s3">, </span><span class="s2">&quot;webpack/lib/ContextModule&quot;</span><span class="s3">);</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ContextModule</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

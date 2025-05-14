@@ -1,0 +1,430 @@
+<html>
+<head>
+<title>no-else-return.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-else-return.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to flag `else` after a `return` in `if`</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Ian Christian Myers</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">FixTracker </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/fix-tracker&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow `else` blocks after `return` statements in `if` statements&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-else-return&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [{</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+            <span class="s2">properties</span><span class="s4">: {</span>
+                <span class="s2">allowElseIf</span><span class="s4">: {</span>
+                    <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span><span class="s4">,</span>
+                    <span class="s6">default</span><span class="s4">: </span><span class="s6">true</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+            <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s6">false</span>
+        <span class="s4">}],</span>
+
+        <span class="s2">fixable</span><span class="s4">: </span><span class="s3">&quot;code&quot;</span><span class="s4">,</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">unexpected</span><span class="s4">: </span><span class="s3">&quot;Unnecessary 'else' after 'return'.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s5">//--------------------------------------------------------------------------</span>
+        <span class="s5">// Helpers</span>
+        <span class="s5">//--------------------------------------------------------------------------</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether the given names can be safely used to declare block-scoped variables</span>
+         <span class="s0">* in the given scope. Name collisions can produce redeclaration syntax errors,</span>
+         <span class="s0">* or silently change references and modify behavior of the original code.</span>
+         <span class="s0">*</span>
+         <span class="s0">* This is not a generic function. In particular, it is assumed that the scope is a function scope or</span>
+         <span class="s0">* a function's inner scope, and that the names can be valid identifiers in the given scope.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string[]} names Array of variable names.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Scope} scope Function scope or a function's inner scope.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if all names can be safely declared, false otherwise.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isSafeToDeclare</span><span class="s4">(</span><span class="s2">names</span><span class="s4">, </span><span class="s2">scope</span><span class="s4">) {</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">names</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">functionScope </span><span class="s4">= </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">variableScope</span><span class="s4">;</span>
+
+            <span class="s5">/* 
+             * If this is a function scope, scope.variables will contain parameters, implicit variables such as &quot;arguments&quot;, 
+             * all function-scoped variables ('var'), and block-scoped variables defined in the scope. 
+             * If this is an inner scope, scope.variables will contain block-scoped variables defined in the scope. 
+             * 
+             * Redeclaring any of these would cause a syntax error, except for the implicit variables. 
+             */</span>
+            <span class="s6">const </span><span class="s2">declaredVariables </span><span class="s4">= </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">variables</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(({ </span><span class="s2">defs </span><span class="s4">}) =&gt; </span><span class="s2">defs</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">declaredVariables</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(({ </span><span class="s2">name </span><span class="s4">}) =&gt; </span><span class="s2">names</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">name</span><span class="s4">))) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// Redeclaring a catch variable would also cause a syntax error.</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">scope </span><span class="s4">!== </span><span class="s2">functionScope </span><span class="s4">&amp;&amp; </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;catch&quot;</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">scope</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">.</span><span class="s2">variables</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(({ </span><span class="s2">name </span><span class="s4">}) =&gt; </span><span class="s2">names</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">name</span><span class="s4">))) {</span>
+                    <span class="s6">return false</span><span class="s4">;</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+
+            <span class="s5">/* 
+             * Redeclaring an implicit variable, such as &quot;arguments&quot;, would not cause a syntax error. 
+             * However, if the variable was used, declaring a new one with the same name would change references 
+             * and modify behavior. 
+             */</span>
+            <span class="s6">const </span><span class="s2">usedImplicitVariables </span><span class="s4">= </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">variables</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(({ </span><span class="s2">defs</span><span class="s4">, </span><span class="s2">references </span><span class="s4">}) =&gt;</span>
+                <span class="s2">defs</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0 </span><span class="s4">&amp;&amp; </span><span class="s2">references</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">usedImplicitVariables</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(({ </span><span class="s2">name </span><span class="s4">}) =&gt; </span><span class="s2">names</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">name</span><span class="s4">))) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">/* 
+             * Declaring a variable with a name that was already used to reference a variable from an upper scope 
+             * would change references and modify behavior. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">scope</span><span class="s4">.</span><span class="s2">through</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">t </span><span class="s4">=&gt; </span><span class="s2">names</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">t</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">name</span><span class="s4">))) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">/* 
+             * If the scope is an inner scope (not the function scope), an uninitialized `var` variable declared inside 
+             * the scope node (directly or in one of its descendants) is neither declared nor 'through' in the scope. 
+             * 
+             * For example, this would be a syntax error &quot;Identifier 'a' has already been declared&quot;: 
+             * function foo() { if (bar) { let a; if (baz) { var a; } } } 
+             */</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">scope </span><span class="s4">!== </span><span class="s2">functionScope</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">scopeNodeRange </span><span class="s4">= </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">block</span><span class="s4">.</span><span class="s2">range</span><span class="s4">;</span>
+                <span class="s6">const </span><span class="s2">variablesToCheck </span><span class="s4">= </span><span class="s2">functionScope</span><span class="s4">.</span><span class="s2">variables</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(({ </span><span class="s2">name </span><span class="s4">}) =&gt; </span><span class="s2">names</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">name</span><span class="s4">));</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">variablesToCheck</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">v </span><span class="s4">=&gt; </span><span class="s2">v</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(({ </span><span class="s2">node</span><span class="s4">: { </span><span class="s2">range </span><span class="s4">} }) =&gt;</span>
+                    <span class="s2">scopeNodeRange</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &lt;= </span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp; </span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] &lt;= </span><span class="s2">scopeNodeRange</span><span class="s4">[</span><span class="s7">1</span><span class="s4">]))) {</span>
+                    <span class="s6">return false</span><span class="s4">;</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+
+            <span class="s6">return true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether the removal of `else` and its braces is safe from variable name collisions.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The 'else' node.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Scope} scope The scope in which the node and the whole 'if' statement is.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if it is safe, false otherwise.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isSafeFromNameCollisions</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">scope</span><span class="s4">) {</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;FunctionDeclaration&quot;</span><span class="s4">) {</span>
+
+                <span class="s5">// Conditional function declaration. Scope and hoisting are unpredictable, different engines work differently.</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;BlockStatement&quot;</span><span class="s4">) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">elseBlockScope </span><span class="s4">= </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">childScopes</span><span class="s4">.</span><span class="s2">find</span><span class="s4">(({ </span><span class="s2">block </span><span class="s4">}) =&gt; </span><span class="s2">block </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">elseBlockScope</span><span class="s4">) {</span>
+
+                <span class="s5">// ecmaVersion &lt; 6, `else` block statement cannot have its own scope, no possible collisions.</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">/* 
+             * elseBlockScope is supposed to merge into its upper scope. elseBlockScope.variables array contains 
+             * only block-scoped variables (such as let and const variables or class and function declarations) 
+             * defined directly in the elseBlockScope. These are exactly the only names that could cause collisions. 
+             */</span>
+            <span class="s6">const </span><span class="s2">namesToCheck </span><span class="s4">= </span><span class="s2">elseBlockScope</span><span class="s4">.</span><span class="s2">variables</span><span class="s4">.</span><span class="s2">map</span><span class="s4">(({ </span><span class="s2">name </span><span class="s4">}) =&gt; </span><span class="s2">name</span><span class="s4">);</span>
+
+            <span class="s6">return </span><span class="s2">isSafeToDeclare</span><span class="s4">(</span><span class="s2">namesToCheck</span><span class="s4">, </span><span class="s2">scope</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Display the context report if rule is violated</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} elseNode The 'else' node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">displayReport</span><span class="s4">(</span><span class="s2">elseNode</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">currentScope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">elseNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">);</span>
+
+            <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                <span class="s2">node</span><span class="s4">: </span><span class="s2">elseNode</span><span class="s4">,</span>
+                <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;unexpected&quot;</span><span class="s4">,</span>
+                <span class="s2">fix</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">) {</span>
+
+                    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isSafeFromNameCollisions</span><span class="s4">(</span><span class="s2">elseNode</span><span class="s4">, </span><span class="s2">currentScope</span><span class="s4">)) {</span>
+                        <span class="s6">return null</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+
+                    <span class="s6">const </span><span class="s2">startToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getFirstToken</span><span class="s4">(</span><span class="s2">elseNode</span><span class="s4">);</span>
+                    <span class="s6">const </span><span class="s2">elseToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">startToken</span><span class="s4">);</span>
+                    <span class="s6">const </span><span class="s2">source </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">elseNode</span><span class="s4">);</span>
+                    <span class="s6">const </span><span class="s2">lastIfToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">elseToken</span><span class="s4">);</span>
+                    <span class="s6">let </span><span class="s2">fixedSource</span><span class="s4">, </span><span class="s2">firstTokenOfElseBlock</span><span class="s4">;</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">startToken</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Punctuator&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">startToken</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;{&quot;</span><span class="s4">) {</span>
+                        <span class="s2">firstTokenOfElseBlock </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenAfter</span><span class="s4">(</span><span class="s2">startToken</span><span class="s4">);</span>
+                    <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                        <span class="s2">firstTokenOfElseBlock </span><span class="s4">= </span><span class="s2">startToken</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+
+                    <span class="s5">/* 
+                     * If the if block does not have curly braces and does not end in a semicolon 
+                     * and the else block starts with (, [, /, +, ` or -, then it is not 
+                     * safe to remove the else keyword, because ASI will not add a semicolon 
+                     * after the if block 
+                     */</span>
+                    <span class="s6">const </span><span class="s2">ifBlockMaybeUnsafe </span><span class="s4">= </span><span class="s2">elseNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">consequent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;BlockStatement&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">lastIfToken</span><span class="s4">.</span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;;&quot;</span><span class="s4">;</span>
+                    <span class="s6">const </span><span class="s2">elseBlockUnsafe </span><span class="s4">= </span><span class="s8">/^[([/+`-]/u</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">firstTokenOfElseBlock</span><span class="s4">.</span><span class="s2">value</span><span class="s4">);</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">ifBlockMaybeUnsafe </span><span class="s4">&amp;&amp; </span><span class="s2">elseBlockUnsafe</span><span class="s4">) {</span>
+                        <span class="s6">return null</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+
+                    <span class="s6">const </span><span class="s2">endToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getLastToken</span><span class="s4">(</span><span class="s2">elseNode</span><span class="s4">);</span>
+                    <span class="s6">const </span><span class="s2">lastTokenOfElseBlock </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">endToken</span><span class="s4">);</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">lastTokenOfElseBlock</span><span class="s4">.</span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;;&quot;</span><span class="s4">) {</span>
+                        <span class="s6">const </span><span class="s2">nextToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenAfter</span><span class="s4">(</span><span class="s2">endToken</span><span class="s4">);</span>
+
+                        <span class="s6">const </span><span class="s2">nextTokenUnsafe </span><span class="s4">= </span><span class="s2">nextToken </span><span class="s4">&amp;&amp; </span><span class="s8">/^[([/+`-]/u</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">nextToken</span><span class="s4">.</span><span class="s2">value</span><span class="s4">);</span>
+                        <span class="s6">const </span><span class="s2">nextTokenOnSameLine </span><span class="s4">= </span><span class="s2">nextToken </span><span class="s4">&amp;&amp; </span><span class="s2">nextToken</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">line </span><span class="s4">=== </span><span class="s2">lastTokenOfElseBlock</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">line</span><span class="s4">;</span>
+
+                        <span class="s5">/* 
+                         * If the else block contents does not end in a semicolon, 
+                         * and the else block starts with (, [, /, +, ` or -, then it is not 
+                         * safe to remove the else block, because ASI will not add a semicolon 
+                         * after the remaining else block contents 
+                         */</span>
+                        <span class="s6">if </span><span class="s4">(</span><span class="s2">nextTokenUnsafe </span><span class="s4">|| (</span><span class="s2">nextTokenOnSameLine </span><span class="s4">&amp;&amp; </span><span class="s2">nextToken</span><span class="s4">.</span><span class="s2">value </span><span class="s4">!== </span><span class="s3">&quot;}&quot;</span><span class="s4">)) {</span>
+                            <span class="s6">return null</span><span class="s4">;</span>
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">startToken</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Punctuator&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">startToken</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;{&quot;</span><span class="s4">) {</span>
+                        <span class="s2">fixedSource </span><span class="s4">= </span><span class="s2">source</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s7">1</span><span class="s4">, -</span><span class="s7">1</span><span class="s4">);</span>
+                    <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                        <span class="s2">fixedSource </span><span class="s4">= </span><span class="s2">source</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+
+                    <span class="s5">/* 
+                     * Extend the replacement range to include the entire 
+                     * function to avoid conflicting with no-useless-return. 
+                     * https://github.com/eslint/eslint/issues/8026 
+                     * 
+                     * Also, to avoid name collisions between two else blocks. 
+                     */</span>
+                    <span class="s6">return new </span><span class="s2">FixTracker</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">)</span>
+                        <span class="s4">.</span><span class="s2">retainEnclosingFunction</span><span class="s4">(</span><span class="s2">elseNode</span><span class="s4">)</span>
+                        <span class="s4">.</span><span class="s2">replaceTextRange</span><span class="s4">([</span><span class="s2">elseToken</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">], </span><span class="s2">elseNode</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">]], </span><span class="s2">fixedSource</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">});</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check to see if the node is a ReturnStatement</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The node being evaluated</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if node is a return</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkForReturn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ReturnStatement&quot;</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Naive return checking, does not iterate through the whole</span>
+         <span class="s0">* BlockStatement because we make the assumption that the ReturnStatement</span>
+         <span class="s0">* will be the last node in the body of the BlockStatement.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The consequent/alternate node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if it has a return</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">naiveHasReturn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;BlockStatement&quot;</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">body </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">body</span><span class="s4">,</span>
+                    <span class="s2">lastChildNode </span><span class="s4">= </span><span class="s2">body</span><span class="s4">[</span><span class="s2">body</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+
+                <span class="s6">return </span><span class="s2">lastChildNode </span><span class="s4">&amp;&amp; </span><span class="s2">checkForReturn</span><span class="s4">(</span><span class="s2">lastChildNode</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s6">return </span><span class="s2">checkForReturn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check to see if the node is valid for evaluation,</span>
+         <span class="s0">* meaning it has an else.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The node being evaluated</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the node is valid</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">hasElse</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">alternate </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">consequent</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* If the consequent is an IfStatement, check to see if it has an else</span>
+         <span class="s0">* and both its consequent and alternate path return, meaning this is</span>
+         <span class="s0">* a nested case of rule violation.  If-Else not considered currently.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The consequent node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if this is a nested rule violation</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkForIf</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;IfStatement&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">hasElse</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) &amp;&amp;</span>
+                <span class="s2">naiveHasReturn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">alternate</span><span class="s4">) &amp;&amp; </span><span class="s2">naiveHasReturn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">consequent</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check the consequent/body node to make sure it is not</span>
+         <span class="s0">* a ReturnStatement or an IfStatement that returns on both</span>
+         <span class="s0">* code paths.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The consequent or body node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if it is a Return/If node that always returns.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkForReturnOrIf</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">checkForReturn</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) || </span><span class="s2">checkForIf</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check whether a node returns in every codepath.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The node to be checked</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if it returns on every codepath.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">alwaysReturns</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;BlockStatement&quot;</span><span class="s4">) {</span>
+
+                <span class="s5">// If we have a BlockStatement, check each consequent body node.</span>
+                <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">body</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">checkForReturnOrIf</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s5">/* 
+             * If not a block statement, make sure the consequent isn't a 
+             * ReturnStatement or an IfStatement with returns on both paths. 
+             */</span>
+            <span class="s6">return </span><span class="s2">checkForReturnOrIf</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check the if statement, but don't catch else-if blocks.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The node for the if statement to check</span>
+         <span class="s0">* </span><span class="s1">@private</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkIfWithoutElse</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">parent </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+            <span class="s5">/* 
+             * Fixing this would require splitting one statement into two, so no error should 
+             * be reported if this node is in a position where only one statement is allowed. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">STATEMENT_LIST_PARENTS</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)) {</span>
+                <span class="s6">return</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">consequents </span><span class="s4">= [];</span>
+            <span class="s6">let </span><span class="s2">alternate</span><span class="s4">;</span>
+
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">currentNode </span><span class="s4">= </span><span class="s2">node</span><span class="s4">; </span><span class="s2">currentNode</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;IfStatement&quot;</span><span class="s4">; </span><span class="s2">currentNode </span><span class="s4">= </span><span class="s2">currentNode</span><span class="s4">.</span><span class="s2">alternate</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">currentNode</span><span class="s4">.</span><span class="s2">alternate</span><span class="s4">) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+                <span class="s2">consequents</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">currentNode</span><span class="s4">.</span><span class="s2">consequent</span><span class="s4">);</span>
+                <span class="s2">alternate </span><span class="s4">= </span><span class="s2">currentNode</span><span class="s4">.</span><span class="s2">alternate</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">consequents</span><span class="s4">.</span><span class="s2">every</span><span class="s4">(</span><span class="s2">alwaysReturns</span><span class="s4">)) {</span>
+                <span class="s2">displayReport</span><span class="s4">(</span><span class="s2">alternate</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check the if statement</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The node for the if statement to check</span>
+         <span class="s0">* </span><span class="s1">@private</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkIfWithElse</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">parent </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+
+            <span class="s5">/* 
+             * Fixing this would require splitting one statement into two, so no error should 
+             * be reported if this node is in a position where only one statement is allowed. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">STATEMENT_LIST_PARENTS</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)) {</span>
+                <span class="s6">return</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">alternate </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">alternate</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">alternate </span><span class="s4">&amp;&amp; </span><span class="s2">alwaysReturns</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">consequent</span><span class="s4">)) {</span>
+                <span class="s2">displayReport</span><span class="s4">(</span><span class="s2">alternate</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s2">allowElseIf </span><span class="s4">= !(</span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">allowElseIf </span><span class="s4">=== </span><span class="s6">false</span><span class="s4">);</span>
+
+        <span class="s5">//--------------------------------------------------------------------------</span>
+        <span class="s5">// Public API</span>
+        <span class="s5">//--------------------------------------------------------------------------</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+
+            <span class="s3">&quot;IfStatement:exit&quot;</span><span class="s4">: </span><span class="s2">allowElseIf </span><span class="s4">? </span><span class="s2">checkIfWithoutElse </span><span class="s4">: </span><span class="s2">checkIfWithElse</span>
+
+        <span class="s4">};</span>
+
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

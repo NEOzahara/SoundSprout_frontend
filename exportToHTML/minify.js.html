@@ -1,0 +1,435 @@
+<html>
+<head>
+<title>minify.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #7a7e85;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #42c3d4;}
+.s6 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+minify.js</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;use strict&quot;</span><span class="s1">;</span>
+<span class="s3">/* eslint-env browser, es6, node */</span>
+
+<span class="s4">import </span><span class="s1">{</span>
+    <span class="s2">defaults</span><span class="s1">,</span>
+    <span class="s2">map_from_object</span><span class="s1">,</span>
+    <span class="s2">map_to_object</span><span class="s1">,</span>
+    <span class="s2">HOP</span><span class="s1">,</span>
+<span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./utils/index.js&quot;</span><span class="s1">;</span>
+<span class="s4">import </span><span class="s1">{ </span><span class="s2">AST_Toplevel</span><span class="s1">, </span><span class="s2">AST_Node</span><span class="s1">, </span><span class="s2">walk</span><span class="s1">, </span><span class="s2">AST_Scope </span><span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./ast.js&quot;</span><span class="s1">;</span>
+<span class="s4">import </span><span class="s1">{ </span><span class="s2">parse </span><span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./parse.js&quot;</span><span class="s1">;</span>
+<span class="s4">import </span><span class="s1">{ </span><span class="s2">OutputStream </span><span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./output.js&quot;</span><span class="s1">;</span>
+<span class="s4">import </span><span class="s1">{ </span><span class="s2">Compressor </span><span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./compress/index.js&quot;</span><span class="s1">;</span>
+<span class="s4">import </span><span class="s1">{ </span><span class="s2">base54 </span><span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./scope.js&quot;</span><span class="s1">;</span>
+<span class="s4">import </span><span class="s1">{ </span><span class="s2">SourceMap </span><span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./sourcemap.js&quot;</span><span class="s1">;</span>
+<span class="s4">import </span><span class="s1">{</span>
+    <span class="s2">mangle_properties</span><span class="s1">,</span>
+    <span class="s2">mangle_private_properties</span><span class="s1">,</span>
+    <span class="s2">reserve_quoted_keys</span><span class="s1">,</span>
+    <span class="s2">find_annotated_props</span><span class="s1">,</span>
+<span class="s1">} </span><span class="s2">from </span><span class="s0">&quot;./propmangle.js&quot;</span><span class="s1">;</span>
+
+<span class="s3">// to/from base64 functions</span>
+<span class="s3">// Prefer built-in Buffer, if available, then use hack</span>
+<span class="s3">// https://developer.mozilla.org/en-US/docs/Glossary/Base64#The_Unicode_Problem</span>
+<span class="s4">var </span><span class="s2">to_ascii </span><span class="s1">= </span><span class="s4">typeof </span><span class="s2">Buffer </span><span class="s1">!== </span><span class="s0">&quot;undefined&quot;</span>
+    <span class="s1">? (</span><span class="s2">b64</span><span class="s1">) =&gt; </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">from</span><span class="s1">(</span><span class="s2">b64</span><span class="s1">, </span><span class="s0">&quot;base64&quot;</span><span class="s1">).</span><span class="s2">toString</span><span class="s1">()</span>
+    <span class="s1">: (</span><span class="s2">b64</span><span class="s1">) =&gt; </span><span class="s2">decodeURIComponent</span><span class="s1">(</span><span class="s2">escape</span><span class="s1">(</span><span class="s2">atob</span><span class="s1">(</span><span class="s2">b64</span><span class="s1">)));</span>
+<span class="s4">var </span><span class="s2">to_base64 </span><span class="s1">= </span><span class="s4">typeof </span><span class="s2">Buffer </span><span class="s1">!== </span><span class="s0">&quot;undefined&quot;</span>
+    <span class="s1">? (</span><span class="s2">str</span><span class="s1">) =&gt; </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">from</span><span class="s1">(</span><span class="s2">str</span><span class="s1">).</span><span class="s2">toString</span><span class="s1">(</span><span class="s0">&quot;base64&quot;</span><span class="s1">)</span>
+    <span class="s1">: (</span><span class="s2">str</span><span class="s1">) =&gt; </span><span class="s2">btoa</span><span class="s1">(</span><span class="s2">unescape</span><span class="s1">(</span><span class="s2">encodeURIComponent</span><span class="s1">(</span><span class="s2">str</span><span class="s1">)));</span>
+
+<span class="s4">function </span><span class="s2">read_source_map</span><span class="s1">(</span><span class="s2">code</span><span class="s1">) {</span>
+    <span class="s4">var </span><span class="s2">match </span><span class="s1">= </span><span class="s5">/(?:^|[^.])\/\/# sourceMappingURL=data:application\/json(;[\w=-]*)?;base64,([+/0-9A-Za-z]*=*)\s*$/</span><span class="s1">.</span><span class="s2">exec</span><span class="s1">(</span><span class="s2">code</span><span class="s1">);</span>
+    <span class="s4">if </span><span class="s1">(!</span><span class="s2">match</span><span class="s1">) {</span>
+        <span class="s2">console</span><span class="s1">.</span><span class="s2">warn</span><span class="s1">(</span><span class="s0">&quot;inline source map not found&quot;</span><span class="s1">);</span>
+        <span class="s4">return null</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s4">return </span><span class="s2">to_ascii</span><span class="s1">(</span><span class="s2">match</span><span class="s1">[</span><span class="s6">2</span><span class="s1">]);</span>
+<span class="s1">}</span>
+
+<span class="s4">function </span><span class="s2">set_shorthand</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">keys</span><span class="s1">) {</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">[</span><span class="s2">name</span><span class="s1">]) {</span>
+        <span class="s2">keys</span><span class="s1">.</span><span class="s2">forEach</span><span class="s1">(</span><span class="s4">function</span><span class="s1">(</span><span class="s2">key</span><span class="s1">) {</span>
+            <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">[</span><span class="s2">key</span><span class="s1">]) {</span>
+                <span class="s4">if </span><span class="s1">(</span><span class="s4">typeof </span><span class="s2">options</span><span class="s1">[</span><span class="s2">key</span><span class="s1">] != </span><span class="s0">&quot;object&quot;</span><span class="s1">) </span><span class="s2">options</span><span class="s1">[</span><span class="s2">key</span><span class="s1">] = {};</span>
+                <span class="s4">if </span><span class="s1">(!(</span><span class="s2">name </span><span class="s4">in </span><span class="s2">options</span><span class="s1">[</span><span class="s2">key</span><span class="s1">])) </span><span class="s2">options</span><span class="s1">[</span><span class="s2">key</span><span class="s1">][</span><span class="s2">name</span><span class="s1">] = </span><span class="s2">options</span><span class="s1">[</span><span class="s2">name</span><span class="s1">];</span>
+            <span class="s1">}</span>
+        <span class="s1">});</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s4">function </span><span class="s2">init_cache</span><span class="s1">(</span><span class="s2">cache</span><span class="s1">) {</span>
+    <span class="s4">if </span><span class="s1">(!</span><span class="s2">cache</span><span class="s1">) </span><span class="s4">return</span><span class="s1">;</span>
+    <span class="s4">if </span><span class="s1">(!(</span><span class="s0">&quot;props&quot; </span><span class="s4">in </span><span class="s2">cache</span><span class="s1">)) {</span>
+        <span class="s2">cache</span><span class="s1">.</span><span class="s2">props </span><span class="s1">= </span><span class="s4">new </span><span class="s2">Map</span><span class="s1">();</span>
+    <span class="s1">} </span><span class="s4">else if </span><span class="s1">(!(</span><span class="s2">cache</span><span class="s1">.</span><span class="s2">props </span><span class="s4">instanceof </span><span class="s2">Map</span><span class="s1">)) {</span>
+        <span class="s2">cache</span><span class="s1">.</span><span class="s2">props </span><span class="s1">= </span><span class="s2">map_from_object</span><span class="s1">(</span><span class="s2">cache</span><span class="s1">.</span><span class="s2">props</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s4">function </span><span class="s2">cache_to_json</span><span class="s1">(</span><span class="s2">cache</span><span class="s1">) {</span>
+    <span class="s4">return </span><span class="s1">{</span>
+        <span class="s2">props</span><span class="s1">: </span><span class="s2">map_to_object</span><span class="s1">(</span><span class="s2">cache</span><span class="s1">.</span><span class="s2">props</span><span class="s1">)</span>
+    <span class="s1">};</span>
+<span class="s1">}</span>
+
+<span class="s4">function </span><span class="s2">log_input</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">fs</span><span class="s1">, </span><span class="s2">debug_folder</span><span class="s1">) {</span>
+    <span class="s4">if </span><span class="s1">(!(</span><span class="s2">fs </span><span class="s1">&amp;&amp; </span><span class="s2">fs</span><span class="s1">.</span><span class="s2">writeFileSync </span><span class="s1">&amp;&amp; </span><span class="s2">fs</span><span class="s1">.</span><span class="s2">mkdirSync</span><span class="s1">)) {</span>
+        <span class="s4">return</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s4">try </span><span class="s1">{</span>
+        <span class="s2">fs</span><span class="s1">.</span><span class="s2">mkdirSync</span><span class="s1">(</span><span class="s2">debug_folder</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s4">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">e</span><span class="s1">.</span><span class="s2">code </span><span class="s1">!== </span><span class="s0">&quot;EEXIST&quot;</span><span class="s1">) </span><span class="s4">throw </span><span class="s2">e</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s4">const </span><span class="s2">log_path </span><span class="s1">= </span><span class="s0">`</span><span class="s2">$</span><span class="s1">{</span><span class="s2">debug_folder</span><span class="s1">}</span><span class="s0">/terser-debug-</span><span class="s2">$</span><span class="s1">{(</span><span class="s2">Math</span><span class="s1">.</span><span class="s2">random</span><span class="s1">() * </span><span class="s6">9999999</span><span class="s1">) | </span><span class="s6">0</span><span class="s1">}</span><span class="s0">.log`</span><span class="s1">;</span>
+
+    <span class="s2">options </span><span class="s1">= </span><span class="s2">options </span><span class="s1">|| {};</span>
+
+    <span class="s4">const </span><span class="s2">options_str </span><span class="s1">= </span><span class="s2">JSON</span><span class="s1">.</span><span class="s2">stringify</span><span class="s1">(</span><span class="s2">options</span><span class="s1">, (</span><span class="s2">_key</span><span class="s1">, </span><span class="s2">thing</span><span class="s1">) =&gt; {</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s4">typeof </span><span class="s2">thing </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) </span><span class="s4">return </span><span class="s0">&quot;[Function &quot; </span><span class="s1">+ </span><span class="s2">thing</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">() + </span><span class="s0">&quot;]&quot;</span><span class="s1">;</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">thing </span><span class="s4">instanceof </span><span class="s2">RegExp</span><span class="s1">) </span><span class="s4">return </span><span class="s0">&quot;[RegExp &quot; </span><span class="s1">+ </span><span class="s2">thing</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">() + </span><span class="s0">&quot;]&quot;</span><span class="s1">;</span>
+        <span class="s4">return </span><span class="s2">thing</span><span class="s1">;</span>
+    <span class="s1">}, </span><span class="s6">4</span><span class="s1">);</span>
+
+    <span class="s4">const </span><span class="s2">files_str </span><span class="s1">= (</span><span class="s2">file</span><span class="s1">) =&gt; {</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s4">typeof </span><span class="s2">file </span><span class="s1">=== </span><span class="s0">&quot;object&quot; </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">spidermonkey</span><span class="s1">) {</span>
+            <span class="s4">return </span><span class="s2">JSON</span><span class="s1">.</span><span class="s2">stringify</span><span class="s1">(</span><span class="s2">file</span><span class="s1">, </span><span class="s4">null</span><span class="s1">, </span><span class="s6">2</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s4">else if </span><span class="s1">(</span><span class="s4">typeof </span><span class="s2">file </span><span class="s1">=== </span><span class="s0">&quot;object&quot;</span><span class="s1">) {</span>
+            <span class="s4">return </span><span class="s2">Object</span><span class="s1">.</span><span class="s2">keys</span><span class="s1">(</span><span class="s2">file</span><span class="s1">)</span>
+                <span class="s1">.</span><span class="s2">map</span><span class="s1">((</span><span class="s2">key</span><span class="s1">) =&gt; </span><span class="s2">key </span><span class="s1">+ </span><span class="s0">&quot;: &quot; </span><span class="s1">+ </span><span class="s2">files_str</span><span class="s1">(</span><span class="s2">file</span><span class="s1">[</span><span class="s2">key</span><span class="s1">]))</span>
+                <span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s4">\n\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s4">else if </span><span class="s1">(</span><span class="s4">typeof </span><span class="s2">file </span><span class="s1">=== </span><span class="s0">&quot;string&quot;</span><span class="s1">) {</span>
+            <span class="s4">return </span><span class="s0">&quot;```</span><span class="s4">\n</span><span class="s0">&quot; </span><span class="s1">+ </span><span class="s2">file </span><span class="s1">+ </span><span class="s0">&quot;</span><span class="s4">\n</span><span class="s0">```&quot;</span><span class="s1">;</span>
+        <span class="s1">} </span><span class="s4">else </span><span class="s1">{</span>
+            <span class="s4">return </span><span class="s2">file</span><span class="s1">; </span><span class="s3">// What do?</span>
+        <span class="s1">}</span>
+    <span class="s1">};</span>
+
+    <span class="s2">fs</span><span class="s1">.</span><span class="s2">writeFileSync</span><span class="s1">(</span><span class="s2">log_path</span><span class="s1">, </span><span class="s0">&quot;Options: </span><span class="s4">\n</span><span class="s0">&quot; </span><span class="s1">+ </span><span class="s2">options_str </span><span class="s1">+ </span><span class="s0">&quot;</span><span class="s4">\n\n</span><span class="s0">Input files:</span><span class="s4">\n\n</span><span class="s0">&quot; </span><span class="s1">+ </span><span class="s2">files_str</span><span class="s1">(</span><span class="s2">files</span><span class="s1">) + </span><span class="s0">&quot;</span><span class="s4">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s4">function</span><span class="s1">* </span><span class="s2">minify_sync_or_async</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">_fs_module</span><span class="s1">) {</span>
+    <span class="s4">if </span><span class="s1">(</span>
+        <span class="s2">_fs_module</span>
+        <span class="s1">&amp;&amp; </span><span class="s4">typeof </span><span class="s2">process </span><span class="s1">=== </span><span class="s0">&quot;object&quot;</span>
+        <span class="s1">&amp;&amp; </span><span class="s2">process</span><span class="s1">.</span><span class="s2">env</span>
+        <span class="s1">&amp;&amp; </span><span class="s4">typeof </span><span class="s2">process</span><span class="s1">.</span><span class="s2">env</span><span class="s1">.</span><span class="s2">TERSER_DEBUG_DIR </span><span class="s1">=== </span><span class="s0">&quot;string&quot;</span>
+    <span class="s1">) {</span>
+        <span class="s2">log_input</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">_fs_module</span><span class="s1">, </span><span class="s2">process</span><span class="s1">.</span><span class="s2">env</span><span class="s1">.</span><span class="s2">TERSER_DEBUG_DIR</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s2">options </span><span class="s1">= </span><span class="s2">defaults</span><span class="s1">(</span><span class="s2">options</span><span class="s1">, {</span>
+        <span class="s2">compress</span><span class="s1">: {},</span>
+        <span class="s2">ecma</span><span class="s1">: </span><span class="s2">undefined</span><span class="s1">,</span>
+        <span class="s2">enclose</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">ie8</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">keep_classnames</span><span class="s1">: </span><span class="s2">undefined</span><span class="s1">,</span>
+        <span class="s2">keep_fnames</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">mangle</span><span class="s1">: {},</span>
+        <span class="s2">module</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">nameCache</span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+        <span class="s2">output</span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+        <span class="s2">format</span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+        <span class="s2">parse</span><span class="s1">: {},</span>
+        <span class="s2">rename</span><span class="s1">: </span><span class="s2">undefined</span><span class="s1">,</span>
+        <span class="s2">safari10</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">sourceMap</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">spidermonkey</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">timings</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">toplevel</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">warnings</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s2">wrap</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+    <span class="s1">}, </span><span class="s4">true</span><span class="s1">);</span>
+
+    <span class="s4">var </span><span class="s2">timings </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">timings </span><span class="s1">&amp;&amp; {</span>
+        <span class="s2">start</span><span class="s1">: </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">()</span>
+    <span class="s1">};</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">keep_classnames </span><span class="s1">=== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s2">options</span><span class="s1">.</span><span class="s2">keep_classnames </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">keep_fnames</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">rename </span><span class="s1">=== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s2">options</span><span class="s1">.</span><span class="s2">rename </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">compress </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">output </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">format</span><span class="s1">) {</span>
+        <span class="s4">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;Please only specify either output or format option, preferrably format.&quot;</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s2">options</span><span class="s1">.</span><span class="s2">format </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">format </span><span class="s1">|| </span><span class="s2">options</span><span class="s1">.</span><span class="s2">output </span><span class="s1">|| {};</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;ecma&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;parse&quot;</span><span class="s1">, </span><span class="s0">&quot;compress&quot;</span><span class="s1">, </span><span class="s0">&quot;format&quot; </span><span class="s1">]);</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;ie8&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;compress&quot;</span><span class="s1">, </span><span class="s0">&quot;mangle&quot;</span><span class="s1">, </span><span class="s0">&quot;format&quot; </span><span class="s1">]);</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;keep_classnames&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;compress&quot;</span><span class="s1">, </span><span class="s0">&quot;mangle&quot; </span><span class="s1">]);</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;keep_fnames&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;compress&quot;</span><span class="s1">, </span><span class="s0">&quot;mangle&quot; </span><span class="s1">]);</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;module&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;parse&quot;</span><span class="s1">, </span><span class="s0">&quot;compress&quot;</span><span class="s1">, </span><span class="s0">&quot;mangle&quot; </span><span class="s1">]);</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;safari10&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;mangle&quot;</span><span class="s1">, </span><span class="s0">&quot;format&quot; </span><span class="s1">]);</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;toplevel&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;compress&quot;</span><span class="s1">, </span><span class="s0">&quot;mangle&quot; </span><span class="s1">]);</span>
+    <span class="s2">set_shorthand</span><span class="s1">(</span><span class="s0">&quot;warnings&quot;</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, [ </span><span class="s0">&quot;compress&quot; </span><span class="s1">]); </span><span class="s3">// legacy</span>
+    <span class="s4">var </span><span class="s2">quoted_props</span><span class="s1">;</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">) {</span>
+        <span class="s2">options</span><span class="s1">.</span><span class="s2">mangle </span><span class="s1">= </span><span class="s2">defaults</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">, {</span>
+            <span class="s2">cache</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">nameCache </span><span class="s1">&amp;&amp; (</span><span class="s2">options</span><span class="s1">.</span><span class="s2">nameCache</span><span class="s1">.</span><span class="s2">vars </span><span class="s1">|| {}),</span>
+            <span class="s2">eval</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">ie8</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">keep_classnames</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">keep_fnames</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">module</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">nth_identifier</span><span class="s1">: </span><span class="s2">base54</span><span class="s1">,</span>
+            <span class="s2">properties</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">reserved</span><span class="s1">: [],</span>
+            <span class="s2">safari10</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">toplevel</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+        <span class="s1">}, </span><span class="s4">true</span><span class="s1">);</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">) {</span>
+            <span class="s4">if </span><span class="s1">(</span><span class="s4">typeof </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties </span><span class="s1">!= </span><span class="s0">&quot;object&quot;</span><span class="s1">) {</span>
+                <span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties </span><span class="s1">= {};</span>
+            <span class="s1">}</span>
+            <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">keep_quoted</span><span class="s1">) {</span>
+                <span class="s2">quoted_props </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">reserved</span><span class="s1">;</span>
+                <span class="s4">if </span><span class="s1">(!</span><span class="s2">Array</span><span class="s1">.</span><span class="s2">isArray</span><span class="s1">(</span><span class="s2">quoted_props</span><span class="s1">)) </span><span class="s2">quoted_props </span><span class="s1">= [];</span>
+                <span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">reserved </span><span class="s1">= </span><span class="s2">quoted_props</span><span class="s1">;</span>
+            <span class="s1">}</span>
+            <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">nameCache </span><span class="s1">&amp;&amp; !(</span><span class="s0">&quot;cache&quot; </span><span class="s4">in </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">)) {</span>
+                <span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">cache </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">nameCache</span><span class="s1">.</span><span class="s2">props </span><span class="s1">|| {};</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+        <span class="s2">init_cache</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">cache</span><span class="s1">);</span>
+        <span class="s2">init_cache</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">cache</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">) {</span>
+        <span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap </span><span class="s1">= </span><span class="s2">defaults</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">, {</span>
+            <span class="s2">asObject</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">content</span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+            <span class="s2">filename</span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+            <span class="s2">includeSources</span><span class="s1">: </span><span class="s4">false</span><span class="s1">,</span>
+            <span class="s2">root</span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+            <span class="s2">url</span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+        <span class="s1">}, </span><span class="s4">true</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">// -- Parse phase --</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">parse </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+    <span class="s4">var </span><span class="s2">toplevel</span><span class="s1">;</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">files </span><span class="s4">instanceof </span><span class="s2">AST_Toplevel</span><span class="s1">) {</span>
+        <span class="s2">toplevel </span><span class="s1">= </span><span class="s2">files</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s4">else </span><span class="s1">{</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s4">typeof </span><span class="s2">files </span><span class="s1">== </span><span class="s0">&quot;string&quot; </span><span class="s1">|| (</span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">spidermonkey </span><span class="s1">&amp;&amp; !</span><span class="s2">Array</span><span class="s1">.</span><span class="s2">isArray</span><span class="s1">(</span><span class="s2">files</span><span class="s1">))) {</span>
+            <span class="s2">files </span><span class="s1">= [ </span><span class="s2">files </span><span class="s1">];</span>
+        <span class="s1">}</span>
+        <span class="s2">options</span><span class="s1">.</span><span class="s2">parse </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse </span><span class="s1">|| {};</span>
+        <span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">toplevel </span><span class="s1">= </span><span class="s4">null</span><span class="s1">;</span>
+
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">spidermonkey</span><span class="s1">) {</span>
+            <span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">toplevel </span><span class="s1">= </span><span class="s2">AST_Node</span><span class="s1">.</span><span class="s2">from_mozilla_ast</span><span class="s1">(</span><span class="s2">Object</span><span class="s1">.</span><span class="s2">keys</span><span class="s1">(</span><span class="s2">files</span><span class="s1">).</span><span class="s2">reduce</span><span class="s1">(</span><span class="s4">function</span><span class="s1">(</span><span class="s2">toplevel</span><span class="s1">, </span><span class="s2">name</span><span class="s1">) {</span>
+                <span class="s4">if </span><span class="s1">(!</span><span class="s2">toplevel</span><span class="s1">) </span><span class="s4">return </span><span class="s2">files</span><span class="s1">[</span><span class="s2">name</span><span class="s1">];</span>
+                <span class="s2">toplevel</span><span class="s1">.</span><span class="s2">body </span><span class="s1">= </span><span class="s2">toplevel</span><span class="s1">.</span><span class="s2">body</span><span class="s1">.</span><span class="s2">concat</span><span class="s1">(</span><span class="s2">files</span><span class="s1">[</span><span class="s2">name</span><span class="s1">].</span><span class="s2">body</span><span class="s1">);</span>
+                <span class="s4">return </span><span class="s2">toplevel</span><span class="s1">;</span>
+            <span class="s1">}, </span><span class="s4">null</span><span class="s1">));</span>
+        <span class="s1">} </span><span class="s4">else </span><span class="s1">{</span>
+            <span class="s4">delete </span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">spidermonkey</span><span class="s1">;</span>
+
+            <span class="s4">for </span><span class="s1">(</span><span class="s4">var </span><span class="s2">name </span><span class="s4">in </span><span class="s2">files</span><span class="s1">) </span><span class="s4">if </span><span class="s1">(</span><span class="s2">HOP</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">name</span><span class="s1">)) {</span>
+                <span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">filename </span><span class="s1">= </span><span class="s2">name</span><span class="s1">;</span>
+                <span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">toplevel </span><span class="s1">= </span><span class="s2">parse</span><span class="s1">(</span><span class="s2">files</span><span class="s1">[</span><span class="s2">name</span><span class="s1">], </span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">);</span>
+                <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">content </span><span class="s1">== </span><span class="s0">&quot;inline&quot;</span><span class="s1">) {</span>
+                    <span class="s4">if </span><span class="s1">(</span><span class="s2">Object</span><span class="s1">.</span><span class="s2">keys</span><span class="s1">(</span><span class="s2">files</span><span class="s1">).</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s6">1</span><span class="s1">)</span>
+                        <span class="s4">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;inline source map only works with singular input&quot;</span><span class="s1">);</span>
+                    <span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">content </span><span class="s1">= </span><span class="s2">read_source_map</span><span class="s1">(</span><span class="s2">files</span><span class="s1">[</span><span class="s2">name</span><span class="s1">]);</span>
+                <span class="s1">}</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">toplevel </span><span class="s1">=== </span><span class="s4">null</span><span class="s1">) {</span>
+            <span class="s4">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;no source file given&quot;</span><span class="s1">);</span>
+        <span class="s1">}</span>
+
+        <span class="s2">toplevel </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">.</span><span class="s2">toplevel</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">quoted_props </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">keep_quoted </span><span class="s1">!== </span><span class="s0">&quot;strict&quot;</span><span class="s1">) {</span>
+        <span class="s2">reserve_quoted_keys</span><span class="s1">(</span><span class="s2">toplevel</span><span class="s1">, </span><span class="s2">quoted_props</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s4">var </span><span class="s2">annotated_props</span><span class="s1">;</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">) {</span>
+        <span class="s2">annotated_props </span><span class="s1">= </span><span class="s2">find_annotated_props</span><span class="s1">(</span><span class="s2">toplevel</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">wrap</span><span class="s1">) {</span>
+        <span class="s2">toplevel </span><span class="s1">= </span><span class="s2">toplevel</span><span class="s1">.</span><span class="s2">wrap_commonjs</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">wrap</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">enclose</span><span class="s1">) {</span>
+        <span class="s2">toplevel </span><span class="s1">= </span><span class="s2">toplevel</span><span class="s1">.</span><span class="s2">wrap_enclose</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">enclose</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">rename </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+    <span class="s3">// disable rename on harmony due to expand_names bug in for-of loops</span>
+    <span class="s3">// https://github.com/mishoo/UglifyJS2/issues/2794</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s6">0 </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">rename</span><span class="s1">) {</span>
+        <span class="s2">toplevel</span><span class="s1">.</span><span class="s2">figure_out_scope</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">);</span>
+        <span class="s2">toplevel</span><span class="s1">.</span><span class="s2">expand_names</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">// -- Compress phase --</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">compress </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">compress</span><span class="s1">) {</span>
+        <span class="s2">toplevel </span><span class="s1">= </span><span class="s4">new </span><span class="s2">Compressor</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">compress</span><span class="s1">, {</span>
+            <span class="s2">mangle_options</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span>
+        <span class="s1">}).</span><span class="s2">compress</span><span class="s1">(</span><span class="s2">toplevel</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">// -- Mangle phase --</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">scope </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">) </span><span class="s2">toplevel</span><span class="s1">.</span><span class="s2">figure_out_scope</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">);</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">mangle </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">) {</span>
+        <span class="s2">toplevel</span><span class="s1">.</span><span class="s2">compute_char_frequency</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">);</span>
+        <span class="s2">toplevel</span><span class="s1">.</span><span class="s2">mangle_names</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">);</span>
+        <span class="s2">toplevel </span><span class="s1">= </span><span class="s2">mangle_private_properties</span><span class="s1">(</span><span class="s2">toplevel</span><span class="s1">, </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">properties </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">) {</span>
+        <span class="s2">toplevel </span><span class="s1">= </span><span class="s2">mangle_properties</span><span class="s1">(</span><span class="s2">toplevel</span><span class="s1">, </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">, </span><span class="s2">annotated_props</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">// Format phase</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">format </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+    <span class="s4">var </span><span class="s2">result </span><span class="s1">= {};</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">format</span><span class="s1">.</span><span class="s2">ast</span><span class="s1">) {</span>
+        <span class="s2">result</span><span class="s1">.</span><span class="s2">ast </span><span class="s1">= </span><span class="s2">toplevel</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">format</span><span class="s1">.</span><span class="s2">spidermonkey</span><span class="s1">) {</span>
+        <span class="s2">result</span><span class="s1">.</span><span class="s2">ast </span><span class="s1">= </span><span class="s2">toplevel</span><span class="s1">.</span><span class="s2">to_mozilla_ast</span><span class="s1">();</span>
+    <span class="s1">}</span>
+    <span class="s4">let </span><span class="s2">format_options</span><span class="s1">;</span>
+    <span class="s4">if </span><span class="s1">(!</span><span class="s2">HOP</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">format</span><span class="s1">, </span><span class="s0">&quot;code&quot;</span><span class="s1">) || </span><span class="s2">options</span><span class="s1">.</span><span class="s2">format</span><span class="s1">.</span><span class="s2">code</span><span class="s1">) {</span>
+        <span class="s3">// Make a shallow copy so that we can modify without mutating the user's input.</span>
+        <span class="s2">format_options </span><span class="s1">= {</span><span class="s2">...options</span><span class="s1">.</span><span class="s2">format</span><span class="s1">};</span>
+        <span class="s4">if </span><span class="s1">(!</span><span class="s2">format_options</span><span class="s1">.</span><span class="s2">ast</span><span class="s1">) {</span>
+            <span class="s3">// Destroy stuff to save RAM. (unless the deprecated `ast` option is on)</span>
+            <span class="s2">format_options</span><span class="s1">.</span><span class="s2">_destroy_ast </span><span class="s1">= </span><span class="s4">true</span><span class="s1">;</span>
+
+            <span class="s2">walk</span><span class="s1">(</span><span class="s2">toplevel</span><span class="s1">, </span><span class="s2">node </span><span class="s1">=&gt; {</span>
+                <span class="s4">if </span><span class="s1">(</span><span class="s2">node </span><span class="s4">instanceof </span><span class="s2">AST_Scope</span><span class="s1">) {</span>
+                    <span class="s2">node</span><span class="s1">.</span><span class="s2">variables </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                    <span class="s2">node</span><span class="s1">.</span><span class="s2">enclosed </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                    <span class="s2">node</span><span class="s1">.</span><span class="s2">parent_scope </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                <span class="s1">}</span>
+                <span class="s4">if </span><span class="s1">(</span><span class="s2">node</span><span class="s1">.</span><span class="s2">block_scope</span><span class="s1">) {</span>
+                    <span class="s2">node</span><span class="s1">.</span><span class="s2">block_scope</span><span class="s1">.</span><span class="s2">variables </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                    <span class="s2">node</span><span class="s1">.</span><span class="s2">block_scope</span><span class="s1">.</span><span class="s2">enclosed </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                    <span class="s2">node</span><span class="s1">.</span><span class="s2">block_scope</span><span class="s1">.</span><span class="s2">parent_scope </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                <span class="s1">}</span>
+            <span class="s1">});</span>
+        <span class="s1">}</span>
+
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">) {</span>
+            <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">includeSources </span><span class="s1">&amp;&amp; </span><span class="s2">files </span><span class="s4">instanceof </span><span class="s2">AST_Toplevel</span><span class="s1">) {</span>
+                <span class="s4">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;original source content unavailable&quot;</span><span class="s1">);</span>
+            <span class="s1">}</span>
+            <span class="s2">format_options</span><span class="s1">.</span><span class="s2">source_map </span><span class="s1">= </span><span class="s4">yield</span><span class="s1">* </span><span class="s2">SourceMap</span><span class="s1">({</span>
+                <span class="s2">file</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">filename</span><span class="s1">,</span>
+                <span class="s2">orig</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">content</span><span class="s1">,</span>
+                <span class="s2">root</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">root</span><span class="s1">,</span>
+                <span class="s2">files</span><span class="s1">: </span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">includeSources </span><span class="s1">? </span><span class="s2">files </span><span class="s1">: </span><span class="s4">null</span><span class="s1">,</span>
+            <span class="s1">});</span>
+        <span class="s1">}</span>
+        <span class="s4">delete </span><span class="s2">format_options</span><span class="s1">.</span><span class="s2">ast</span><span class="s1">;</span>
+        <span class="s4">delete </span><span class="s2">format_options</span><span class="s1">.</span><span class="s2">code</span><span class="s1">;</span>
+        <span class="s4">delete </span><span class="s2">format_options</span><span class="s1">.</span><span class="s2">spidermonkey</span><span class="s1">;</span>
+        <span class="s4">var </span><span class="s2">stream </span><span class="s1">= </span><span class="s2">OutputStream</span><span class="s1">(</span><span class="s2">format_options</span><span class="s1">);</span>
+        <span class="s2">toplevel</span><span class="s1">.</span><span class="s2">print</span><span class="s1">(</span><span class="s2">stream</span><span class="s1">);</span>
+        <span class="s2">result</span><span class="s1">.</span><span class="s2">code </span><span class="s1">= </span><span class="s2">stream</span><span class="s1">.</span><span class="s2">get</span><span class="s1">();</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">) {</span>
+            <span class="s2">Object</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span><span class="s2">result</span><span class="s1">, </span><span class="s0">&quot;map&quot;</span><span class="s1">, {</span>
+                <span class="s2">configurable</span><span class="s1">: </span><span class="s4">true</span><span class="s1">,</span>
+                <span class="s2">enumerable</span><span class="s1">: </span><span class="s4">true</span><span class="s1">,</span>
+                <span class="s2">get</span><span class="s1">() {</span>
+                    <span class="s4">const </span><span class="s2">map </span><span class="s1">= </span><span class="s2">format_options</span><span class="s1">.</span><span class="s2">source_map</span><span class="s1">.</span><span class="s2">getEncoded</span><span class="s1">();</span>
+                    <span class="s4">return </span><span class="s1">(</span><span class="s2">result</span><span class="s1">.</span><span class="s2">map </span><span class="s1">= </span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">asObject </span><span class="s1">? </span><span class="s2">map </span><span class="s1">: </span><span class="s2">JSON</span><span class="s1">.</span><span class="s2">stringify</span><span class="s1">(</span><span class="s2">map</span><span class="s1">));</span>
+                <span class="s1">},</span>
+                <span class="s2">set</span><span class="s1">(</span><span class="s2">value</span><span class="s1">) {</span>
+                    <span class="s2">Object</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span><span class="s2">result</span><span class="s1">, </span><span class="s0">&quot;map&quot;</span><span class="s1">, {</span>
+                        <span class="s2">value</span><span class="s1">,</span>
+                        <span class="s2">writable</span><span class="s1">: </span><span class="s4">true</span><span class="s1">,</span>
+                    <span class="s1">});</span>
+                <span class="s1">}</span>
+            <span class="s1">});</span>
+            <span class="s2">result</span><span class="s1">.</span><span class="s2">decoded_map </span><span class="s1">= </span><span class="s2">format_options</span><span class="s1">.</span><span class="s2">source_map</span><span class="s1">.</span><span class="s2">getDecoded</span><span class="s1">();</span>
+            <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">url </span><span class="s1">== </span><span class="s0">&quot;inline&quot;</span><span class="s1">) {</span>
+                <span class="s4">var </span><span class="s2">sourceMap </span><span class="s1">= </span><span class="s4">typeof </span><span class="s2">result</span><span class="s1">.</span><span class="s2">map </span><span class="s1">=== </span><span class="s0">&quot;object&quot; </span><span class="s1">? </span><span class="s2">JSON</span><span class="s1">.</span><span class="s2">stringify</span><span class="s1">(</span><span class="s2">result</span><span class="s1">.</span><span class="s2">map</span><span class="s1">) : </span><span class="s2">result</span><span class="s1">.</span><span class="s2">map</span><span class="s1">;</span>
+                <span class="s2">result</span><span class="s1">.</span><span class="s2">code </span><span class="s1">+= </span><span class="s0">&quot;</span><span class="s4">\n</span><span class="s0">//# sourceMappingURL=data:application/json;charset=utf-8;base64,&quot; </span><span class="s1">+ </span><span class="s2">to_base64</span><span class="s1">(</span><span class="s2">sourceMap</span><span class="s1">);</span>
+            <span class="s1">} </span><span class="s4">else if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">url</span><span class="s1">) {</span>
+                <span class="s2">result</span><span class="s1">.</span><span class="s2">code </span><span class="s1">+= </span><span class="s0">&quot;</span><span class="s4">\n</span><span class="s0">//# sourceMappingURL=&quot; </span><span class="s1">+ </span><span class="s2">options</span><span class="s1">.</span><span class="s2">sourceMap</span><span class="s1">.</span><span class="s2">url</span><span class="s1">;</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">nameCache </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">) {</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">cache</span><span class="s1">) </span><span class="s2">options</span><span class="s1">.</span><span class="s2">nameCache</span><span class="s1">.</span><span class="s2">vars </span><span class="s1">= </span><span class="s2">cache_to_json</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">cache</span><span class="s1">);</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties </span><span class="s1">&amp;&amp; </span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">cache</span><span class="s1">) {</span>
+            <span class="s2">options</span><span class="s1">.</span><span class="s2">nameCache</span><span class="s1">.</span><span class="s2">props </span><span class="s1">= </span><span class="s2">cache_to_json</span><span class="s1">(</span><span class="s2">options</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">cache</span><span class="s1">);</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">format_options </span><span class="s1">&amp;&amp; </span><span class="s2">format_options</span><span class="s1">.</span><span class="s2">source_map</span><span class="s1">) {</span>
+        <span class="s2">format_options</span><span class="s1">.</span><span class="s2">source_map</span><span class="s1">.</span><span class="s2">destroy</span><span class="s1">();</span>
+    <span class="s1">}</span>
+    <span class="s4">if </span><span class="s1">(</span><span class="s2">timings</span><span class="s1">) {</span>
+        <span class="s2">timings</span><span class="s1">.</span><span class="s2">end </span><span class="s1">= </span><span class="s2">Date</span><span class="s1">.</span><span class="s2">now</span><span class="s1">();</span>
+        <span class="s2">result</span><span class="s1">.</span><span class="s2">timings </span><span class="s1">= {</span>
+            <span class="s2">parse</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">rename </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">parse</span><span class="s1">),</span>
+            <span class="s2">rename</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">compress </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">rename</span><span class="s1">),</span>
+            <span class="s2">compress</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">scope </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">compress</span><span class="s1">),</span>
+            <span class="s2">scope</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">mangle </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">scope</span><span class="s1">),</span>
+            <span class="s2">mangle</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">properties </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">mangle</span><span class="s1">),</span>
+            <span class="s2">properties</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">format </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">),</span>
+            <span class="s2">format</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">end </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">format</span><span class="s1">),</span>
+            <span class="s2">total</span><span class="s1">: </span><span class="s6">1e-3 </span><span class="s1">* (</span><span class="s2">timings</span><span class="s1">.</span><span class="s2">end </span><span class="s1">- </span><span class="s2">timings</span><span class="s1">.</span><span class="s2">start</span><span class="s1">)</span>
+        <span class="s1">};</span>
+    <span class="s1">}</span>
+    <span class="s4">return </span><span class="s2">result</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s2">async </span><span class="s4">function </span><span class="s2">minify</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">_fs_module</span><span class="s1">) {</span>
+    <span class="s4">const </span><span class="s2">gen </span><span class="s1">= </span><span class="s2">minify_sync_or_async</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">_fs_module</span><span class="s1">);</span>
+
+    <span class="s4">let </span><span class="s2">yielded</span><span class="s1">;</span>
+    <span class="s4">let </span><span class="s2">val</span><span class="s1">;</span>
+    <span class="s4">do </span><span class="s1">{</span>
+        <span class="s2">val </span><span class="s1">= </span><span class="s2">gen</span><span class="s1">.</span><span class="s2">next</span><span class="s1">(</span><span class="s4">await </span><span class="s2">yielded</span><span class="s1">);</span>
+        <span class="s2">yielded </span><span class="s1">= </span><span class="s2">val</span><span class="s1">.</span><span class="s2">value</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s4">while </span><span class="s1">(!</span><span class="s2">val</span><span class="s1">.</span><span class="s2">done</span><span class="s1">);</span>
+
+    <span class="s4">return </span><span class="s2">val</span><span class="s1">.</span><span class="s2">value</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">function </span><span class="s2">minify_sync</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">_fs_module</span><span class="s1">) {</span>
+    <span class="s4">const </span><span class="s2">gen </span><span class="s1">= </span><span class="s2">minify_sync_or_async</span><span class="s1">(</span><span class="s2">files</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, </span><span class="s2">_fs_module</span><span class="s1">);</span>
+
+    <span class="s4">let </span><span class="s2">yielded</span><span class="s1">;</span>
+    <span class="s4">let </span><span class="s2">val</span><span class="s1">;</span>
+    <span class="s4">do </span><span class="s1">{</span>
+        <span class="s4">if </span><span class="s1">(</span><span class="s2">yielded </span><span class="s1">&amp;&amp; </span><span class="s4">typeof </span><span class="s2">yielded</span><span class="s1">.</span><span class="s2">then </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+            <span class="s4">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;minify_sync cannot be used with the legacy source-map module&quot;</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s2">val </span><span class="s1">= </span><span class="s2">gen</span><span class="s1">.</span><span class="s2">next</span><span class="s1">(</span><span class="s2">yielded</span><span class="s1">);</span>
+        <span class="s2">yielded </span><span class="s1">= </span><span class="s2">val</span><span class="s1">.</span><span class="s2">value</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s4">while </span><span class="s1">(!</span><span class="s2">val</span><span class="s1">.</span><span class="s2">done</span><span class="s1">);</span>
+
+    <span class="s4">return </span><span class="s2">val</span><span class="s1">.</span><span class="s2">value</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">export </span><span class="s1">{</span>
+  <span class="s2">minify</span><span class="s1">,</span>
+  <span class="s2">minify_sync</span><span class="s1">,</span>
+  <span class="s2">to_ascii</span><span class="s1">,</span>
+<span class="s1">};</span>
+</pre>
+</body>
+</html>

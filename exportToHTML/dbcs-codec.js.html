@@ -1,0 +1,577 @@
+<html>
+<head>
+<title>dbcs-codec.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #7a7e85;}
+.s5 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+dbcs-codec.js</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;use strict&quot;</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">Buffer </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;safer-buffer&quot;</span><span class="s1">).</span><span class="s2">Buffer</span><span class="s1">;</span>
+
+<span class="s4">// Multibyte codec. In this scheme, a character is represented by 1 or more bytes.</span>
+<span class="s4">// Our codec supports UTF-16 surrogates, extensions for GB18030 and unicode sequences.</span>
+<span class="s4">// To save memory and loading time, we read table files only when requested.</span>
+
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">_dbcs </span><span class="s1">= </span><span class="s2">DBCSCodec</span><span class="s1">;</span>
+
+<span class="s3">var </span><span class="s2">UNASSIGNED </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">,</span>
+    <span class="s2">GB18030_CODE </span><span class="s1">= -</span><span class="s5">2</span><span class="s1">,</span>
+    <span class="s2">SEQ_START  </span><span class="s1">= -</span><span class="s5">10</span><span class="s1">,</span>
+    <span class="s2">NODE_START </span><span class="s1">= -</span><span class="s5">1000</span><span class="s1">,</span>
+    <span class="s2">UNASSIGNED_NODE </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Array</span><span class="s1">(</span><span class="s5">0x100</span><span class="s1">),</span>
+    <span class="s2">DEF_CHAR </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+
+<span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s5">0x100</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++)</span>
+    <span class="s2">UNASSIGNED_NODE</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] = </span><span class="s2">UNASSIGNED</span><span class="s1">;</span>
+
+
+<span class="s4">// Class DBCSCodec reads and initializes mapping tables.</span>
+<span class="s3">function </span><span class="s2">DBCSCodec</span><span class="s1">(</span><span class="s2">codecOptions</span><span class="s1">, </span><span class="s2">iconv</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">encodingName </span><span class="s1">= </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodingName</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">codecOptions</span><span class="s1">)</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;DBCS codec is called without the data.&quot;</span><span class="s1">)</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">table</span><span class="s1">)</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;Encoding '&quot; </span><span class="s1">+ </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodingName </span><span class="s1">+ </span><span class="s0">&quot;' has no data.&quot;</span><span class="s1">);</span>
+
+    <span class="s4">// Load tables.</span>
+    <span class="s3">var </span><span class="s2">mappingTable </span><span class="s1">= </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">table</span><span class="s1">();</span>
+
+
+    <span class="s4">// Decode tables: MBCS -&gt; Unicode.</span>
+
+    <span class="s4">// decodeTables is a trie, encoded as an array of arrays of integers. Internal arrays are trie nodes and all have len = 256.</span>
+    <span class="s4">// Trie root is decodeTables[0].</span>
+    <span class="s4">// Values: &gt;=  0 -&gt; unicode character code. can be &gt; 0xFFFF</span>
+    <span class="s4">//         == UNASSIGNED -&gt; unknown/unassigned sequence.</span>
+    <span class="s4">//         == GB18030_CODE -&gt; this is the end of a GB18030 4-byte sequence.</span>
+    <span class="s4">//         &lt;= NODE_START -&gt; index of the next node in our trie to process next byte.</span>
+    <span class="s4">//         &lt;= SEQ_START  -&gt; index of the start of a character code sequence, in decodeTableSeq.</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables </span><span class="s1">= [];</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s5">0</span><span class="s1">] = </span><span class="s2">UNASSIGNED_NODE</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">); </span><span class="s4">// Create root node.</span>
+
+    <span class="s4">// Sometimes a MBCS char corresponds to a sequence of unicode chars. We store them as arrays of integers here. </span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTableSeq </span><span class="s1">= [];</span>
+
+    <span class="s4">// Actual mapping tables consist of chunks. Use them to fill up decode tables.</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">mappingTable</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++)</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_addDecodeChunk</span><span class="s1">(</span><span class="s2">mappingTable</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]);</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">defaultCharUnicode </span><span class="s1">= </span><span class="s2">iconv</span><span class="s1">.</span><span class="s2">defaultCharUnicode</span><span class="s1">;</span>
+
+    
+    <span class="s4">// Encode tables: Unicode -&gt; DBCS.</span>
+
+    <span class="s4">// `encodeTable` is array mapping from unicode char to encoded char. All its values are integers for performance.</span>
+    <span class="s4">// Because it can be sparse, it is represented as array of buckets by 256 chars each. Bucket can be null.</span>
+    <span class="s4">// Values: &gt;=  0 -&gt; it is a normal char. Write the value (if &lt;=256 then 1 byte, if &lt;=65536 then 2 bytes, etc.).</span>
+    <span class="s4">//         == UNASSIGNED -&gt; no conversion found. Output a default char.</span>
+    <span class="s4">//         &lt;= SEQ_START  -&gt; it's an index in encodeTableSeq, see below. The character starts a sequence.</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTable </span><span class="s1">= [];</span>
+    
+    <span class="s4">// `encodeTableSeq` is used when a sequence of unicode characters is encoded as a single code. We use a tree of</span>
+    <span class="s4">// objects where keys correspond to characters in sequence and leafs are the encoded dbcs values. A special DEF_CHAR key</span>
+    <span class="s4">// means end of sequence (needed when one sequence is a strict subsequence of another).</span>
+    <span class="s4">// Objects are kept separately from encodeTable to increase performance.</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTableSeq </span><span class="s1">= [];</span>
+
+    <span class="s4">// Some chars can be decoded, but need not be encoded.</span>
+    <span class="s3">var </span><span class="s2">skipEncodeChars </span><span class="s1">= {};</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodeSkipVals</span><span class="s1">)</span>
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodeSkipVals</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++) {</span>
+            <span class="s3">var </span><span class="s2">val </span><span class="s1">= </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodeSkipVals</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">val </span><span class="s1">=== </span><span class="s0">'number'</span><span class="s1">)</span>
+                <span class="s2">skipEncodeChars</span><span class="s1">[</span><span class="s2">val</span><span class="s1">] = </span><span class="s3">true</span><span class="s1">;</span>
+            <span class="s3">else</span>
+                <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">j </span><span class="s1">= </span><span class="s2">val</span><span class="s1">.</span><span class="s2">from</span><span class="s1">; </span><span class="s2">j </span><span class="s1">&lt;= </span><span class="s2">val</span><span class="s1">.</span><span class="s2">to</span><span class="s1">; </span><span class="s2">j</span><span class="s1">++)</span>
+                    <span class="s2">skipEncodeChars</span><span class="s1">[</span><span class="s2">j</span><span class="s1">] = </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        
+    <span class="s4">// Use decode trie to recursively fill out encode tables.</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_fillEncodeTable</span><span class="s1">(</span><span class="s5">0</span><span class="s1">, </span><span class="s5">0</span><span class="s1">, </span><span class="s2">skipEncodeChars</span><span class="s1">);</span>
+
+    <span class="s4">// Add more encoding pairs when needed.</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodeAdd</span><span class="s1">) {</span>
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">uChar </span><span class="s3">in </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodeAdd</span><span class="s1">)</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">Object</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">hasOwnProperty</span><span class="s1">.</span><span class="s2">call</span><span class="s1">(</span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodeAdd</span><span class="s1">, </span><span class="s2">uChar</span><span class="s1">))</span>
+                <span class="s3">this</span><span class="s1">.</span><span class="s2">_setEncodeChar</span><span class="s1">(</span><span class="s2">uChar</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s5">0</span><span class="s1">), </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">encodeAdd</span><span class="s1">[</span><span class="s2">uChar</span><span class="s1">]);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">defCharSB  </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTable</span><span class="s1">[</span><span class="s5">0</span><span class="s1">][</span><span class="s2">iconv</span><span class="s1">.</span><span class="s2">defaultCharSingleByte</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s5">0</span><span class="s1">)];</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">defCharSB </span><span class="s1">=== </span><span class="s2">UNASSIGNED</span><span class="s1">) </span><span class="s3">this</span><span class="s1">.</span><span class="s2">defCharSB </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTable</span><span class="s1">[</span><span class="s5">0</span><span class="s1">][</span><span class="s0">'?'</span><span class="s1">];</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">defCharSB </span><span class="s1">=== </span><span class="s2">UNASSIGNED</span><span class="s1">) </span><span class="s3">this</span><span class="s1">.</span><span class="s2">defCharSB </span><span class="s1">= </span><span class="s0">&quot;?&quot;</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s5">0</span><span class="s1">);</span>
+
+
+    <span class="s4">// Load &amp; create GB18030 tables when needed.</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">gb18030 </span><span class="s1">=== </span><span class="s0">'function'</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030 </span><span class="s1">= </span><span class="s2">codecOptions</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">(); </span><span class="s4">// Load GB18030 ranges.</span>
+
+        <span class="s4">// Add GB18030 decode tables.</span>
+        <span class="s3">var </span><span class="s2">thirdByteNodeIdx </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">thirdByteNode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s2">thirdByteNodeIdx</span><span class="s1">] = </span><span class="s2">UNASSIGNED_NODE</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">);</span>
+
+        <span class="s3">var </span><span class="s2">fourthByteNodeIdx </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">fourthByteNode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s2">fourthByteNodeIdx</span><span class="s1">] = </span><span class="s2">UNASSIGNED_NODE</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">);</span>
+
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0x81</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt;= </span><span class="s5">0xFE</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++) {</span>
+            <span class="s3">var </span><span class="s2">secondByteNodeIdx </span><span class="s1">= </span><span class="s2">NODE_START </span><span class="s1">- </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s5">0</span><span class="s1">][</span><span class="s2">i</span><span class="s1">];</span>
+            <span class="s3">var </span><span class="s2">secondByteNode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s2">secondByteNodeIdx</span><span class="s1">];</span>
+            <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">j </span><span class="s1">= </span><span class="s5">0x30</span><span class="s1">; </span><span class="s2">j </span><span class="s1">&lt;= </span><span class="s5">0x39</span><span class="s1">; </span><span class="s2">j</span><span class="s1">++)</span>
+                <span class="s2">secondByteNode</span><span class="s1">[</span><span class="s2">j</span><span class="s1">] = </span><span class="s2">NODE_START </span><span class="s1">- </span><span class="s2">thirdByteNodeIdx</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0x81</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt;= </span><span class="s5">0xFE</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++)</span>
+            <span class="s2">thirdByteNode</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] = </span><span class="s2">NODE_START </span><span class="s1">- </span><span class="s2">fourthByteNodeIdx</span><span class="s1">;</span>
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0x30</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt;= </span><span class="s5">0x39</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++)</span>
+            <span class="s2">fourthByteNode</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] = </span><span class="s2">GB18030_CODE</span>
+    <span class="s1">}        </span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">encoder </span><span class="s1">= </span><span class="s2">DBCSEncoder</span><span class="s1">;</span>
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">decoder </span><span class="s1">= </span><span class="s2">DBCSDecoder</span><span class="s1">;</span>
+
+<span class="s4">// Decoder helpers</span>
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_getDecodeTrieNode </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">addr</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">bytes </span><span class="s1">= [];</span>
+    <span class="s3">for </span><span class="s1">(; </span><span class="s2">addr </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">; </span><span class="s2">addr </span><span class="s1">&gt;&gt;= </span><span class="s5">8</span><span class="s1">)</span>
+        <span class="s2">bytes</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">addr </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">bytes</span><span class="s1">.</span><span class="s2">length </span><span class="s1">== </span><span class="s5">0</span><span class="s1">)</span>
+        <span class="s2">bytes</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s5">0</span><span class="s1">);</span>
+
+    <span class="s3">var </span><span class="s2">node </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s5">0</span><span class="s1">];</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s2">bytes</span><span class="s1">.</span><span class="s2">length</span><span class="s1">-</span><span class="s5">1</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i</span><span class="s1">--) { </span><span class="s4">// Traverse nodes deeper into the trie.</span>
+        <span class="s3">var </span><span class="s2">val </span><span class="s1">= </span><span class="s2">node</span><span class="s1">[</span><span class="s2">bytes</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]];</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">val </span><span class="s1">== </span><span class="s2">UNASSIGNED</span><span class="s1">) { </span><span class="s4">// Create new node.</span>
+            <span class="s2">node</span><span class="s1">[</span><span class="s2">bytes</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]] = </span><span class="s2">NODE_START </span><span class="s1">- </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+            <span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">node </span><span class="s1">= </span><span class="s2">UNASSIGNED_NODE</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">));</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">val </span><span class="s1">&lt;= </span><span class="s2">NODE_START</span><span class="s1">) { </span><span class="s4">// Existing node.</span>
+            <span class="s2">node </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s2">NODE_START </span><span class="s1">- </span><span class="s2">val</span><span class="s1">];</span>
+        <span class="s1">}</span>
+        <span class="s3">else</span>
+            <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;Overwrite byte in &quot; </span><span class="s1">+ </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodingName </span><span class="s1">+ </span><span class="s0">&quot;, addr: &quot; </span><span class="s1">+ </span><span class="s2">addr</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">(</span><span class="s5">16</span><span class="s1">));</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">node</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_addDecodeChunk </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">chunk</span><span class="s1">) {</span>
+    <span class="s4">// First element of chunk is the hex mbcs code where we start.</span>
+    <span class="s3">var </span><span class="s2">curAddr </span><span class="s1">= </span><span class="s2">parseInt</span><span class="s1">(</span><span class="s2">chunk</span><span class="s1">[</span><span class="s5">0</span><span class="s1">], </span><span class="s5">16</span><span class="s1">);</span>
+
+    <span class="s4">// Choose the decoding node where we'll write our chars.</span>
+    <span class="s3">var </span><span class="s2">writeTable </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_getDecodeTrieNode</span><span class="s1">(</span><span class="s2">curAddr</span><span class="s1">);</span>
+    <span class="s2">curAddr </span><span class="s1">= </span><span class="s2">curAddr </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+
+    <span class="s4">// Write all other elements of the chunk to the table.</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">k </span><span class="s1">= </span><span class="s5">1</span><span class="s1">; </span><span class="s2">k </span><span class="s1">&lt; </span><span class="s2">chunk</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; </span><span class="s2">k</span><span class="s1">++) {</span>
+        <span class="s3">var </span><span class="s2">part </span><span class="s1">= </span><span class="s2">chunk</span><span class="s1">[</span><span class="s2">k</span><span class="s1">];</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">part </span><span class="s1">=== </span><span class="s0">&quot;string&quot;</span><span class="s1">) { </span><span class="s4">// String, write as-is.</span>
+            <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">l </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">l </span><span class="s1">&lt; </span><span class="s2">part</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;) {</span>
+                <span class="s3">var </span><span class="s2">code </span><span class="s1">= </span><span class="s2">part</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s2">l</span><span class="s1">++);</span>
+                <span class="s3">if </span><span class="s1">(</span><span class="s5">0xD800 </span><span class="s1">&lt;= </span><span class="s2">code </span><span class="s1">&amp;&amp; </span><span class="s2">code </span><span class="s1">&lt; </span><span class="s5">0xDC00</span><span class="s1">) { </span><span class="s4">// Decode surrogate</span>
+                    <span class="s3">var </span><span class="s2">codeTrail </span><span class="s1">= </span><span class="s2">part</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s2">l</span><span class="s1">++);</span>
+                    <span class="s3">if </span><span class="s1">(</span><span class="s5">0xDC00 </span><span class="s1">&lt;= </span><span class="s2">codeTrail </span><span class="s1">&amp;&amp; </span><span class="s2">codeTrail </span><span class="s1">&lt; </span><span class="s5">0xE000</span><span class="s1">)</span>
+                        <span class="s2">writeTable</span><span class="s1">[</span><span class="s2">curAddr</span><span class="s1">++] = </span><span class="s5">0x10000 </span><span class="s1">+ (</span><span class="s2">code </span><span class="s1">- </span><span class="s5">0xD800</span><span class="s1">) * </span><span class="s5">0x400 </span><span class="s1">+ (</span><span class="s2">codeTrail </span><span class="s1">- </span><span class="s5">0xDC00</span><span class="s1">);</span>
+                    <span class="s3">else</span>
+                        <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;Incorrect surrogate pair in &quot;  </span><span class="s1">+ </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodingName </span><span class="s1">+ </span><span class="s0">&quot; at chunk &quot; </span><span class="s1">+ </span><span class="s2">chunk</span><span class="s1">[</span><span class="s5">0</span><span class="s1">]);</span>
+                <span class="s1">}</span>
+                <span class="s3">else if </span><span class="s1">(</span><span class="s5">0x0FF0 </span><span class="s1">&lt; </span><span class="s2">code </span><span class="s1">&amp;&amp; </span><span class="s2">code </span><span class="s1">&lt;= </span><span class="s5">0x0FFF</span><span class="s1">) { </span><span class="s4">// Character sequence (our own encoding used)</span>
+                    <span class="s3">var </span><span class="s2">len </span><span class="s1">= </span><span class="s5">0xFFF </span><span class="s1">- </span><span class="s2">code </span><span class="s1">+ </span><span class="s5">2</span><span class="s1">;</span>
+                    <span class="s3">var </span><span class="s2">seq </span><span class="s1">= [];</span>
+                    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">m </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">m </span><span class="s1">&lt; </span><span class="s2">len</span><span class="s1">; </span><span class="s2">m</span><span class="s1">++)</span>
+                        <span class="s2">seq</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">part</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s2">l</span><span class="s1">++)); </span><span class="s4">// Simple variation: don't support surrogates or subsequences in seq.</span>
+
+                    <span class="s2">writeTable</span><span class="s1">[</span><span class="s2">curAddr</span><span class="s1">++] = </span><span class="s2">SEQ_START </span><span class="s1">- </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTableSeq</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+                    <span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTableSeq</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">seq</span><span class="s1">);</span>
+                <span class="s1">}</span>
+                <span class="s3">else</span>
+                    <span class="s2">writeTable</span><span class="s1">[</span><span class="s2">curAddr</span><span class="s1">++] = </span><span class="s2">code</span><span class="s1">; </span><span class="s4">// Basic char</span>
+            <span class="s1">}</span>
+        <span class="s1">} </span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">part </span><span class="s1">=== </span><span class="s0">&quot;number&quot;</span><span class="s1">) { </span><span class="s4">// Integer, meaning increasing sequence starting with prev character.</span>
+            <span class="s3">var </span><span class="s2">charCode </span><span class="s1">= </span><span class="s2">writeTable</span><span class="s1">[</span><span class="s2">curAddr </span><span class="s1">- </span><span class="s5">1</span><span class="s1">] + </span><span class="s5">1</span><span class="s1">;</span>
+            <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">l </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">l </span><span class="s1">&lt; </span><span class="s2">part</span><span class="s1">; </span><span class="s2">l</span><span class="s1">++)</span>
+                <span class="s2">writeTable</span><span class="s1">[</span><span class="s2">curAddr</span><span class="s1">++] = </span><span class="s2">charCode</span><span class="s1">++;</span>
+        <span class="s1">}</span>
+        <span class="s3">else</span>
+            <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;Incorrect type '&quot; </span><span class="s1">+ </span><span class="s3">typeof </span><span class="s2">part </span><span class="s1">+ </span><span class="s0">&quot;' given in &quot;  </span><span class="s1">+ </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodingName </span><span class="s1">+ </span><span class="s0">&quot; at chunk &quot; </span><span class="s1">+ </span><span class="s2">chunk</span><span class="s1">[</span><span class="s5">0</span><span class="s1">]);</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">curAddr </span><span class="s1">&gt; </span><span class="s5">0xFF</span><span class="s1">)</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;Incorrect chunk in &quot;  </span><span class="s1">+ </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodingName </span><span class="s1">+ </span><span class="s0">&quot; at addr &quot; </span><span class="s1">+ </span><span class="s2">chunk</span><span class="s1">[</span><span class="s5">0</span><span class="s1">] + </span><span class="s0">&quot;: too long&quot; </span><span class="s1">+ </span><span class="s2">curAddr</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s4">// Encoder helpers</span>
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_getEncodeBucket </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">uCode</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">high </span><span class="s1">= </span><span class="s2">uCode </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">; </span><span class="s4">// This could be &gt; 0xFF because of astral characters.</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTable</span><span class="s1">[</span><span class="s2">high</span><span class="s1">] === </span><span class="s2">undefined</span><span class="s1">)</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTable</span><span class="s1">[</span><span class="s2">high</span><span class="s1">] = </span><span class="s2">UNASSIGNED_NODE</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">); </span><span class="s4">// Create bucket on demand.</span>
+    <span class="s3">return this</span><span class="s1">.</span><span class="s2">encodeTable</span><span class="s1">[</span><span class="s2">high</span><span class="s1">];</span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_setEncodeChar </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">uCode</span><span class="s1">, </span><span class="s2">dbcsCode</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">bucket </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_getEncodeBucket</span><span class="s1">(</span><span class="s2">uCode</span><span class="s1">);</span>
+    <span class="s3">var </span><span class="s2">low </span><span class="s1">= </span><span class="s2">uCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">] &lt;= </span><span class="s2">SEQ_START</span><span class="s1">)</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTableSeq</span><span class="s1">[</span><span class="s2">SEQ_START</span><span class="s1">-</span><span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">]][</span><span class="s2">DEF_CHAR</span><span class="s1">] = </span><span class="s2">dbcsCode</span><span class="s1">; </span><span class="s4">// There's already a sequence, set a single-char subsequence of it.</span>
+    <span class="s3">else if </span><span class="s1">(</span><span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">] == </span><span class="s2">UNASSIGNED</span><span class="s1">)</span>
+        <span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">] = </span><span class="s2">dbcsCode</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_setEncodeSequence </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">seq</span><span class="s1">, </span><span class="s2">dbcsCode</span><span class="s1">) {</span>
+    
+    <span class="s4">// Get the root of character tree according to first character of the sequence.</span>
+    <span class="s3">var </span><span class="s2">uCode </span><span class="s1">= </span><span class="s2">seq</span><span class="s1">[</span><span class="s5">0</span><span class="s1">];</span>
+    <span class="s3">var </span><span class="s2">bucket </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_getEncodeBucket</span><span class="s1">(</span><span class="s2">uCode</span><span class="s1">);</span>
+    <span class="s3">var </span><span class="s2">low </span><span class="s1">= </span><span class="s2">uCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+
+    <span class="s3">var </span><span class="s2">node</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">] &lt;= </span><span class="s2">SEQ_START</span><span class="s1">) {</span>
+        <span class="s4">// There's already a sequence with  - use it.</span>
+        <span class="s2">node </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTableSeq</span><span class="s1">[</span><span class="s2">SEQ_START</span><span class="s1">-</span><span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">]];</span>
+    <span class="s1">}</span>
+    <span class="s3">else </span><span class="s1">{</span>
+        <span class="s4">// There was no sequence object - allocate a new one.</span>
+        <span class="s2">node </span><span class="s1">= {};</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">] !== </span><span class="s2">UNASSIGNED</span><span class="s1">) </span><span class="s2">node</span><span class="s1">[</span><span class="s2">DEF_CHAR</span><span class="s1">] = </span><span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">]; </span><span class="s4">// If a char was set before - make it a single-char subsequence.</span>
+        <span class="s2">bucket</span><span class="s1">[</span><span class="s2">low</span><span class="s1">] = </span><span class="s2">SEQ_START </span><span class="s1">- </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTableSeq</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTableSeq</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">node</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s4">// Traverse the character tree, allocating new nodes as needed.</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">j </span><span class="s1">= </span><span class="s5">1</span><span class="s1">; </span><span class="s2">j </span><span class="s1">&lt; </span><span class="s2">seq</span><span class="s1">.</span><span class="s2">length</span><span class="s1">-</span><span class="s5">1</span><span class="s1">; </span><span class="s2">j</span><span class="s1">++) {</span>
+        <span class="s3">var </span><span class="s2">oldVal </span><span class="s1">= </span><span class="s2">node</span><span class="s1">[</span><span class="s2">uCode</span><span class="s1">];</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">oldVal </span><span class="s1">=== </span><span class="s0">'object'</span><span class="s1">)</span>
+            <span class="s2">node </span><span class="s1">= </span><span class="s2">oldVal</span><span class="s1">;</span>
+        <span class="s3">else </span><span class="s1">{</span>
+            <span class="s2">node </span><span class="s1">= </span><span class="s2">node</span><span class="s1">[</span><span class="s2">uCode</span><span class="s1">] = {}</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">oldVal </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">)</span>
+                <span class="s2">node</span><span class="s1">[</span><span class="s2">DEF_CHAR</span><span class="s1">] = </span><span class="s2">oldVal</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+
+    <span class="s4">// Set the leaf to given dbcsCode.</span>
+    <span class="s2">uCode </span><span class="s1">= </span><span class="s2">seq</span><span class="s1">[</span><span class="s2">seq</span><span class="s1">.</span><span class="s2">length</span><span class="s1">-</span><span class="s5">1</span><span class="s1">];</span>
+    <span class="s2">node</span><span class="s1">[</span><span class="s2">uCode</span><span class="s1">] = </span><span class="s2">dbcsCode</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSCodec</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_fillEncodeTable </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">nodeIdx</span><span class="s1">, </span><span class="s2">prefix</span><span class="s1">, </span><span class="s2">skipEncodeChars</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">node </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s2">nodeIdx</span><span class="s1">];</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s5">0x100</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++) {</span>
+        <span class="s3">var </span><span class="s2">uCode </span><span class="s1">= </span><span class="s2">node</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+        <span class="s3">var </span><span class="s2">mbCode </span><span class="s1">= </span><span class="s2">prefix </span><span class="s1">+ </span><span class="s2">i</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">skipEncodeChars</span><span class="s1">[</span><span class="s2">mbCode</span><span class="s1">])</span>
+            <span class="s3">continue</span><span class="s1">;</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">)</span>
+            <span class="s3">this</span><span class="s1">.</span><span class="s2">_setEncodeChar</span><span class="s1">(</span><span class="s2">uCode</span><span class="s1">, </span><span class="s2">mbCode</span><span class="s1">);</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&lt;= </span><span class="s2">NODE_START</span><span class="s1">)</span>
+            <span class="s3">this</span><span class="s1">.</span><span class="s2">_fillEncodeTable</span><span class="s1">(</span><span class="s2">NODE_START </span><span class="s1">- </span><span class="s2">uCode</span><span class="s1">, </span><span class="s2">mbCode </span><span class="s1">&lt;&lt; </span><span class="s5">8</span><span class="s1">, </span><span class="s2">skipEncodeChars</span><span class="s1">);</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&lt;= </span><span class="s2">SEQ_START</span><span class="s1">)</span>
+            <span class="s3">this</span><span class="s1">.</span><span class="s2">_setEncodeSequence</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTableSeq</span><span class="s1">[</span><span class="s2">SEQ_START </span><span class="s1">- </span><span class="s2">uCode</span><span class="s1">], </span><span class="s2">mbCode</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+
+
+<span class="s4">// == Encoder ==================================================================</span>
+
+<span class="s3">function </span><span class="s2">DBCSEncoder</span><span class="s1">(</span><span class="s2">options</span><span class="s1">, </span><span class="s2">codec</span><span class="s1">) {</span>
+    <span class="s4">// Encoder state</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">leadSurrogate </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">seqObj </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+    
+    <span class="s4">// Static data</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTable </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">encodeTable</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTableSeq </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">encodeTableSeq</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">defaultCharSingleByte </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">defCharSB</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030 </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSEncoder</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">write </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">str</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">newBuf </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">alloc</span><span class="s1">(</span><span class="s2">str</span><span class="s1">.</span><span class="s2">length </span><span class="s1">* (</span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030 </span><span class="s1">? </span><span class="s5">4 </span><span class="s1">: </span><span class="s5">3</span><span class="s1">)),</span>
+        <span class="s2">leadSurrogate </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">leadSurrogate</span><span class="s1">,</span>
+        <span class="s2">seqObj </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">seqObj</span><span class="s1">, </span><span class="s2">nextChar </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">,</span>
+        <span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">, </span><span class="s2">j </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+
+    <span class="s3">while </span><span class="s1">(</span><span class="s3">true</span><span class="s1">) {</span>
+        <span class="s4">// 0. Get next character.</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">nextChar </span><span class="s1">=== -</span><span class="s5">1</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">i </span><span class="s1">== </span><span class="s2">str</span><span class="s1">.</span><span class="s2">length</span><span class="s1">) </span><span class="s3">break</span><span class="s1">;</span>
+            <span class="s3">var </span><span class="s2">uCode </span><span class="s1">= </span><span class="s2">str</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s2">i</span><span class="s1">++);</span>
+        <span class="s1">}</span>
+        <span class="s3">else </span><span class="s1">{</span>
+            <span class="s3">var </span><span class="s2">uCode </span><span class="s1">= </span><span class="s2">nextChar</span><span class="s1">;</span>
+            <span class="s2">nextChar </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;    </span>
+        <span class="s1">}</span>
+
+        <span class="s4">// 1. Handle surrogates.</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s5">0xD800 </span><span class="s1">&lt;= </span><span class="s2">uCode </span><span class="s1">&amp;&amp; </span><span class="s2">uCode </span><span class="s1">&lt; </span><span class="s5">0xE000</span><span class="s1">) { </span><span class="s4">// Char is one of surrogates.</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&lt; </span><span class="s5">0xDC00</span><span class="s1">) { </span><span class="s4">// We've got lead surrogate.</span>
+                <span class="s3">if </span><span class="s1">(</span><span class="s2">leadSurrogate </span><span class="s1">=== -</span><span class="s5">1</span><span class="s1">) {</span>
+                    <span class="s2">leadSurrogate </span><span class="s1">= </span><span class="s2">uCode</span><span class="s1">;</span>
+                    <span class="s3">continue</span><span class="s1">;</span>
+                <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                    <span class="s2">leadSurrogate </span><span class="s1">= </span><span class="s2">uCode</span><span class="s1">;</span>
+                    <span class="s4">// Double lead surrogate found.</span>
+                    <span class="s2">uCode </span><span class="s1">= </span><span class="s2">UNASSIGNED</span><span class="s1">;</span>
+                <span class="s1">}</span>
+            <span class="s1">} </span><span class="s3">else </span><span class="s1">{ </span><span class="s4">// We've got trail surrogate.</span>
+                <span class="s3">if </span><span class="s1">(</span><span class="s2">leadSurrogate </span><span class="s1">!== -</span><span class="s5">1</span><span class="s1">) {</span>
+                    <span class="s2">uCode </span><span class="s1">= </span><span class="s5">0x10000 </span><span class="s1">+ (</span><span class="s2">leadSurrogate </span><span class="s1">- </span><span class="s5">0xD800</span><span class="s1">) * </span><span class="s5">0x400 </span><span class="s1">+ (</span><span class="s2">uCode </span><span class="s1">- </span><span class="s5">0xDC00</span><span class="s1">);</span>
+                    <span class="s2">leadSurrogate </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+                <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                    <span class="s4">// Incomplete surrogate pair - only trail surrogate found.</span>
+                    <span class="s2">uCode </span><span class="s1">= </span><span class="s2">UNASSIGNED</span><span class="s1">;</span>
+                <span class="s1">}</span>
+                
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">leadSurrogate </span><span class="s1">!== -</span><span class="s5">1</span><span class="s1">) {</span>
+            <span class="s4">// Incomplete surrogate pair - only lead surrogate found.</span>
+            <span class="s2">nextChar </span><span class="s1">= </span><span class="s2">uCode</span><span class="s1">; </span><span class="s2">uCode </span><span class="s1">= </span><span class="s2">UNASSIGNED</span><span class="s1">; </span><span class="s4">// Write an error, then current char.</span>
+            <span class="s2">leadSurrogate </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+        <span class="s1">}</span>
+
+        <span class="s4">// 2. Convert uCode character.</span>
+        <span class="s3">var </span><span class="s2">dbcsCode </span><span class="s1">= </span><span class="s2">UNASSIGNED</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">seqObj </span><span class="s1">!== </span><span class="s2">undefined </span><span class="s1">&amp;&amp; </span><span class="s2">uCode </span><span class="s1">!= </span><span class="s2">UNASSIGNED</span><span class="s1">) { </span><span class="s4">// We are in the middle of the sequence</span>
+            <span class="s3">var </span><span class="s2">resCode </span><span class="s1">= </span><span class="s2">seqObj</span><span class="s1">[</span><span class="s2">uCode</span><span class="s1">];</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">resCode </span><span class="s1">=== </span><span class="s0">'object'</span><span class="s1">) { </span><span class="s4">// Sequence continues.</span>
+                <span class="s2">seqObj </span><span class="s1">= </span><span class="s2">resCode</span><span class="s1">;</span>
+                <span class="s3">continue</span><span class="s1">;</span>
+
+            <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">resCode </span><span class="s1">== </span><span class="s0">'number'</span><span class="s1">) { </span><span class="s4">// Sequence finished. Write it.</span>
+                <span class="s2">dbcsCode </span><span class="s1">= </span><span class="s2">resCode</span><span class="s1">;</span>
+
+            <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">resCode </span><span class="s1">== </span><span class="s2">undefined</span><span class="s1">) { </span><span class="s4">// Current character is not part of the sequence.</span>
+
+                <span class="s4">// Try default character for this sequence</span>
+                <span class="s2">resCode </span><span class="s1">= </span><span class="s2">seqObj</span><span class="s1">[</span><span class="s2">DEF_CHAR</span><span class="s1">];</span>
+                <span class="s3">if </span><span class="s1">(</span><span class="s2">resCode </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+                    <span class="s2">dbcsCode </span><span class="s1">= </span><span class="s2">resCode</span><span class="s1">; </span><span class="s4">// Found. Write it.</span>
+                    <span class="s2">nextChar </span><span class="s1">= </span><span class="s2">uCode</span><span class="s1">; </span><span class="s4">// Current character will be written too in the next iteration.</span>
+
+                <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                    <span class="s4">// TODO: What if we have no default? (resCode == undefined)</span>
+                    <span class="s4">// Then, we should write first char of the sequence as-is and try the rest recursively.</span>
+                    <span class="s4">// Didn't do it for now because no encoding has this situation yet.</span>
+                    <span class="s4">// Currently, just skip the sequence and write current char.</span>
+                <span class="s1">}</span>
+            <span class="s1">}</span>
+            <span class="s2">seqObj </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">) {  </span><span class="s4">// Regular character</span>
+            <span class="s3">var </span><span class="s2">subtable </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTable</span><span class="s1">[</span><span class="s2">uCode </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">];</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">subtable </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">)</span>
+                <span class="s2">dbcsCode </span><span class="s1">= </span><span class="s2">subtable</span><span class="s1">[</span><span class="s2">uCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">];</span>
+            
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">&lt;= </span><span class="s2">SEQ_START</span><span class="s1">) { </span><span class="s4">// Sequence start</span>
+                <span class="s2">seqObj </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">encodeTableSeq</span><span class="s1">[</span><span class="s2">SEQ_START</span><span class="s1">-</span><span class="s2">dbcsCode</span><span class="s1">];</span>
+                <span class="s3">continue</span><span class="s1">;</span>
+            <span class="s1">}</span>
+
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">== </span><span class="s2">UNASSIGNED </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">) {</span>
+                <span class="s4">// Use GB18030 algorithm to find character(s) to write.</span>
+                <span class="s3">var </span><span class="s2">idx </span><span class="s1">= </span><span class="s2">findIdx</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">.</span><span class="s2">uChars</span><span class="s1">, </span><span class="s2">uCode</span><span class="s1">);</span>
+                <span class="s3">if </span><span class="s1">(</span><span class="s2">idx </span><span class="s1">!= -</span><span class="s5">1</span><span class="s1">) {</span>
+                    <span class="s3">var </span><span class="s2">dbcsCode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">.</span><span class="s2">gbChars</span><span class="s1">[</span><span class="s2">idx</span><span class="s1">] + (</span><span class="s2">uCode </span><span class="s1">- </span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">.</span><span class="s2">uChars</span><span class="s1">[</span><span class="s2">idx</span><span class="s1">]);</span>
+                    <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s5">0x81 </span><span class="s1">+ </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">floor</span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">/ </span><span class="s5">12600</span><span class="s1">); </span><span class="s2">dbcsCode </span><span class="s1">= </span><span class="s2">dbcsCode </span><span class="s1">% </span><span class="s5">12600</span><span class="s1">;</span>
+                    <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s5">0x30 </span><span class="s1">+ </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">floor</span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">/ </span><span class="s5">1260</span><span class="s1">); </span><span class="s2">dbcsCode </span><span class="s1">= </span><span class="s2">dbcsCode </span><span class="s1">% </span><span class="s5">1260</span><span class="s1">;</span>
+                    <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s5">0x81 </span><span class="s1">+ </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">floor</span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">/ </span><span class="s5">10</span><span class="s1">); </span><span class="s2">dbcsCode </span><span class="s1">= </span><span class="s2">dbcsCode </span><span class="s1">% </span><span class="s5">10</span><span class="s1">;</span>
+                    <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s5">0x30 </span><span class="s1">+ </span><span class="s2">dbcsCode</span><span class="s1">;</span>
+                    <span class="s3">continue</span><span class="s1">;</span>
+                <span class="s1">}</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+
+        <span class="s4">// 3. Write dbcsCode character.</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">=== </span><span class="s2">UNASSIGNED</span><span class="s1">)</span>
+            <span class="s2">dbcsCode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">defaultCharSingleByte</span><span class="s1">;</span>
+        
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">&lt; </span><span class="s5">0x100</span><span class="s1">) {</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">&lt; </span><span class="s5">0x10000</span><span class="s1">) {</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">;   </span><span class="s4">// high byte</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">; </span><span class="s4">// low byte</span>
+        <span class="s1">}</span>
+        <span class="s3">else </span><span class="s1">{</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode </span><span class="s1">&gt;&gt; </span><span class="s5">16</span><span class="s1">;</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = (</span><span class="s2">dbcsCode </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">) &amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">seqObj </span><span class="s1">= </span><span class="s2">seqObj</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">leadSurrogate </span><span class="s1">= </span><span class="s2">leadSurrogate</span><span class="s1">;</span>
+    <span class="s3">return </span><span class="s2">newBuf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">, </span><span class="s2">j</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSEncoder</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">end </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">leadSurrogate </span><span class="s1">=== -</span><span class="s5">1 </span><span class="s1">&amp;&amp; </span><span class="s3">this</span><span class="s1">.</span><span class="s2">seqObj </span><span class="s1">=== </span><span class="s2">undefined</span><span class="s1">)</span>
+        <span class="s3">return</span><span class="s1">; </span><span class="s4">// All clean. Most often case.</span>
+
+    <span class="s3">var </span><span class="s2">newBuf </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">alloc</span><span class="s1">(</span><span class="s5">10</span><span class="s1">), </span><span class="s2">j </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">seqObj</span><span class="s1">) { </span><span class="s4">// We're in the sequence.</span>
+        <span class="s3">var </span><span class="s2">dbcsCode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">seqObj</span><span class="s1">[</span><span class="s2">DEF_CHAR</span><span class="s1">];</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) { </span><span class="s4">// Write beginning of the sequence.</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">dbcsCode </span><span class="s1">&lt; </span><span class="s5">0x100</span><span class="s1">) {</span>
+                <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode</span><span class="s1">;</span>
+            <span class="s1">}</span>
+            <span class="s3">else </span><span class="s1">{</span>
+                <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">;   </span><span class="s4">// high byte</span>
+                <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">dbcsCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">; </span><span class="s4">// low byte</span>
+            <span class="s1">}</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s4">// See todo above.</span>
+        <span class="s1">}</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">seqObj </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">leadSurrogate </span><span class="s1">!== -</span><span class="s5">1</span><span class="s1">) {</span>
+        <span class="s4">// Incomplete surrogate pair - only lead surrogate found.</span>
+        <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s3">this</span><span class="s1">.</span><span class="s2">defaultCharSingleByte</span><span class="s1">;</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">leadSurrogate </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    
+    <span class="s3">return </span><span class="s2">newBuf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">, </span><span class="s2">j</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s4">// Export for testing</span>
+<span class="s2">DBCSEncoder</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">findIdx </span><span class="s1">= </span><span class="s2">findIdx</span><span class="s1">;</span>
+
+
+<span class="s4">// == Decoder ==================================================================</span>
+
+<span class="s3">function </span><span class="s2">DBCSDecoder</span><span class="s1">(</span><span class="s2">options</span><span class="s1">, </span><span class="s2">codec</span><span class="s1">) {</span>
+    <span class="s4">// Decoder state</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">nodeIdx </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">alloc</span><span class="s1">(</span><span class="s5">0</span><span class="s1">);</span>
+
+    <span class="s4">// Static data</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTableSeq </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">decodeTableSeq</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">defaultCharUnicode </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">defaultCharUnicode</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030 </span><span class="s1">= </span><span class="s2">codec</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSDecoder</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">write </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">buf</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">newBuf </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">alloc</span><span class="s1">(</span><span class="s2">buf</span><span class="s1">.</span><span class="s2">length</span><span class="s1">*</span><span class="s5">2</span><span class="s1">),</span>
+        <span class="s2">nodeIdx </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">nodeIdx</span><span class="s1">, </span>
+        <span class="s2">prevBuf </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf</span><span class="s1">, </span><span class="s2">prevBufOffset </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf</span><span class="s1">.</span><span class="s2">length</span><span class="s1">,</span>
+        <span class="s2">seqStart </span><span class="s1">= -</span><span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf</span><span class="s1">.</span><span class="s2">length</span><span class="s1">, </span><span class="s4">// idx of the start of current parsed sequence.</span>
+        <span class="s2">uCode</span><span class="s1">;</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">prevBufOffset </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">) </span><span class="s4">// Make prev buf overlap a little to make it easier to slice later.</span>
+        <span class="s2">prevBuf </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">concat</span><span class="s1">([</span><span class="s2">prevBuf</span><span class="s1">, </span><span class="s2">buf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">, </span><span class="s5">10</span><span class="s1">)]);</span>
+    
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">, </span><span class="s2">j </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">buf</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; </span><span class="s2">i</span><span class="s1">++) {</span>
+        <span class="s3">var </span><span class="s2">curByte </span><span class="s1">= (</span><span class="s2">i </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">) ? </span><span class="s2">buf</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] : </span><span class="s2">prevBuf</span><span class="s1">[</span><span class="s2">i </span><span class="s1">+ </span><span class="s2">prevBufOffset</span><span class="s1">];</span>
+
+        <span class="s4">// Lookup in current trie node.</span>
+        <span class="s3">var </span><span class="s2">uCode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTables</span><span class="s1">[</span><span class="s2">nodeIdx</span><span class="s1">][</span><span class="s2">curByte</span><span class="s1">];</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">) { </span>
+            <span class="s4">// Normal character, just use it.</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">=== </span><span class="s2">UNASSIGNED</span><span class="s1">) { </span><span class="s4">// Unknown char.</span>
+            <span class="s4">// TODO: Callback with seq.</span>
+            <span class="s4">//var curSeq = (seqStart &gt;= 0) ? buf.slice(seqStart, i+1) : prevBuf.slice(seqStart + prevBufOffset, i+1 + prevBufOffset);</span>
+            <span class="s2">i </span><span class="s1">= </span><span class="s2">seqStart</span><span class="s1">; </span><span class="s4">// Try to parse again, after skipping first byte of the sequence ('i' will be incremented by 'for' cycle).</span>
+            <span class="s2">uCode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">defaultCharUnicode</span><span class="s1">.</span><span class="s2">charCodeAt</span><span class="s1">(</span><span class="s5">0</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">=== </span><span class="s2">GB18030_CODE</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">curSeq </span><span class="s1">= (</span><span class="s2">seqStart </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">) ? </span><span class="s2">buf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s2">seqStart</span><span class="s1">, </span><span class="s2">i</span><span class="s1">+</span><span class="s5">1</span><span class="s1">) : </span><span class="s2">prevBuf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s2">seqStart </span><span class="s1">+ </span><span class="s2">prevBufOffset</span><span class="s1">, </span><span class="s2">i</span><span class="s1">+</span><span class="s5">1 </span><span class="s1">+ </span><span class="s2">prevBufOffset</span><span class="s1">);</span>
+            <span class="s3">var </span><span class="s2">ptr </span><span class="s1">= (</span><span class="s2">curSeq</span><span class="s1">[</span><span class="s5">0</span><span class="s1">]-</span><span class="s5">0x81</span><span class="s1">)*</span><span class="s5">12600 </span><span class="s1">+ (</span><span class="s2">curSeq</span><span class="s1">[</span><span class="s5">1</span><span class="s1">]-</span><span class="s5">0x30</span><span class="s1">)*</span><span class="s5">1260 </span><span class="s1">+ (</span><span class="s2">curSeq</span><span class="s1">[</span><span class="s5">2</span><span class="s1">]-</span><span class="s5">0x81</span><span class="s1">)*</span><span class="s5">10 </span><span class="s1">+ (</span><span class="s2">curSeq</span><span class="s1">[</span><span class="s5">3</span><span class="s1">]-</span><span class="s5">0x30</span><span class="s1">);</span>
+            <span class="s3">var </span><span class="s2">idx </span><span class="s1">= </span><span class="s2">findIdx</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">.</span><span class="s2">gbChars</span><span class="s1">, </span><span class="s2">ptr</span><span class="s1">);</span>
+            <span class="s2">uCode </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">.</span><span class="s2">uChars</span><span class="s1">[</span><span class="s2">idx</span><span class="s1">] + </span><span class="s2">ptr </span><span class="s1">- </span><span class="s3">this</span><span class="s1">.</span><span class="s2">gb18030</span><span class="s1">.</span><span class="s2">gbChars</span><span class="s1">[</span><span class="s2">idx</span><span class="s1">];</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&lt;= </span><span class="s2">NODE_START</span><span class="s1">) { </span><span class="s4">// Go to next trie node.</span>
+            <span class="s2">nodeIdx </span><span class="s1">= </span><span class="s2">NODE_START </span><span class="s1">- </span><span class="s2">uCode</span><span class="s1">;</span>
+            <span class="s3">continue</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s3">else if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&lt;= </span><span class="s2">SEQ_START</span><span class="s1">) { </span><span class="s4">// Output a sequence of chars.</span>
+            <span class="s3">var </span><span class="s2">seq </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">decodeTableSeq</span><span class="s1">[</span><span class="s2">SEQ_START </span><span class="s1">- </span><span class="s2">uCode</span><span class="s1">];</span>
+            <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">k </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">k </span><span class="s1">&lt; </span><span class="s2">seq</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s5">1</span><span class="s1">; </span><span class="s2">k</span><span class="s1">++) {</span>
+                <span class="s2">uCode </span><span class="s1">= </span><span class="s2">seq</span><span class="s1">[</span><span class="s2">k</span><span class="s1">];</span>
+                <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">uCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+                <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">uCode </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">;</span>
+            <span class="s1">}</span>
+            <span class="s2">uCode </span><span class="s1">= </span><span class="s2">seq</span><span class="s1">[</span><span class="s2">seq</span><span class="s1">.</span><span class="s2">length</span><span class="s1">-</span><span class="s5">1</span><span class="s1">];</span>
+        <span class="s1">}</span>
+        <span class="s3">else</span>
+            <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;iconv-lite internal error: invalid decoding table value &quot; </span><span class="s1">+ </span><span class="s2">uCode </span><span class="s1">+ </span><span class="s0">&quot; at &quot; </span><span class="s1">+ </span><span class="s2">nodeIdx </span><span class="s1">+ </span><span class="s0">&quot;/&quot; </span><span class="s1">+ </span><span class="s2">curByte</span><span class="s1">);</span>
+
+        <span class="s4">// Write the character to buffer, handling higher planes using surrogate pair.</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">&gt; </span><span class="s5">0xFFFF</span><span class="s1">) { </span>
+            <span class="s2">uCode </span><span class="s1">-= </span><span class="s5">0x10000</span><span class="s1">;</span>
+            <span class="s3">var </span><span class="s2">uCodeLead </span><span class="s1">= </span><span class="s5">0xD800 </span><span class="s1">+ </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">floor</span><span class="s1">(</span><span class="s2">uCode </span><span class="s1">/ </span><span class="s5">0x400</span><span class="s1">);</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">uCodeLead </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+            <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">uCodeLead </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">;</span>
+
+            <span class="s2">uCode </span><span class="s1">= </span><span class="s5">0xDC00 </span><span class="s1">+ </span><span class="s2">uCode </span><span class="s1">% </span><span class="s5">0x400</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">uCode </span><span class="s1">&amp; </span><span class="s5">0xFF</span><span class="s1">;</span>
+        <span class="s2">newBuf</span><span class="s1">[</span><span class="s2">j</span><span class="s1">++] = </span><span class="s2">uCode </span><span class="s1">&gt;&gt; </span><span class="s5">8</span><span class="s1">;</span>
+
+        <span class="s4">// Reset trie node.</span>
+        <span class="s2">nodeIdx </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">seqStart </span><span class="s1">= </span><span class="s2">i</span><span class="s1">+</span><span class="s5">1</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">nodeIdx </span><span class="s1">= </span><span class="s2">nodeIdx</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf </span><span class="s1">= (</span><span class="s2">seqStart </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">) ? </span><span class="s2">buf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s2">seqStart</span><span class="s1">) : </span><span class="s2">prevBuf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s2">seqStart </span><span class="s1">+ </span><span class="s2">prevBufOffset</span><span class="s1">);</span>
+    <span class="s3">return </span><span class="s2">newBuf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">0</span><span class="s1">, </span><span class="s2">j</span><span class="s1">).</span><span class="s2">toString</span><span class="s1">(</span><span class="s0">'ucs2'</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s2">DBCSDecoder</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">end </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">var </span><span class="s2">ret </span><span class="s1">= </span><span class="s0">''</span><span class="s1">;</span>
+
+    <span class="s4">// Try to parse all remaining chars.</span>
+    <span class="s3">while </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">) {</span>
+        <span class="s4">// Skip 1 character in the buffer.</span>
+        <span class="s2">ret </span><span class="s1">+= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">defaultCharUnicode</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">buf </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s5">1</span><span class="s1">);</span>
+
+        <span class="s4">// Parse remaining as usual.</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">prevBuf </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">alloc</span><span class="s1">(</span><span class="s5">0</span><span class="s1">);</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">nodeIdx </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">buf</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">)</span>
+            <span class="s2">ret </span><span class="s1">+= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">write</span><span class="s1">(</span><span class="s2">buf</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">nodeIdx </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+    <span class="s3">return </span><span class="s2">ret</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s4">// Binary search for GB18030. Returns largest i such that table[i] &lt;= val.</span>
+<span class="s3">function </span><span class="s2">findIdx</span><span class="s1">(</span><span class="s2">table</span><span class="s1">, </span><span class="s2">val</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">table</span><span class="s1">[</span><span class="s5">0</span><span class="s1">] &gt; </span><span class="s2">val</span><span class="s1">)</span>
+        <span class="s3">return </span><span class="s1">-</span><span class="s5">1</span><span class="s1">;</span>
+
+    <span class="s3">var </span><span class="s2">l </span><span class="s1">= </span><span class="s5">0</span><span class="s1">, </span><span class="s2">r </span><span class="s1">= </span><span class="s2">table</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+    <span class="s3">while </span><span class="s1">(</span><span class="s2">l </span><span class="s1">&lt; </span><span class="s2">r</span><span class="s1">-</span><span class="s5">1</span><span class="s1">) { </span><span class="s4">// always table[l] &lt;= val &lt; table[r]</span>
+        <span class="s3">var </span><span class="s2">mid </span><span class="s1">= </span><span class="s2">l </span><span class="s1">+ </span><span class="s2">Math</span><span class="s1">.</span><span class="s2">floor</span><span class="s1">((</span><span class="s2">r</span><span class="s1">-</span><span class="s2">l</span><span class="s1">+</span><span class="s5">1</span><span class="s1">)/</span><span class="s5">2</span><span class="s1">);</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">table</span><span class="s1">[</span><span class="s2">mid</span><span class="s1">] &lt;= </span><span class="s2">val</span><span class="s1">)</span>
+            <span class="s2">l </span><span class="s1">= </span><span class="s2">mid</span><span class="s1">;</span>
+        <span class="s3">else</span>
+            <span class="s2">r </span><span class="s1">= </span><span class="s2">mid</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">l</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+</pre>
+</body>
+</html>

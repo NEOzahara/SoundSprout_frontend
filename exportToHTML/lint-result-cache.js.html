@@ -1,0 +1,227 @@
+<html>
+<head>
+<title>lint-result-cache.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+lint-result-cache.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Utility for caching lint results.</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Kevin Partington</span>
+ <span class="s0">*/</span>
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">assert </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;assert&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">fs </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;fs&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">fileEntryCache </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;file-entry-cache&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">stringify </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;json-stable-stringify-without-jsonify&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">pkg </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../../package.json&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">hash </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./hash&quot;</span><span class="s4">);</span>
+
+<span class="s6">const </span><span class="s2">debug </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;debug&quot;</span><span class="s4">)(</span><span class="s3">&quot;eslint:lint-result-cache&quot;</span><span class="s4">);</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">configHashCache </span><span class="s4">= </span><span class="s6">new </span><span class="s2">WeakMap</span><span class="s4">();</span>
+<span class="s6">const </span><span class="s2">nodeVersion </span><span class="s4">= </span><span class="s2">process </span><span class="s4">&amp;&amp; </span><span class="s2">process</span><span class="s4">.</span><span class="s2">version</span><span class="s4">;</span>
+
+<span class="s6">const </span><span class="s2">validCacheStrategies </span><span class="s4">= [</span><span class="s3">&quot;metadata&quot;</span><span class="s4">, </span><span class="s3">&quot;content&quot;</span><span class="s4">];</span>
+<span class="s6">const </span><span class="s2">invalidCacheStrategyErrorMessage </span><span class="s4">= </span><span class="s3">`Cache strategy must be one of: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">validCacheStrategies</span>
+    <span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">strategy </span><span class="s4">=&gt; </span><span class="s3">`&quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">strategy</span><span class="s4">}</span><span class="s3">&quot;`</span><span class="s4">)</span>
+    <span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s3">&quot;, &quot;</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">;</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Tests whether a provided cacheStrategy is valid</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} cacheStrategy The cache strategy to use</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} true if `cacheStrategy` is one of `validCacheStrategies`; false otherwise</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isValidCacheStrategy</span><span class="s4">(</span><span class="s2">cacheStrategy</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s4">(</span>
+        <span class="s2">validCacheStrategies</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">cacheStrategy</span><span class="s4">)</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Calculates the hash of the config</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ConfigArray} config The config.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{string} The hash of the config</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">hashOfConfigFor</span><span class="s4">(</span><span class="s2">config</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">configHashCache</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">config</span><span class="s4">)) {</span>
+        <span class="s2">configHashCache</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">config</span><span class="s4">, </span><span class="s2">hash</span><span class="s4">(</span><span class="s3">`</span><span class="s2">$</span><span class="s4">{</span><span class="s2">pkg</span><span class="s4">.</span><span class="s2">version</span><span class="s4">}</span><span class="s3">_</span><span class="s2">$</span><span class="s4">{</span><span class="s2">nodeVersion</span><span class="s4">}</span><span class="s3">_</span><span class="s2">$</span><span class="s4">{</span><span class="s2">stringify</span><span class="s4">(</span><span class="s2">config</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">configHashCache</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">config</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s5">//-----------------------------------------------------------------------------</span>
+<span class="s5">// Public Interface</span>
+<span class="s5">//-----------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Lint result cache. This wraps around the file-entry-cache module,</span>
+ <span class="s0">* transparently removing properties that are difficult or expensive to</span>
+ <span class="s0">* serialize and adding them back in on retrieval.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">LintResultCache </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates a new LintResultCache instance.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} cacheFileLocation The cache file location.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{&quot;metadata&quot; | &quot;content&quot;} cacheStrategy The cache strategy to use.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">cacheFileLocation</span><span class="s4">, </span><span class="s2">cacheStrategy</span><span class="s4">) {</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s2">cacheFileLocation</span><span class="s4">, </span><span class="s3">&quot;Cache file location is required&quot;</span><span class="s4">);</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s2">cacheStrategy</span><span class="s4">, </span><span class="s3">&quot;Cache strategy is required&quot;</span><span class="s4">);</span>
+        <span class="s2">assert</span><span class="s4">(</span>
+            <span class="s2">isValidCacheStrategy</span><span class="s4">(</span><span class="s2">cacheStrategy</span><span class="s4">),</span>
+            <span class="s2">invalidCacheStrategyErrorMessage</span>
+        <span class="s4">);</span>
+
+        <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Caching results to </span><span class="s2">$</span><span class="s4">{</span><span class="s2">cacheFileLocation</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+
+        <span class="s6">const </span><span class="s2">useChecksum </span><span class="s4">= </span><span class="s2">cacheStrategy </span><span class="s4">=== </span><span class="s3">&quot;content&quot;</span><span class="s4">;</span>
+
+        <span class="s2">debug</span><span class="s4">(</span>
+            <span class="s3">`Using &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">cacheStrategy</span><span class="s4">}</span><span class="s3">&quot; strategy to detect changes`</span>
+        <span class="s4">);</span>
+
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">fileEntryCache </span><span class="s4">= </span><span class="s2">fileEntryCache</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+            <span class="s2">cacheFileLocation</span><span class="s4">,</span>
+            <span class="s6">void </span><span class="s7">0</span><span class="s4">,</span>
+            <span class="s2">useChecksum</span>
+        <span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">cacheFileLocation </span><span class="s4">= </span><span class="s2">cacheFileLocation</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Retrieve cached lint results for a given file path, if present in the</span>
+     <span class="s0">* cache. If the file is present and has not been changed, rebuild any</span>
+     <span class="s0">* missing result information.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} filePath The file for which to retrieve lint results.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ConfigArray} config The config of the file.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object|null} The rebuilt lint results, or null if the file is</span>
+     <span class="s0">*   changed or not in the filesystem.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getCachedLintResults</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">config</span><span class="s4">) {</span>
+
+        <span class="s5">/* 
+         * Cached lint results are valid if and only if: 
+         * 1. The file is present in the filesystem 
+         * 2. The file has not changed since the time it was previously linted 
+         * 3. The ESLint configuration has not changed since the time the file 
+         *    was previously linted 
+         * If any of these are not true, we will not reuse the lint results. 
+         */</span>
+        <span class="s6">const </span><span class="s2">fileDescriptor </span><span class="s4">= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">fileEntryCache</span><span class="s4">.</span><span class="s2">getFileDescriptor</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">hashOfConfig </span><span class="s4">= </span><span class="s2">hashOfConfigFor</span><span class="s4">(</span><span class="s2">config</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">changed </span><span class="s4">=</span>
+            <span class="s2">fileDescriptor</span><span class="s4">.</span><span class="s2">changed </span><span class="s4">||</span>
+            <span class="s2">fileDescriptor</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">.</span><span class="s2">hashOfConfig </span><span class="s4">!== </span><span class="s2">hashOfConfig</span><span class="s4">;</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">fileDescriptor</span><span class="s4">.</span><span class="s2">notFound</span><span class="s4">) {</span>
+            <span class="s2">debug</span><span class="s4">(</span><span class="s3">`File not found on the file system: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">filePath</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+            <span class="s6">return null</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">changed</span><span class="s4">) {</span>
+            <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Cache entry not found or no longer valid: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">filePath</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+            <span class="s6">return null</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s2">cachedResults </span><span class="s4">= </span><span class="s2">fileDescriptor</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">.</span><span class="s2">results</span><span class="s4">;</span>
+
+        <span class="s5">// Just in case, not sure if this can ever happen.</span>
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">cachedResults</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">cachedResults</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s5">/* 
+         * Shallow clone the object to ensure that any properties added or modified afterwards 
+         * will not be accidentally stored in the cache file when `reconcile()` is called. 
+         * https://github.com/eslint/eslint/issues/13507 
+         * All intentional changes to the cache file must be done through `setCachedLintResults()`. 
+         */</span>
+        <span class="s6">const </span><span class="s2">results </span><span class="s4">= { </span><span class="s2">...cachedResults </span><span class="s4">};</span>
+
+        <span class="s5">// If source is present but null, need to reread the file from the filesystem.</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">results</span><span class="s4">.</span><span class="s2">source </span><span class="s4">=== </span><span class="s6">null</span><span class="s4">) {</span>
+            <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Rereading cached result source from filesystem: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">filePath</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+            <span class="s2">results</span><span class="s4">.</span><span class="s2">source </span><span class="s4">= </span><span class="s2">fs</span><span class="s4">.</span><span class="s2">readFileSync</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s3">&quot;utf-8&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s2">results</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Set the cached lint results for a given file path, after removing any</span>
+     <span class="s0">* information that will be both unnecessary and difficult to serialize.</span>
+     <span class="s0">* Avoids caching results with an &quot;output&quot; property (meaning fixes were</span>
+     <span class="s0">* applied), to prevent potentially incorrect results if fixes are not</span>
+     <span class="s0">* written to disk.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} filePath The file for which to set lint results.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ConfigArray} config The config of the file.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} result The lint result to be set for the file.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">setCachedLintResults</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">config</span><span class="s4">, </span><span class="s2">result</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">result </span><span class="s4">&amp;&amp; </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">hasOwnProperty</span><span class="s4">.</span><span class="s2">call</span><span class="s4">(</span><span class="s2">result</span><span class="s4">, </span><span class="s3">&quot;output&quot;</span><span class="s4">)) {</span>
+            <span class="s6">return</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s2">fileDescriptor </span><span class="s4">= </span><span class="s6">this</span><span class="s4">.</span><span class="s2">fileEntryCache</span><span class="s4">.</span><span class="s2">getFileDescriptor</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">fileDescriptor </span><span class="s4">&amp;&amp; !</span><span class="s2">fileDescriptor</span><span class="s4">.</span><span class="s2">notFound</span><span class="s4">) {</span>
+            <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Updating cached result: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">filePath</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+
+            <span class="s5">// Serialize the result, except that we want to remove the file source if present.</span>
+            <span class="s6">const </span><span class="s2">resultToSerialize </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">assign</span><span class="s4">({}, </span><span class="s2">result</span><span class="s4">);</span>
+
+            <span class="s5">/* 
+             * Set result.source to null. 
+             * In `getCachedLintResults`, if source is explicitly null, we will 
+             * read the file from the filesystem to set the value again. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">Object</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">hasOwnProperty</span><span class="s4">.</span><span class="s2">call</span><span class="s4">(</span><span class="s2">resultToSerialize</span><span class="s4">, </span><span class="s3">&quot;source&quot;</span><span class="s4">)) {</span>
+                <span class="s2">resultToSerialize</span><span class="s4">.</span><span class="s2">source </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s2">fileDescriptor</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">.</span><span class="s2">results </span><span class="s4">= </span><span class="s2">resultToSerialize</span><span class="s4">;</span>
+            <span class="s2">fileDescriptor</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">.</span><span class="s2">hashOfConfig </span><span class="s4">= </span><span class="s2">hashOfConfigFor</span><span class="s4">(</span><span class="s2">config</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Persists the in-memory cache to disk.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s2">reconcile</span><span class="s4">() {</span>
+        <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Persisting cached results: </span><span class="s2">$</span><span class="s4">{</span><span class="s6">this</span><span class="s4">.</span><span class="s2">cacheFileLocation</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">fileEntryCache</span><span class="s4">.</span><span class="s2">reconcile</span><span class="s4">();</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s2">LintResultCache</span><span class="s4">;</span>
+</pre>
+</body>
+</html>

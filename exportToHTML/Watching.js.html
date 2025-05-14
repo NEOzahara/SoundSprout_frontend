@@ -1,0 +1,253 @@
+<html>
+<head>
+<title>watching.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #cf8e6d;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+watching.js</font>
+</center></td></tr></table>
+<pre><span class="s0">// @ts-check</span>
+
+<span class="s2">import </span><span class="s1">chokidar from </span><span class="s3">'chokidar'</span>
+<span class="s2">import </span><span class="s1">fs from </span><span class="s3">'fs'</span>
+<span class="s2">import </span><span class="s1">micromatch from </span><span class="s3">'micromatch'</span>
+<span class="s2">import </span><span class="s1">normalizePath from </span><span class="s3">'normalize-path'</span>
+<span class="s2">import </span><span class="s1">path from </span><span class="s3">'path'</span>
+
+<span class="s2">import </span><span class="s4">{ </span><span class="s1">readFileWithRetries </span><span class="s4">} </span><span class="s1">from </span><span class="s3">'./utils.js'</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The core idea of this watcher is:</span>
+ <span class="s5">* 1. Whenever a file is added, changed, or renamed we queue a rebuild</span>
+ <span class="s5">* 2. Perform as few rebuilds as possible by batching them together</span>
+ <span class="s5">* 3. Coalesce events that happen in quick succession to avoid unnecessary rebuilds</span>
+ <span class="s5">* 4. Ensure another rebuild happens _if_ changed while a rebuild is in progress</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{*} args</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{{ state, rebuild(changedFiles: any[]): Promise&lt;any&gt; }} param1</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{{</span>
+ <span class="s5">*   fswatcher: import('chokidar').FSWatcher,</span>
+ <span class="s5">*   refreshWatchedFiles(): void,</span>
+ <span class="s5">* }}</span>
+ <span class="s5">*/</span>
+<span class="s2">export function </span><span class="s1">createWatcher</span><span class="s4">(</span><span class="s1">args</span><span class="s4">, { </span><span class="s1">state</span><span class="s4">, </span><span class="s1">rebuild </span><span class="s4">}) {</span>
+  <span class="s2">let </span><span class="s1">shouldPoll </span><span class="s4">= </span><span class="s1">args</span><span class="s4">[</span><span class="s3">'--poll'</span><span class="s4">]</span>
+  <span class="s2">let </span><span class="s1">shouldCoalesceWriteEvents </span><span class="s4">= </span><span class="s1">shouldPoll </span><span class="s4">|| </span><span class="s1">process</span><span class="s4">.</span><span class="s1">platform </span><span class="s4">=== </span><span class="s3">'win32'</span>
+
+  <span class="s0">// Polling interval in milliseconds</span>
+  <span class="s0">// Used only when polling or coalescing add/change events on Windows</span>
+  <span class="s2">let </span><span class="s1">pollInterval </span><span class="s4">= </span><span class="s7">10</span>
+
+  <span class="s2">let </span><span class="s1">watcher </span><span class="s4">= </span><span class="s1">chokidar</span><span class="s4">.</span><span class="s1">watch</span><span class="s4">([], {</span>
+    <span class="s0">// Force checking for atomic writes in all situations</span>
+    <span class="s0">// This causes chokidar to wait up to 100ms for a file to re-added after it's been unlinked</span>
+    <span class="s0">// This only works when watching directories though</span>
+    <span class="s1">atomic</span><span class="s4">: </span><span class="s2">true</span><span class="s4">,</span>
+
+    <span class="s1">usePolling</span><span class="s4">: </span><span class="s1">shouldPoll</span><span class="s4">,</span>
+    <span class="s1">interval</span><span class="s4">: </span><span class="s1">shouldPoll </span><span class="s4">? </span><span class="s1">pollInterval </span><span class="s4">: </span><span class="s1">undefined</span><span class="s4">,</span>
+    <span class="s1">ignoreInitial</span><span class="s4">: </span><span class="s2">true</span><span class="s4">,</span>
+    <span class="s1">awaitWriteFinish</span><span class="s4">: </span><span class="s1">shouldCoalesceWriteEvents</span>
+      <span class="s4">? {</span>
+          <span class="s1">stabilityThreshold</span><span class="s4">: </span><span class="s7">50</span><span class="s4">,</span>
+          <span class="s1">pollInterval</span><span class="s4">: </span><span class="s1">pollInterval</span><span class="s4">,</span>
+        <span class="s4">}</span>
+      <span class="s4">: </span><span class="s2">false</span><span class="s4">,</span>
+  <span class="s4">})</span>
+
+  <span class="s0">// A queue of rebuilds, file reads, etc… to run</span>
+  <span class="s2">let </span><span class="s1">chain </span><span class="s4">= </span><span class="s1">Promise</span><span class="s4">.</span><span class="s1">resolve</span><span class="s4">()</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* A list of files that have been changed since the last rebuild</span>
+   <span class="s5">*</span>
+   <span class="s5">* </span><span class="s6">@type </span><span class="s5">{{file: string, content: () =&gt; Promise&lt;string&gt;, extension: string}[]}</span>
+   <span class="s5">*/</span>
+  <span class="s2">let </span><span class="s1">changedContent </span><span class="s4">= []</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* A list of files for which a rebuild has already been queued.</span>
+   <span class="s5">* This is used to prevent duplicate rebuilds when multiple events are fired for the same file.</span>
+   <span class="s5">* The rebuilt file is cleared from this list when it's associated rebuild has _started_</span>
+   <span class="s5">* This is because if the file is changed during a rebuild it won't trigger a new rebuild which it should</span>
+   <span class="s5">**/</span>
+  <span class="s2">let </span><span class="s1">pendingRebuilds </span><span class="s4">= </span><span class="s2">new </span><span class="s1">Set</span><span class="s4">()</span>
+
+  <span class="s2">let </span><span class="s1">_timer</span>
+  <span class="s2">let </span><span class="s1">_reject</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">* Rebuilds the changed files and resolves when the rebuild is</span>
+   <span class="s5">* complete regardless of whether it was successful or not</span>
+   <span class="s5">*/</span>
+  <span class="s1">async </span><span class="s2">function </span><span class="s1">rebuildAndContinue</span><span class="s4">() {</span>
+    <span class="s2">let </span><span class="s1">changes </span><span class="s4">= </span><span class="s1">changedContent</span><span class="s4">.</span><span class="s1">splice</span><span class="s4">(</span><span class="s7">0</span><span class="s4">)</span>
+
+    <span class="s0">// There are no changes to rebuild so we can just do nothing</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">changes</span><span class="s4">.</span><span class="s1">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">Promise</span><span class="s4">.</span><span class="s1">resolve</span><span class="s4">()</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Clear all pending rebuilds for the about-to-be-built files</span>
+    <span class="s1">changes</span><span class="s4">.</span><span class="s1">forEach</span><span class="s4">((</span><span class="s1">change</span><span class="s4">) =&gt; </span><span class="s1">pendingRebuilds</span><span class="s4">.</span><span class="s1">delete</span><span class="s4">(</span><span class="s1">change</span><span class="s4">.</span><span class="s1">file</span><span class="s4">))</span>
+
+    <span class="s0">// Resolve the promise even when the rebuild fails</span>
+    <span class="s2">return </span><span class="s1">rebuild</span><span class="s4">(</span><span class="s1">changes</span><span class="s4">).</span><span class="s1">then</span><span class="s4">(</span>
+      <span class="s4">() =&gt; {},</span>
+      <span class="s4">(</span><span class="s1">e</span><span class="s4">) =&gt; {</span>
+        <span class="s1">console</span><span class="s4">.</span><span class="s1">error</span><span class="s4">(</span><span class="s1">e</span><span class="s4">.</span><span class="s1">toString</span><span class="s4">())</span>
+      <span class="s4">}</span>
+    <span class="s4">)</span>
+  <span class="s4">}</span>
+
+  <span class="s5">/**</span>
+   <span class="s5">*</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{*} file</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(() =&gt; Promise&lt;string&gt;) | null} content</span>
+   <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} skipPendingCheck</span>
+   <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;void&gt;}</span>
+   <span class="s5">*/</span>
+  <span class="s2">function </span><span class="s1">recordChangedFile</span><span class="s4">(</span><span class="s1">file</span><span class="s4">, </span><span class="s1">content </span><span class="s4">= </span><span class="s2">null</span><span class="s4">, </span><span class="s1">skipPendingCheck </span><span class="s4">= </span><span class="s2">false</span><span class="s4">) {</span>
+    <span class="s1">file </span><span class="s4">= </span><span class="s1">path</span><span class="s4">.</span><span class="s1">resolve</span><span class="s4">(</span><span class="s1">file</span><span class="s4">)</span>
+
+    <span class="s0">// Applications like Vim/Neovim fire both rename and change events in succession for atomic writes</span>
+    <span class="s0">// In that case rebuild has already been queued by rename, so can be skipped in change</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">pendingRebuilds</span><span class="s4">.</span><span class="s1">has</span><span class="s4">(</span><span class="s1">file</span><span class="s4">) &amp;&amp; !</span><span class="s1">skipPendingCheck</span><span class="s4">) {</span>
+      <span class="s2">return </span><span class="s1">Promise</span><span class="s4">.</span><span class="s1">resolve</span><span class="s4">()</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Mark that a rebuild of this file is going to happen</span>
+    <span class="s0">// It MUST happen synchronously before the rebuild is queued for this to be effective</span>
+    <span class="s1">pendingRebuilds</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">file</span><span class="s4">)</span>
+
+    <span class="s1">changedContent</span><span class="s4">.</span><span class="s1">push</span><span class="s4">({</span>
+      <span class="s1">file</span><span class="s4">,</span>
+      <span class="s1">content</span><span class="s4">: </span><span class="s1">content </span><span class="s4">?? (() =&gt; </span><span class="s1">fs</span><span class="s4">.</span><span class="s1">promises</span><span class="s4">.</span><span class="s1">readFile</span><span class="s4">(</span><span class="s1">file</span><span class="s4">, </span><span class="s3">'utf8'</span><span class="s4">)),</span>
+      <span class="s1">extension</span><span class="s4">: </span><span class="s1">path</span><span class="s4">.</span><span class="s1">extname</span><span class="s4">(</span><span class="s1">file</span><span class="s4">).</span><span class="s1">slice</span><span class="s4">(</span><span class="s7">1</span><span class="s4">),</span>
+    <span class="s4">})</span>
+
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">_timer</span><span class="s4">) {</span>
+      <span class="s1">clearTimeout</span><span class="s4">(</span><span class="s1">_timer</span><span class="s4">)</span>
+      <span class="s1">_reject</span><span class="s4">()</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// If a rebuild is already in progress we don't want to start another one until the 10ms timer has expired</span>
+    <span class="s1">chain </span><span class="s4">= </span><span class="s1">chain</span><span class="s4">.</span><span class="s1">then</span><span class="s4">(</span>
+      <span class="s4">() =&gt;</span>
+        <span class="s2">new </span><span class="s1">Promise</span><span class="s4">((</span><span class="s1">resolve</span><span class="s4">, </span><span class="s1">reject</span><span class="s4">) =&gt; {</span>
+          <span class="s1">_timer </span><span class="s4">= </span><span class="s1">setTimeout</span><span class="s4">(</span><span class="s1">resolve</span><span class="s4">, </span><span class="s7">10</span><span class="s4">)</span>
+          <span class="s1">_reject </span><span class="s4">= </span><span class="s1">reject</span>
+        <span class="s4">})</span>
+    <span class="s4">)</span>
+
+    <span class="s0">// Resolves once this file has been rebuilt (or the rebuild for this file has failed)</span>
+    <span class="s0">// This queues as many rebuilds as there are changed files</span>
+    <span class="s0">// But those rebuilds happen after some delay</span>
+    <span class="s0">// And will immediately resolve if there are no changes</span>
+    <span class="s1">chain </span><span class="s4">= </span><span class="s1">chain</span><span class="s4">.</span><span class="s1">then</span><span class="s4">(</span><span class="s1">rebuildAndContinue</span><span class="s4">, </span><span class="s1">rebuildAndContinue</span><span class="s4">)</span>
+
+    <span class="s2">return </span><span class="s1">chain</span>
+  <span class="s4">}</span>
+
+  <span class="s1">watcher</span><span class="s4">.</span><span class="s1">on</span><span class="s4">(</span><span class="s3">'change'</span><span class="s4">, (</span><span class="s1">file</span><span class="s4">) =&gt; </span><span class="s1">recordChangedFile</span><span class="s4">(</span><span class="s1">file</span><span class="s4">))</span>
+  <span class="s1">watcher</span><span class="s4">.</span><span class="s1">on</span><span class="s4">(</span><span class="s3">'add'</span><span class="s4">, (</span><span class="s1">file</span><span class="s4">) =&gt; </span><span class="s1">recordChangedFile</span><span class="s4">(</span><span class="s1">file</span><span class="s4">))</span>
+
+  <span class="s0">// Restore watching any files that are &quot;removed&quot;</span>
+  <span class="s0">// This can happen when a file is pseudo-atomically replaced (a copy is created, overwritten, the old one is unlinked, and the new one is renamed)</span>
+  <span class="s0">// TODO: An an optimization we should allow removal when the config changes</span>
+  <span class="s1">watcher</span><span class="s4">.</span><span class="s1">on</span><span class="s4">(</span><span class="s3">'unlink'</span><span class="s4">, (</span><span class="s1">file</span><span class="s4">) =&gt; {</span>
+    <span class="s1">file </span><span class="s4">= </span><span class="s1">normalizePath</span><span class="s4">(</span><span class="s1">file</span><span class="s4">)</span>
+
+    <span class="s0">// Only re-add the file if it's not covered by a dynamic pattern</span>
+    <span class="s2">if </span><span class="s4">(!</span><span class="s1">micromatch</span><span class="s4">.</span><span class="s1">some</span><span class="s4">([</span><span class="s1">file</span><span class="s4">], </span><span class="s1">state</span><span class="s4">.</span><span class="s1">contentPatterns</span><span class="s4">.</span><span class="s1">dynamic</span><span class="s4">)) {</span>
+      <span class="s1">watcher</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">file</span><span class="s4">)</span>
+    <span class="s4">}</span>
+  <span class="s4">})</span>
+
+  <span class="s0">// Some applications such as Visual Studio (but not VS Code)</span>
+  <span class="s0">// will only fire a rename event for atomic writes and not a change event</span>
+  <span class="s0">// This is very likely a chokidar bug but it's one we need to work around</span>
+  <span class="s0">// We treat this as a change event and rebuild the CSS</span>
+  <span class="s1">watcher</span><span class="s4">.</span><span class="s1">on</span><span class="s4">(</span><span class="s3">'raw'</span><span class="s4">, (</span><span class="s1">evt</span><span class="s4">, </span><span class="s1">filePath</span><span class="s4">, </span><span class="s1">meta</span><span class="s4">) =&gt; {</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">evt </span><span class="s4">!== </span><span class="s3">'rename' </span><span class="s4">|| </span><span class="s1">filePath </span><span class="s4">=== </span><span class="s2">null</span><span class="s4">) {</span>
+      <span class="s2">return</span>
+    <span class="s4">}</span>
+
+    <span class="s2">let </span><span class="s1">watchedPath </span><span class="s4">= </span><span class="s1">meta</span><span class="s4">.</span><span class="s1">watchedPath</span>
+
+    <span class="s0">// Watched path might be the file itself</span>
+    <span class="s0">// Or the directory it is in</span>
+    <span class="s1">filePath </span><span class="s4">= </span><span class="s1">watchedPath</span><span class="s4">.</span><span class="s1">endsWith</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">) ? </span><span class="s1">watchedPath </span><span class="s4">: </span><span class="s1">path</span><span class="s4">.</span><span class="s1">join</span><span class="s4">(</span><span class="s1">watchedPath</span><span class="s4">, </span><span class="s1">filePath</span><span class="s4">)</span>
+
+    <span class="s0">// Skip this event since the files it is for does not match any of the registered content globs</span>
+    <span class="s2">if </span><span class="s4">(!</span><span class="s1">micromatch</span><span class="s4">.</span><span class="s1">some</span><span class="s4">([</span><span class="s1">filePath</span><span class="s4">], </span><span class="s1">state</span><span class="s4">.</span><span class="s1">contentPatterns</span><span class="s4">.</span><span class="s1">all</span><span class="s4">)) {</span>
+      <span class="s2">return</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// Skip since we've already queued a rebuild for this file that hasn't happened yet</span>
+    <span class="s2">if </span><span class="s4">(</span><span class="s1">pendingRebuilds</span><span class="s4">.</span><span class="s1">has</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">)) {</span>
+      <span class="s2">return</span>
+    <span class="s4">}</span>
+
+    <span class="s0">// We'll go ahead and add the file to the pending rebuilds list here</span>
+    <span class="s0">// It'll be removed when the rebuild starts unless the read fails</span>
+    <span class="s0">// which will be taken care of as well</span>
+    <span class="s1">pendingRebuilds</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">)</span>
+
+    <span class="s1">async </span><span class="s2">function </span><span class="s1">enqueue</span><span class="s4">() {</span>
+      <span class="s2">try </span><span class="s4">{</span>
+        <span class="s0">// We need to read the file as early as possible outside of the chain</span>
+        <span class="s0">// because it may be gone by the time we get to it. doing the read</span>
+        <span class="s0">// immediately increases the chance that the file is still there</span>
+        <span class="s2">let </span><span class="s1">content </span><span class="s4">= </span><span class="s2">await </span><span class="s1">readFileWithRetries</span><span class="s4">(</span><span class="s1">path</span><span class="s4">.</span><span class="s1">resolve</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">))</span>
+
+        <span class="s2">if </span><span class="s4">(</span><span class="s1">content </span><span class="s4">=== </span><span class="s1">undefined</span><span class="s4">) {</span>
+          <span class="s2">return</span>
+        <span class="s4">}</span>
+
+        <span class="s0">// This will push the rebuild onto the chain</span>
+        <span class="s0">// We MUST skip the rebuild check here otherwise the rebuild will never happen on Linux</span>
+        <span class="s0">// This is because the order of events and timing is different on Linux</span>
+        <span class="s0">// @ts-ignore: TypeScript isn't picking up that content is a string here</span>
+        <span class="s2">await </span><span class="s1">recordChangedFile</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">, () =&gt; </span><span class="s1">content</span><span class="s4">, </span><span class="s2">true</span><span class="s4">)</span>
+      <span class="s4">} </span><span class="s2">catch </span><span class="s4">{</span>
+        <span class="s0">// If reading the file fails, it's was probably a deleted temporary file</span>
+        <span class="s0">// So we can ignore it and no rebuild is needed</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s1">enqueue</span><span class="s4">().</span><span class="s1">then</span><span class="s4">(() =&gt; {</span>
+      <span class="s0">// If the file read fails we still need to make sure the file isn't stuck in the pending rebuilds list</span>
+      <span class="s1">pendingRebuilds</span><span class="s4">.</span><span class="s1">delete</span><span class="s4">(</span><span class="s1">filePath</span><span class="s4">)</span>
+    <span class="s4">})</span>
+  <span class="s4">})</span>
+
+  <span class="s2">return </span><span class="s4">{</span>
+    <span class="s1">fswatcher</span><span class="s4">: </span><span class="s1">watcher</span><span class="s4">,</span>
+
+    <span class="s1">refreshWatchedFiles</span><span class="s4">() {</span>
+      <span class="s1">watcher</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">Array</span><span class="s4">.</span><span class="s1">from</span><span class="s4">(</span><span class="s1">state</span><span class="s4">.</span><span class="s1">contextDependencies</span><span class="s4">))</span>
+      <span class="s1">watcher</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">Array</span><span class="s4">.</span><span class="s1">from</span><span class="s4">(</span><span class="s1">state</span><span class="s4">.</span><span class="s1">configBag</span><span class="s4">.</span><span class="s1">dependencies</span><span class="s4">))</span>
+      <span class="s1">watcher</span><span class="s4">.</span><span class="s1">add</span><span class="s4">(</span><span class="s1">state</span><span class="s4">.</span><span class="s1">contentPatterns</span><span class="s4">.</span><span class="s1">all</span><span class="s4">)</span>
+    <span class="s4">},</span>
+  <span class="s4">}</span>
+<span class="s4">}</span>
+</pre>
+</body>
+</html>

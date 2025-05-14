@@ -1,0 +1,563 @@
+<html>
+<head>
+<title>ConstPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ConstPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleTypeConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">CachedConstDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/CachedConstDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ConstDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ConstDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">evaluateToString </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./javascript/JavascriptParserHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">parseResource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/identifier&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).AssignmentProperty} AssignmentProperty */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Expression} Expression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Identifier} Identifier */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Pattern} Pattern */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).SourceLocation} SourceLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Statement} Statement */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Super} Super */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).VariableDeclaration} VariableDeclaration */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/BasicEvaluatedExpression&quot;)} BasicEvaluatedExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/JavascriptParser&quot;)} JavascriptParser */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/JavascriptParser&quot;).Range} Range */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;string&gt;} declarations set of declarations</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Identifier | Pattern} pattern pattern to collect declarations from</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">collectDeclaration </span><span class="s3">= (</span><span class="s1">declarations</span><span class="s3">, </span><span class="s1">pattern</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">stack </span><span class="s3">= [</span><span class="s1">pattern</span><span class="s3">];</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">stack</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">node </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Pattern} */ </span><span class="s3">(</span><span class="s1">stack</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">());</span>
+		<span class="s4">switch </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">type</span><span class="s3">) {</span>
+			<span class="s4">case </span><span class="s2">&quot;Identifier&quot;</span><span class="s3">:</span>
+				<span class="s1">declarations</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">name</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;ArrayPattern&quot;</span><span class="s3">:</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">element of node</span><span class="s3">.</span><span class="s1">elements</span><span class="s3">) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">element</span><span class="s3">) {</span>
+						<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">element</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;AssignmentPattern&quot;</span><span class="s3">:</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">left</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;ObjectPattern&quot;</span><span class="s3">:</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">property of node</span><span class="s3">.</span><span class="s1">properties</span><span class="s3">) {</span>
+					<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssignmentProperty} */ </span><span class="s3">(</span><span class="s1">property</span><span class="s3">).</span><span class="s1">value</span><span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;RestElement&quot;</span><span class="s3">:</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">argument</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Statement} branch branch to get hoisted declarations from</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} includeFunctionDeclarations whether to include function declarations</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Array&lt;string&gt;} hoisted declarations</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getHoistedDeclarations </span><span class="s3">= (</span><span class="s1">branch</span><span class="s3">, </span><span class="s1">includeFunctionDeclarations</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">declarations </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Array&lt;Statement | null | undefined&gt;} */</span>
+	<span class="s4">const </span><span class="s1">stack </span><span class="s3">= [</span><span class="s1">branch</span><span class="s3">];</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">stack</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">node </span><span class="s3">= </span><span class="s1">stack</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">();</span>
+		<span class="s0">// Some node could be `null` or `undefined`.</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">node</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s4">switch </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">type</span><span class="s3">) {</span>
+			<span class="s0">// Walk through control statements to look for hoisted declarations.</span>
+			<span class="s0">// Some branches are skipped since they do not allow declarations.</span>
+			<span class="s4">case </span><span class="s2">&quot;BlockStatement&quot;</span><span class="s3">:</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">stmt of node</span><span class="s3">.</span><span class="s1">body</span><span class="s3">) {</span>
+					<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">stmt</span><span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;IfStatement&quot;</span><span class="s3">:</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">consequent</span><span class="s3">);</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">alternate</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;ForStatement&quot;</span><span class="s3">:</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{VariableDeclaration} */ </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">init</span><span class="s3">));</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">body</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;ForInStatement&quot;</span><span class="s3">:</span>
+			<span class="s4">case </span><span class="s2">&quot;ForOfStatement&quot;</span><span class="s3">:</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{VariableDeclaration} */ </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">left</span><span class="s3">));</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">body</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;DoWhileStatement&quot;</span><span class="s3">:</span>
+			<span class="s4">case </span><span class="s2">&quot;WhileStatement&quot;</span><span class="s3">:</span>
+			<span class="s4">case </span><span class="s2">&quot;LabeledStatement&quot;</span><span class="s3">:</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">body</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;SwitchStatement&quot;</span><span class="s3">:</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cs of node</span><span class="s3">.</span><span class="s1">cases</span><span class="s3">) {</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">consequent of cs</span><span class="s3">.</span><span class="s1">consequent</span><span class="s3">) {</span>
+						<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">consequent</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;TryStatement&quot;</span><span class="s3">:</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">block</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">handler</span><span class="s3">) {</span>
+					<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">handler</span><span class="s3">.</span><span class="s1">body</span><span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s1">stack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">finalizer</span><span class="s3">);</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;FunctionDeclaration&quot;</span><span class="s3">:</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">includeFunctionDeclarations</span><span class="s3">) {</span>
+					<span class="s1">collectDeclaration</span><span class="s3">(</span><span class="s1">declarations</span><span class="s3">, </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Identifier} */ </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">id</span><span class="s3">));</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+			<span class="s4">case </span><span class="s2">&quot;VariableDeclaration&quot;</span><span class="s3">:</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">node</span><span class="s3">.</span><span class="s1">kind </span><span class="s3">=== </span><span class="s2">&quot;var&quot;</span><span class="s3">) {</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">decl of node</span><span class="s3">.</span><span class="s1">declarations</span><span class="s3">) {</span>
+						<span class="s1">collectDeclaration</span><span class="s3">(</span><span class="s1">declarations</span><span class="s3">, </span><span class="s1">decl</span><span class="s3">.</span><span class="s1">id</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s4">break</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">declarations</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;ConstPlugin&quot;</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">ConstPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">cachedParseResource </span><span class="s3">= </span><span class="s1">parseResource</span><span class="s3">.</span><span class="s1">bindCache</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">root</span><span class="s3">);</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ConstDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">CachedConstDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">CachedConstDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">handler </span><span class="s3">= </span><span class="s1">parser </span><span class="s3">=&gt; {</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">terminate</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">statement </span><span class="s3">=&gt; </span><span class="s4">true</span><span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">statementIf</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">statement </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isAsmJs</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">param </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">test</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">bool </span><span class="s3">= </span><span class="s1">param</span><span class="s3">.</span><span class="s1">asBool</span><span class="s3">();</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">bool </span><span class="s3">=== </span><span class="s2">&quot;boolean&quot;</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">param</span><span class="s3">.</span><span class="s1">couldHaveSideEffects</span><span class="s3">()) {</span>
+								<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+									<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">bool</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">test</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">branchToRemove </span><span class="s3">= </span><span class="s1">bool</span>
+								<span class="s3">? </span><span class="s1">statement</span><span class="s3">.</span><span class="s1">alternate</span>
+								<span class="s3">: </span><span class="s1">statement</span><span class="s3">.</span><span class="s1">consequent</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">branchToRemove</span><span class="s3">) {</span>
+								<span class="s0">// Before removing the dead branch, the hoisted declarations</span>
+								<span class="s0">// must be collected.</span>
+								<span class="s0">//</span>
+								<span class="s0">// Given the following code:</span>
+								<span class="s0">//</span>
+								<span class="s0">//     if (true) f() else g()</span>
+								<span class="s0">//     if (false) {</span>
+								<span class="s0">//       function f() {}</span>
+								<span class="s0">//       const g = function g() {}</span>
+								<span class="s0">//       if (someTest) {</span>
+								<span class="s0">//         let a = 1</span>
+								<span class="s0">//         var x, {y, z} = obj</span>
+								<span class="s0">//       }</span>
+								<span class="s0">//     } else {</span>
+								<span class="s0">//       …</span>
+								<span class="s0">//     }</span>
+								<span class="s0">//</span>
+								<span class="s0">// the generated code is:</span>
+								<span class="s0">//</span>
+								<span class="s0">//     if (true) f() else {}</span>
+								<span class="s0">//     if (false) {</span>
+								<span class="s0">//       var f, x, y, z;   (in loose mode)</span>
+								<span class="s0">//       var x, y, z;      (in strict mode)</span>
+								<span class="s0">//     } else {</span>
+								<span class="s0">//       …</span>
+								<span class="s0">//     }</span>
+								<span class="s0">//</span>
+								<span class="s0">// NOTE: When code runs in strict mode, `var` declarations</span>
+								<span class="s0">// are hoisted but `function` declarations don't.</span>
+								<span class="s0">//</span>
+								<span class="s4">const </span><span class="s1">declarations </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isStrict</span>
+									<span class="s3">? </span><span class="s1">getHoistedDeclarations</span><span class="s3">(</span><span class="s1">branchToRemove</span><span class="s3">, </span><span class="s4">false</span><span class="s3">)</span>
+									<span class="s3">: </span><span class="s1">getHoistedDeclarations</span><span class="s3">(</span><span class="s1">branchToRemove</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">replacement </span><span class="s3">=</span>
+									<span class="s1">declarations</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span>
+										<span class="s3">? </span><span class="s2">`{ var </span><span class="s1">$</span><span class="s3">{</span><span class="s1">declarations</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">; }`</span>
+										<span class="s3">: </span><span class="s2">&quot;{}&quot;</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+									<span class="s1">replacement</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">branchToRemove</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">branchToRemove</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">return </span><span class="s1">bool</span><span class="s3">;</span>
+						<span class="s3">}</span>
+					<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expressionConditionalOperator</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+						<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+						<span class="s1">expression </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isAsmJs</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">param </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">test</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">bool </span><span class="s3">= </span><span class="s1">param</span><span class="s3">.</span><span class="s1">asBool</span><span class="s3">();</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">bool </span><span class="s3">=== </span><span class="s2">&quot;boolean&quot;</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">param</span><span class="s3">.</span><span class="s1">couldHaveSideEffects</span><span class="s3">()) {</span>
+									<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+										<span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s1">bool</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+									<span class="s3">);</span>
+									<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+									<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">test</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s0">// Expressions do not hoist.</span>
+								<span class="s0">// It is safe to remove the dead branch.</span>
+								<span class="s0">//</span>
+								<span class="s0">// Given the following code:</span>
+								<span class="s0">//</span>
+								<span class="s0">//   false ? someExpression() : otherExpression();</span>
+								<span class="s0">//</span>
+								<span class="s0">// the generated code is:</span>
+								<span class="s0">//</span>
+								<span class="s0">//   false ? 0 : otherExpression();</span>
+								<span class="s0">//</span>
+								<span class="s4">const </span><span class="s1">branchToRemove </span><span class="s3">= </span><span class="s1">bool</span>
+									<span class="s3">? </span><span class="s1">expression</span><span class="s3">.</span><span class="s1">alternate</span>
+									<span class="s3">: </span><span class="s1">expression</span><span class="s3">.</span><span class="s1">consequent</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+									<span class="s2">&quot;0&quot;</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">branchToRemove</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">branchToRemove</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+								<span class="s4">return </span><span class="s1">bool</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expressionLogicalOperator</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+						<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+						<span class="s1">expression </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isAsmJs</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">expression</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;&amp;&amp;&quot; </span><span class="s3">||</span>
+								<span class="s1">expression</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;||&quot;</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">param </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">left</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">bool </span><span class="s3">= </span><span class="s1">param</span><span class="s3">.</span><span class="s1">asBool</span><span class="s3">();</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">bool </span><span class="s3">=== </span><span class="s2">&quot;boolean&quot;</span><span class="s3">) {</span>
+									<span class="s0">// Expressions do not hoist.</span>
+									<span class="s0">// It is safe to remove the dead branch.</span>
+									<span class="s0">//</span>
+									<span class="s0">// ------------------------------------------</span>
+									<span class="s0">//</span>
+									<span class="s0">// Given the following code:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   falsyExpression() &amp;&amp; someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s0">// the generated code is:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   falsyExpression() &amp;&amp; false;</span>
+									<span class="s0">//</span>
+									<span class="s0">// ------------------------------------------</span>
+									<span class="s0">//</span>
+									<span class="s0">// Given the following code:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   truthyExpression() &amp;&amp; someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s0">// the generated code is:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   true &amp;&amp; someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s0">// ------------------------------------------</span>
+									<span class="s0">//</span>
+									<span class="s0">// Given the following code:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   truthyExpression() || someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s0">// the generated code is:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   truthyExpression() || false;</span>
+									<span class="s0">//</span>
+									<span class="s0">// ------------------------------------------</span>
+									<span class="s0">//</span>
+									<span class="s0">// Given the following code:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   falsyExpression() || someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s0">// the generated code is:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   false &amp;&amp; someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s4">const </span><span class="s1">keepRight </span><span class="s3">=</span>
+										<span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;&amp;&amp;&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">bool</span><span class="s3">) ||</span>
+										<span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;||&quot; </span><span class="s3">&amp;&amp; !</span><span class="s1">bool</span><span class="s3">);</span>
+
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s3">!</span><span class="s1">param</span><span class="s3">.</span><span class="s1">couldHaveSideEffects</span><span class="s3">() &amp;&amp;</span>
+										<span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">isBoolean</span><span class="s3">() || </span><span class="s1">keepRight</span><span class="s3">)</span>
+									<span class="s3">) {</span>
+										<span class="s0">// for case like</span>
+										<span class="s0">//</span>
+										<span class="s0">//   return'development'===process.env.NODE_ENV&amp;&amp;'foo'</span>
+										<span class="s0">//</span>
+										<span class="s0">// we need a space before the bool to prevent result like</span>
+										<span class="s0">//</span>
+										<span class="s0">//   returnfalse&amp;&amp;'foo'</span>
+										<span class="s0">//</span>
+										<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+											<span class="s2">` </span><span class="s1">$</span><span class="s3">{</span><span class="s1">bool</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+										<span class="s3">);</span>
+										<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">left</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">keepRight</span><span class="s3">) {</span>
+										<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+											<span class="s2">&quot;0&quot;</span><span class="s3">,</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">right</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+										<span class="s3">);</span>
+										<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s4">return </span><span class="s1">keepRight</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;??&quot;</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">param </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">left</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">keepRight </span><span class="s3">= </span><span class="s1">param</span><span class="s3">.</span><span class="s1">asNullish</span><span class="s3">();</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">keepRight </span><span class="s3">=== </span><span class="s2">&quot;boolean&quot;</span><span class="s3">) {</span>
+									<span class="s0">// ------------------------------------------</span>
+									<span class="s0">//</span>
+									<span class="s0">// Given the following code:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   nonNullish ?? someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s0">// the generated code is:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   nonNullish ?? 0;</span>
+									<span class="s0">//</span>
+									<span class="s0">// ------------------------------------------</span>
+									<span class="s0">//</span>
+									<span class="s0">// Given the following code:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   nullish ?? someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s0">// the generated code is:</span>
+									<span class="s0">//</span>
+									<span class="s0">//   null ?? someExpression();</span>
+									<span class="s0">//</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">param</span><span class="s3">.</span><span class="s1">couldHaveSideEffects</span><span class="s3">() &amp;&amp; </span><span class="s1">keepRight</span><span class="s3">) {</span>
+										<span class="s0">// cspell:word returnnull</span>
+										<span class="s0">// for case like</span>
+										<span class="s0">//</span>
+										<span class="s0">//   return('development'===process.env.NODE_ENV&amp;&amp;null)??'foo'</span>
+										<span class="s0">//</span>
+										<span class="s0">// we need a space before the bool to prevent result like</span>
+										<span class="s0">//</span>
+										<span class="s0">//   returnnull??'foo'</span>
+										<span class="s0">//</span>
+										<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+											<span class="s2">&quot; null&quot;</span><span class="s3">,</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+										<span class="s3">);</span>
+										<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+											<span class="s2">&quot;0&quot;</span><span class="s3">,</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">right</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+										<span class="s3">);</span>
+										<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">left</span><span class="s3">);</span>
+									<span class="s3">}</span>
+
+									<span class="s4">return </span><span class="s1">keepRight</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">optionalChaining</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression[]} */</span>
+						<span class="s4">const </span><span class="s1">optionalExpressionsStack </span><span class="s3">= [];</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression | Super} */</span>
+						<span class="s4">let </span><span class="s1">next </span><span class="s3">= </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">expression</span><span class="s3">;</span>
+
+						<span class="s4">while </span><span class="s3">(</span>
+							<span class="s1">next</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;MemberExpression&quot; </span><span class="s3">||</span>
+							<span class="s1">next</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;CallExpression&quot;</span>
+						<span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">next</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;MemberExpression&quot;</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">next</span><span class="s3">.</span><span class="s1">optional</span><span class="s3">) {</span>
+									<span class="s0">// SuperNode can not be optional</span>
+									<span class="s1">optionalExpressionsStack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression} */ </span><span class="s3">(</span><span class="s1">next</span><span class="s3">.</span><span class="s1">object</span><span class="s3">)</span>
+									<span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">next </span><span class="s3">= </span><span class="s1">next</span><span class="s3">.</span><span class="s1">object</span><span class="s3">;</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">next</span><span class="s3">.</span><span class="s1">optional</span><span class="s3">) {</span>
+									<span class="s0">// SuperNode can not be optional</span>
+									<span class="s1">optionalExpressionsStack</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression} */ </span><span class="s3">(</span><span class="s1">next</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">)</span>
+									<span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">next </span><span class="s3">= </span><span class="s1">next</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+
+						<span class="s4">while </span><span class="s3">(</span><span class="s1">optionalExpressionsStack</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">expression </span><span class="s3">= </span><span class="s1">optionalExpressionsStack</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">();</span>
+							<span class="s4">const </span><span class="s1">evaluated </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">)</span>
+							<span class="s3">);</span>
+
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">evaluated</span><span class="s3">.</span><span class="s1">asNullish</span><span class="s3">()) {</span>
+								<span class="s0">// ------------------------------------------</span>
+								<span class="s0">//</span>
+								<span class="s0">// Given the following code:</span>
+								<span class="s0">//</span>
+								<span class="s0">//   nullishMemberChain?.a.b();</span>
+								<span class="s0">//</span>
+								<span class="s0">// the generated code is:</span>
+								<span class="s0">//</span>
+								<span class="s0">//   undefined;</span>
+								<span class="s0">//</span>
+								<span class="s0">// ------------------------------------------</span>
+								<span class="s0">//</span>
+								<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+									<span class="s2">&quot; undefined&quot;</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;__resourceQuery&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isAsmJs</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">return </span><span class="s1">evaluateToString</span><span class="s3">(</span>
+								<span class="s1">cachedParseResource</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">).</span><span class="s1">query</span>
+							<span class="s3">)(</span><span class="s1">expr</span><span class="s3">);</span>
+						<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;__resourceQuery&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isAsmJs</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">CachedConstDependency</span><span class="s3">(</span>
+								<span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+									<span class="s1">cachedParseResource</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">).</span><span class="s1">query</span>
+								<span class="s3">),</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+								<span class="s2">&quot;__resourceQuery&quot;</span>
+							<span class="s3">);</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">});</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;__resourceFragment&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isAsmJs</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">return </span><span class="s1">evaluateToString</span><span class="s3">(</span>
+								<span class="s1">cachedParseResource</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">).</span><span class="s1">fragment</span>
+							<span class="s3">)(</span><span class="s1">expr</span><span class="s3">);</span>
+						<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;__resourceFragment&quot;</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">isAsmJs</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">CachedConstDependency</span><span class="s3">(</span>
+								<span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span>
+									<span class="s1">cachedParseResource</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">resource</span><span class="s3">).</span><span class="s1">fragment</span>
+								<span class="s3">),</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+								<span class="s2">&quot;__resourceFragment&quot;</span>
+							<span class="s3">);</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">});</span>
+				<span class="s3">};</span>
+
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ConstPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

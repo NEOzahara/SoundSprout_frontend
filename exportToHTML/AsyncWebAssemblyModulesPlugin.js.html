@@ -1,0 +1,241 @@
+<html>
+<head>
+<title>AsyncWebAssemblyModulesPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+AsyncWebAssemblyModulesPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">SyncWaterfallHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Compilation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Compilation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Generator </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Generator&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">tryRunOrWebpackError </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../HookWebpackError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">WEBASSEMBLY_MODULE_TYPE_ASYNC </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleTypeConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WebAssemblyImportDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../dependencies/WebAssemblyImportDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareModulesByIdOrIdentifier </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">memoize </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/memoize&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).OutputNormalized} OutputOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../CodeGenerationResults&quot;)} CodeGenerationResults */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../DependencyTemplates&quot;)} DependencyTemplates */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../RuntimeTemplate&quot;)} RuntimeTemplate */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Template&quot;).RenderManifestEntry} RenderManifestEntry */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Template&quot;).RenderManifestOptions} RenderManifestOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../WebpackError&quot;)} WebpackError */</span>
+
+<span class="s4">const </span><span class="s1">getAsyncWebAssemblyGenerator </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt;</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AsyncWebAssemblyGenerator&quot;</span><span class="s3">)</span>
+<span class="s3">);</span>
+<span class="s4">const </span><span class="s1">getAsyncWebAssemblyJavascriptGenerator </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt;</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AsyncWebAssemblyJavascriptGenerator&quot;</span><span class="s3">)</span>
+<span class="s3">);</span>
+<span class="s4">const </span><span class="s1">getAsyncWebAssemblyParser </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt;</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AsyncWebAssemblyParser&quot;</span><span class="s3">)</span>
+<span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} WebAssemblyRenderContext</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Chunk} chunk the chunk</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{DependencyTemplates} dependencyTemplates the dependency templates</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RuntimeTemplate} runtimeTemplate the runtime template</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ModuleGraph} moduleGraph the module graph</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{CodeGenerationResults} codeGenerationResults results of code generation</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} CompilationHooks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SyncWaterfallHook&lt;[Source, Module, WebAssemblyRenderContext]&gt;} renderModuleContent</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} AsyncWebAssemblyModulesPluginOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} [mangleImports] mangle imports</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Compilation, CompilationHooks&gt;} */</span>
+<span class="s4">const </span><span class="s1">compilationHooksMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;AsyncWebAssemblyModulesPlugin&quot;</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">AsyncWebAssemblyModulesPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CompilationHooks} the attached hooks</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!(</span><span class="s1">compilation </span><span class="s4">instanceof </span><span class="s1">Compilation</span><span class="s3">)) {</span>
+			<span class="s4">throw new </span><span class="s1">TypeError</span><span class="s3">(</span>
+				<span class="s2">&quot;The 'compilation' argument must be an instance of Compilation&quot;</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hooks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">hooks </span><span class="s3">= {</span>
+				<span class="s1">renderModuleContent</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncWaterfallHook</span><span class="s3">([</span>
+					<span class="s2">&quot;source&quot;</span><span class="s3">,</span>
+					<span class="s2">&quot;module&quot;</span><span class="s3">,</span>
+					<span class="s2">&quot;renderContext&quot;</span>
+				<span class="s3">])</span>
+			<span class="s3">};</span>
+			<span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">hooks</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">hooks</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AsyncWebAssemblyModulesPluginOptions} options options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">hooks </span><span class="s3">=</span>
+					<span class="s1">AsyncWebAssemblyModulesPlugin</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyFactories</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">WebAssemblyImportDependency</span><span class="s3">,</span>
+					<span class="s1">normalModuleFactory</span>
+				<span class="s3">);</span>
+
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createParser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">WEBASSEMBLY_MODULE_TYPE_ASYNC</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+						<span class="s4">const </span><span class="s1">AsyncWebAssemblyParser </span><span class="s3">= </span><span class="s1">getAsyncWebAssemblyParser</span><span class="s3">();</span>
+
+						<span class="s4">return new </span><span class="s1">AsyncWebAssemblyParser</span><span class="s3">();</span>
+					<span class="s3">});</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createGenerator</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">WEBASSEMBLY_MODULE_TYPE_ASYNC</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+						<span class="s4">const </span><span class="s1">AsyncWebAssemblyJavascriptGenerator </span><span class="s3">=</span>
+							<span class="s1">getAsyncWebAssemblyJavascriptGenerator</span><span class="s3">();</span>
+						<span class="s4">const </span><span class="s1">AsyncWebAssemblyGenerator </span><span class="s3">= </span><span class="s1">getAsyncWebAssemblyGenerator</span><span class="s3">();</span>
+
+						<span class="s4">return </span><span class="s1">Generator</span><span class="s3">.</span><span class="s1">byType</span><span class="s3">({</span>
+							<span class="s1">javascript</span><span class="s3">: </span><span class="s4">new </span><span class="s1">AsyncWebAssemblyJavascriptGenerator</span><span class="s3">(</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">webassemblyModuleFilename</span>
+							<span class="s3">),</span>
+							<span class="s1">webassembly</span><span class="s3">: </span><span class="s4">new </span><span class="s1">AsyncWebAssemblyGenerator</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">)</span>
+						<span class="s3">});</span>
+					<span class="s3">});</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">renderManifest</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s2">&quot;WebAssemblyModulesPlugin&quot;</span><span class="s3">,</span>
+					<span class="s3">(</span><span class="s1">result</span><span class="s3">, </span><span class="s1">options</span><span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s3">{ </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">runtimeTemplate </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s3">{</span>
+							<span class="s1">chunk</span><span class="s3">,</span>
+							<span class="s1">outputOptions</span><span class="s3">,</span>
+							<span class="s1">dependencyTemplates</span><span class="s3">,</span>
+							<span class="s1">codeGenerationResults</span>
+						<span class="s3">} = </span><span class="s1">options</span><span class="s3">;</span>
+
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of chunkGraph</span><span class="s3">.</span><span class="s1">getOrderedChunkModulesIterable</span><span class="s3">(</span>
+							<span class="s1">chunk</span><span class="s3">,</span>
+							<span class="s1">compareModulesByIdOrIdentifier</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">)</span>
+						<span class="s3">)) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s1">WEBASSEMBLY_MODULE_TYPE_ASYNC</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">filenameTemplate </span><span class="s3">=</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;OutputOptions[&quot;webassemblyModuleFilename&quot;]&gt;} */</span>
+									<span class="s3">(</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">webassemblyModuleFilename</span><span class="s3">);</span>
+
+								<span class="s1">result</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+									<span class="s1">render</span><span class="s3">: () =&gt;</span>
+										<span class="s4">this</span><span class="s3">.</span><span class="s1">renderModule</span><span class="s3">(</span>
+											<span class="s1">module</span><span class="s3">,</span>
+											<span class="s3">{</span>
+												<span class="s1">chunk</span><span class="s3">,</span>
+												<span class="s1">dependencyTemplates</span><span class="s3">,</span>
+												<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+												<span class="s1">moduleGraph</span><span class="s3">,</span>
+												<span class="s1">chunkGraph</span><span class="s3">,</span>
+												<span class="s1">codeGenerationResults</span>
+											<span class="s3">},</span>
+											<span class="s1">hooks</span>
+										<span class="s3">),</span>
+									<span class="s1">filenameTemplate</span><span class="s3">,</span>
+									<span class="s1">pathOptions</span><span class="s3">: {</span>
+										<span class="s1">module</span><span class="s3">,</span>
+										<span class="s1">runtime</span><span class="s3">: </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">,</span>
+										<span class="s1">chunkGraph</span>
+									<span class="s3">},</span>
+									<span class="s1">auxiliary</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+									<span class="s1">identifier</span><span class="s3">: </span><span class="s2">`webassemblyAsyncModule</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span>
+										<span class="s1">module</span>
+									<span class="s3">)}</span><span class="s2">`</span><span class="s3">,</span>
+									<span class="s1">hash</span><span class="s3">: </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">)</span>
+								<span class="s3">});</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+
+						<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the rendered module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{WebAssemblyRenderContext} renderContext options object</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CompilationHooks} hooks hooks</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Source} the newly generated source from rendering</span>
+	 <span class="s5">*/</span>
+	<span class="s1">renderModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">renderContext</span><span class="s3">, </span><span class="s1">hooks</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">codeGenerationResults</span><span class="s3">, </span><span class="s1">chunk </span><span class="s3">} = </span><span class="s1">renderContext</span><span class="s3">;</span>
+		<span class="s4">try </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s1">moduleSource </span><span class="s3">= </span><span class="s1">codeGenerationResults</span><span class="s3">.</span><span class="s1">getSource</span><span class="s3">(</span>
+				<span class="s1">module</span><span class="s3">,</span>
+				<span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">,</span>
+				<span class="s2">&quot;webassembly&quot;</span>
+			<span class="s3">);</span>
+			<span class="s4">return </span><span class="s1">tryRunOrWebpackError</span><span class="s3">(</span>
+				<span class="s3">() =&gt;</span>
+					<span class="s1">hooks</span><span class="s3">.</span><span class="s1">renderModuleContent</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">moduleSource</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">renderContext</span><span class="s3">),</span>
+				<span class="s2">&quot;AsyncWebAssemblyModulesPlugin.getCompilationHooks().renderModuleContent&quot;</span>
+			<span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">catch </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WebpackError} */ </span><span class="s3">(</span><span class="s1">err</span><span class="s3">).</span><span class="s1">module </span><span class="s3">= </span><span class="s1">module</span><span class="s3">;</span>
+			<span class="s4">throw </span><span class="s1">err</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">AsyncWebAssemblyModulesPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

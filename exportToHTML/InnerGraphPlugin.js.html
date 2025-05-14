@@ -1,0 +1,480 @@
+<html>
+<head>
+<title>InnerGraphPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+InnerGraphPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleTypeConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">PureExpressionDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../dependencies/PureExpressionDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">InnerGraph </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./InnerGraph&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).ClassDeclaration} ClassDeclaration */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).ClassExpression} ClassExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Expression} Expression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).MaybeNamedClassDeclaration} MaybeNamedClassDeclaration */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).MaybeNamedFunctionDeclaration} MaybeNamedFunctionDeclaration */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Node} Node */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).VariableDeclarator} VariableDeclarator */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).JavascriptParserOptions} JavascriptParserOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;)} Dependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).DependencyLocation} DependencyLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../dependencies/HarmonyImportSpecifierDependency&quot;)} HarmonyImportSpecifierDependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;)} JavascriptParser */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).Range} Range */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./InnerGraph&quot;).InnerGraph} InnerGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./InnerGraph&quot;).TopLevelSymbol} TopLevelSymbol */</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">topLevelSymbolTag </span><span class="s3">} = </span><span class="s1">InnerGraph</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;InnerGraphPlugin&quot;</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">InnerGraphPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s2">&quot;webpack.InnerGraphPlugin&quot;</span><span class="s3">);</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">PureExpressionDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">PureExpressionDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParserOptions} parserOptions options</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">handler </span><span class="s3">= (</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">parserOptions</span><span class="s3">) =&gt; {</span>
+					<span class="s5">/**</span>
+					 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Expression} sup sup</span>
+					 <span class="s5">*/</span>
+					<span class="s4">const </span><span class="s1">onUsageSuper </span><span class="s3">= </span><span class="s1">sup </span><span class="s3">=&gt; {</span>
+						<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">usedByExports </span><span class="s3">=&gt; {</span>
+							<span class="s4">switch </span><span class="s3">(</span><span class="s1">usedByExports</span><span class="s3">) {</span>
+								<span class="s4">case </span><span class="s1">undefined</span><span class="s3">:</span>
+								<span class="s4">case true</span><span class="s3">:</span>
+									<span class="s4">return</span><span class="s3">;</span>
+								<span class="s4">default</span><span class="s3">: {</span>
+									<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">PureExpressionDependency</span><span class="s3">(</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+										<span class="s3">(</span><span class="s1">sup</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+									<span class="s3">);</span>
+									<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">sup</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+									<span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">usedByExports</span><span class="s3">;</span>
+									<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+									<span class="s4">break</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">});</span>
+					<span class="s3">};</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">program</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+						<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">enable</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+					<span class="s3">});</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">finish</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;infer dependency usage&quot;</span><span class="s3">);</span>
+						<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">inferDependencyUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeAggregate</span><span class="s3">(</span><span class="s2">&quot;infer dependency usage&quot;</span><span class="s3">);</span>
+					<span class="s3">});</span>
+
+					<span class="s0">// During prewalking the following datastructures are filled with</span>
+					<span class="s0">// nodes that have a TopLevelSymbol assigned and</span>
+					<span class="s0">// variables are tagged with the assigned TopLevelSymbol</span>
+
+					<span class="s0">// We differ 3 types of nodes:</span>
+					<span class="s0">// 1. full statements (export default, function declaration)</span>
+					<span class="s0">// 2. classes (class declaration, class expression)</span>
+					<span class="s0">// 3. variable declarators (const x = ...)</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Node | MaybeNamedFunctionDeclaration | MaybeNamedClassDeclaration, TopLevelSymbol&gt;} */</span>
+					<span class="s4">const </span><span class="s1">statementWithTopLevelSymbol </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Node | MaybeNamedFunctionDeclaration | MaybeNamedClassDeclaration, Node&gt;} */</span>
+					<span class="s4">const </span><span class="s1">statementPurePart </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;ClassExpression | ClassDeclaration | MaybeNamedClassDeclaration, TopLevelSymbol&gt;} */</span>
+					<span class="s4">const </span><span class="s1">classWithTopLevelSymbol </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;VariableDeclarator, TopLevelSymbol&gt;} */</span>
+					<span class="s4">const </span><span class="s1">declWithTopLevelSymbol </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakSet&lt;VariableDeclarator&gt;} */</span>
+					<span class="s4">const </span><span class="s1">pureDeclarators </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakSet</span><span class="s3">();</span>
+
+					<span class="s0">// The following hooks are used during prewalking:</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">preStatement</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">statement </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+
+						<span class="s4">if </span><span class="s3">(</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">&amp;&amp;</span>
+							<span class="s1">statement</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;FunctionDeclaration&quot;</span>
+						<span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">statement</span><span class="s3">.</span><span class="s1">id </span><span class="s3">? </span><span class="s1">statement</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">name </span><span class="s3">: </span><span class="s2">&quot;*default*&quot;</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">fn </span><span class="s3">=</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */</span>
+								<span class="s3">(</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">tagTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">));</span>
+							<span class="s1">statementWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">}</span>
+					<span class="s3">});</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">blockPreStatement</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">statement </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">statement</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;ClassDeclaration&quot; </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">isPure</span><span class="s3">(</span>
+									<span class="s1">statement</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+								<span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">statement</span><span class="s3">.</span><span class="s1">id </span><span class="s3">? </span><span class="s1">statement</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">name </span><span class="s3">: </span><span class="s2">&quot;*default*&quot;</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */ </span><span class="s3">(</span>
+									<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">tagTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s1">classWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;ExportDefaultDeclaration&quot;</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s2">&quot;*default*&quot;</span><span class="s3">;</span>
+								<span class="s4">const </span><span class="s1">fn </span><span class="s3">=</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */</span>
+									<span class="s3">(</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">tagTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">));</span>
+								<span class="s4">const </span><span class="s1">decl </span><span class="s3">= </span><span class="s1">statement</span><span class="s3">.</span><span class="s1">declaration</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;ClassExpression&quot; </span><span class="s3">||</span>
+										<span class="s1">decl</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;ClassDeclaration&quot;</span><span class="s3">) &amp;&amp;</span>
+									<span class="s1">parser</span><span class="s3">.</span><span class="s1">isPure</span><span class="s3">(</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ClassExpression | ClassDeclaration} */</span>
+										<span class="s3">(</span><span class="s1">decl</span><span class="s3">),</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+										<span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+									<span class="s3">)</span>
+								<span class="s3">) {</span>
+									<span class="s1">classWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ClassExpression | ClassDeclaration} */</span>
+										<span class="s3">(</span><span class="s1">decl</span><span class="s3">),</span>
+										<span class="s1">fn</span>
+									<span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+									<span class="s1">parser</span><span class="s3">.</span><span class="s1">isPure</span><span class="s3">(</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression} */</span>
+										<span class="s3">(</span><span class="s1">decl</span><span class="s3">),</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */</span>
+										<span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+									<span class="s3">)</span>
+								<span class="s3">) {</span>
+									<span class="s1">statementWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s3">!</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">type</span><span class="s3">.</span><span class="s1">endsWith</span><span class="s3">(</span><span class="s2">&quot;FunctionExpression&quot;</span><span class="s3">) &amp;&amp;</span>
+										<span class="s3">!</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">type</span><span class="s3">.</span><span class="s1">endsWith</span><span class="s3">(</span><span class="s2">&quot;Declaration&quot;</span><span class="s3">) &amp;&amp;</span>
+										<span class="s1">decl</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;Literal&quot;</span>
+									<span class="s3">) {</span>
+										<span class="s1">statementPurePart</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+											<span class="s1">statement</span><span class="s3">,</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression} */</span>
+											<span class="s3">(</span><span class="s1">decl</span><span class="s3">)</span>
+										<span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">});</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">preDeclarator</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, (</span><span class="s1">decl</span><span class="s3">, </span><span class="s1">statement</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">&amp;&amp;</span>
+							<span class="s1">decl</span><span class="s3">.</span><span class="s1">init </span><span class="s3">&amp;&amp;</span>
+							<span class="s1">decl</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;Identifier&quot;</span>
+						<span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">decl</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">name</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;ClassExpression&quot; </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">isPure</span><span class="s3">(</span>
+									<span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">1</span><span class="s3">]</span>
+								<span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">fn </span><span class="s3">=</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */</span>
+									<span class="s3">(</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">tagTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">));</span>
+								<span class="s1">classWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">isPure</span><span class="s3">(</span>
+									<span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">1</span><span class="s3">]</span>
+								<span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">fn </span><span class="s3">=</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */</span>
+									<span class="s3">(</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">tagTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">));</span>
+								<span class="s1">declWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s3">!</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">.</span><span class="s1">type</span><span class="s3">.</span><span class="s1">endsWith</span><span class="s3">(</span><span class="s2">&quot;FunctionExpression&quot;</span><span class="s3">) &amp;&amp;</span>
+									<span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;Literal&quot;</span>
+								<span class="s3">) {</span>
+									<span class="s1">pureDeclarators</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">});</span>
+
+					<span class="s0">// During real walking we set the TopLevelSymbol state to the assigned</span>
+					<span class="s0">// TopLevelSymbol by using the fill datastructures.</span>
+
+					<span class="s0">// In addition to tracking TopLevelSymbols, we sometimes need to</span>
+					<span class="s0">// add a PureExpressionDependency. This is needed to skip execution</span>
+					<span class="s0">// of pure expressions, even when they are not dropped due to</span>
+					<span class="s0">// minimizing. Otherwise symbols used there might not exist anymore</span>
+					<span class="s0">// as they are removed as unused by this optimization</span>
+
+					<span class="s0">// When we find a reference to a TopLevelSymbol, we register a</span>
+					<span class="s0">// TopLevelSymbol dependency from TopLevelSymbol in state to the</span>
+					<span class="s0">// referenced TopLevelSymbol. This way we get a graph of all</span>
+					<span class="s0">// TopLevelSymbols.</span>
+
+					<span class="s0">// The following hooks are called during walking:</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">statement </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+							<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">);</span>
+
+							<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">statementWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">fn</span><span class="s3">) {</span>
+								<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">purePart </span><span class="s3">= </span><span class="s1">statementPurePart</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">purePart</span><span class="s3">) {</span>
+									<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">usedByExports </span><span class="s3">=&gt; {</span>
+										<span class="s4">switch </span><span class="s3">(</span><span class="s1">usedByExports</span><span class="s3">) {</span>
+											<span class="s4">case </span><span class="s1">undefined</span><span class="s3">:</span>
+											<span class="s4">case true</span><span class="s3">:</span>
+												<span class="s4">return</span><span class="s3">;</span>
+											<span class="s4">default</span><span class="s3">: {</span>
+												<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">PureExpressionDependency</span><span class="s3">(</span>
+													<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">purePart</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+												<span class="s3">);</span>
+												<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">=</span>
+													<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */</span>
+													<span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+												<span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">usedByExports</span><span class="s3">;</span>
+												<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+												<span class="s4">break</span><span class="s3">;</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+									<span class="s3">});</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">});</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">classExtendsExpression</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+						<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">statement</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">classWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">statement</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s1">fn </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">parser</span><span class="s3">.</span><span class="s1">isPure</span><span class="s3">(</span>
+										<span class="s1">expr</span><span class="s3">,</span>
+										<span class="s1">statement</span><span class="s3">.</span><span class="s1">id</span>
+											<span class="s3">? </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">1</span><span class="s3">]</span>
+											<span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">statement</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+									<span class="s3">)</span>
+								<span class="s3">) {</span>
+									<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+									<span class="s1">onUsageSuper</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">classBodyElement</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+						<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">element</span><span class="s3">, </span><span class="s1">classDefinition</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">classWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">classDefinition</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">fn</span><span class="s3">) {</span>
+									<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">classBodyValue</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+						<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">expression</span><span class="s3">, </span><span class="s1">element</span><span class="s3">, </span><span class="s1">classDefinition</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">classWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">classDefinition</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">fn</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s3">!</span><span class="s1">element</span><span class="s3">.</span><span class="s1">static </span><span class="s3">||</span>
+										<span class="s1">parser</span><span class="s3">.</span><span class="s1">isPure</span><span class="s3">(</span>
+											<span class="s1">expression</span><span class="s3">,</span>
+											<span class="s1">element</span><span class="s3">.</span><span class="s1">key</span>
+												<span class="s3">? </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">element</span><span class="s3">.</span><span class="s1">key</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">1</span><span class="s3">]</span>
+												<span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">element</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+										<span class="s3">)</span>
+									<span class="s3">) {</span>
+										<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">element</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;MethodDefinition&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">element</span><span class="s3">.</span><span class="s1">static</span><span class="s3">) {</span>
+											<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">usedByExports </span><span class="s3">=&gt; {</span>
+												<span class="s4">switch </span><span class="s3">(</span><span class="s1">usedByExports</span><span class="s3">) {</span>
+													<span class="s4">case </span><span class="s1">undefined</span><span class="s3">:</span>
+													<span class="s4">case true</span><span class="s3">:</span>
+														<span class="s4">return</span><span class="s3">;</span>
+													<span class="s4">default</span><span class="s3">: {</span>
+														<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">PureExpressionDependency</span><span class="s3">(</span>
+															<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+														<span class="s3">);</span>
+														<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">=</span>
+															<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */</span>
+															<span class="s3">(</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+														<span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">usedByExports</span><span class="s3">;</span>
+														<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+														<span class="s4">break</span><span class="s3">;</span>
+													<span class="s3">}</span>
+												<span class="s3">}</span>
+											<span class="s3">});</span>
+										<span class="s3">}</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">declarator</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, (</span><span class="s1">decl</span><span class="s3">, </span><span class="s1">statement</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">declWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">);</span>
+
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">fn</span><span class="s3">) {</span>
+							<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">pureDeclarators</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">)) {</span>
+								<span class="s4">if </span><span class="s3">(</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ClassExpression} */</span>
+									<span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">).</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;ClassExpression&quot;</span>
+								<span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">.</span><span class="s1">superClass</span><span class="s3">) {</span>
+										<span class="s1">onUsageSuper</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">.</span><span class="s1">superClass</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">onUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">usedByExports </span><span class="s3">=&gt; {</span>
+										<span class="s4">switch </span><span class="s3">(</span><span class="s1">usedByExports</span><span class="s3">) {</span>
+											<span class="s4">case </span><span class="s1">undefined</span><span class="s3">:</span>
+											<span class="s4">case true</span><span class="s3">:</span>
+												<span class="s4">return</span><span class="s3">;</span>
+											<span class="s4">default</span><span class="s3">: {</span>
+												<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">PureExpressionDependency</span><span class="s3">(</span>
+													<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span>
+														<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ClassExpression} */</span>
+														<span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">).</span><span class="s1">range</span>
+													<span class="s3">)</span>
+												<span class="s3">);</span>
+												<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+												<span class="s1">dep</span><span class="s3">.</span><span class="s1">usedByExports </span><span class="s3">= </span><span class="s1">usedByExports</span><span class="s3">;</span>
+												<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+												<span class="s4">break</span><span class="s3">;</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+									<span class="s3">});</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;VariableDeclarator[&quot;init&quot;]&gt;} */ </span><span class="s3">(</span>
+									<span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span>
+								<span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+							<span class="s1">decl</span><span class="s3">.</span><span class="s1">id</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;Identifier&quot; </span><span class="s3">&amp;&amp;</span>
+							<span class="s1">decl</span><span class="s3">.</span><span class="s1">init </span><span class="s3">&amp;&amp;</span>
+							<span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;ClassExpression&quot; </span><span class="s3">&amp;&amp;</span>
+							<span class="s1">classWithTopLevelSymbol</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">)</span>
+						<span class="s3">) {</span>
+							<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">decl</span><span class="s3">.</span><span class="s1">init</span><span class="s3">);</span>
+							<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">setTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">);</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">}</span>
+					<span class="s3">});</span>
+
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">topLevelSymbolTag</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+							<span class="s4">const </span><span class="s1">topLevelSymbol </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */ </span><span class="s3">(</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">currentTagData</span>
+							<span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">currentTopLevelSymbol </span><span class="s3">= </span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">getTopLevelSymbol</span><span class="s3">(</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span>
+							<span class="s3">);</span>
+							<span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">addUsage</span><span class="s3">(</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">,</span>
+								<span class="s1">topLevelSymbol</span><span class="s3">,</span>
+								<span class="s1">currentTopLevelSymbol </span><span class="s3">|| </span><span class="s4">true</span>
+							<span class="s3">);</span>
+						<span class="s3">});</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">assign</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">topLevelSymbolTag</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">InnerGraph</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;=&quot;</span><span class="s3">) </span><span class="s4">return true</span><span class="s3">;</span>
+					<span class="s3">});</span>
+				<span class="s3">};</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">handler</span><span class="s3">);</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">finishModules</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, () =&gt; {</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeAggregateEnd</span><span class="s3">(</span><span class="s2">&quot;infer dependency usage&quot;</span><span class="s3">);</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">InnerGraphPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

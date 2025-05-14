@@ -1,0 +1,893 @@
+<html>
+<head>
+<title>HotModuleReplacementPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+HotModuleReplacementPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">SyncBailHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">RawSource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;webpack-sources&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ChunkGraph </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ChunkGraph&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Compilation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Compilation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HotUpdateChunk </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HotUpdateChunk&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">NormalModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./NormalModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">RuntimeGlobals </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./RuntimeGlobals&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WebpackError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./WebpackError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ConstDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ConstDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ImportMetaHotAcceptDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ImportMetaHotAcceptDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ImportMetaHotDeclineDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ImportMetaHotDeclineDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleHotAcceptDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ModuleHotAcceptDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleHotDeclineDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./dependencies/ModuleHotDeclineDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HotModuleReplacementRuntimeModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./hmr/HotModuleReplacementRuntimeModule&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">JavascriptParser </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./javascript/JavascriptParser&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">evaluateToIdentifier</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./javascript/JavascriptParserHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">find</span><span class="s3">, </span><span class="s1">isSubset </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/SetHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">TupleSet </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/TupleSet&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareModulesById </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">getRuntimeKey</span><span class="s3">,</span>
+	<span class="s1">keyToRuntime</span><span class="s3">,</span>
+	<span class="s1">forEachRuntime</span><span class="s3">,</span>
+	<span class="s1">mergeRuntimeOwned</span><span class="s3">,</span>
+	<span class="s1">subtractRuntime</span><span class="s3">,</span>
+	<span class="s1">intersectRuntime</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/runtime&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span><span class="s3">,</span>
+	<span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span><span class="s3">,</span>
+	<span class="s1">WEBPACK_MODULE_TYPE_RUNTIME</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleTypeConstants&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).CallExpression} CallExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Expression} Expression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).SpreadElement} SpreadElement */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../declarations/WebpackOptions&quot;).OutputNormalized} OutputNormalized */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Chunk&quot;).ChunkId} ChunkId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGraph&quot;).ModuleId} ModuleId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;).AssetInfo} AssetInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;).Records} Records */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;).DependencyLocation} DependencyLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;).BuildInfo} BuildInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./RuntimeModule&quot;)} RuntimeModule */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/BasicEvaluatedExpression&quot;)} BasicEvaluatedExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./javascript/JavascriptParserHelpers&quot;).Range} Range */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} HMRJavascriptParserHooks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SyncBailHook&lt;[Expression | SpreadElement, string[]], void&gt;} hotAcceptCallback</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SyncBailHook&lt;[CallExpression, string[]], void&gt;} hotAcceptWithoutCallback</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{ updatedChunkIds: Set&lt;ChunkId&gt;, removedChunkIds: Set&lt;ChunkId&gt;, removedModules: Set&lt;Module&gt;, filename: string, assetInfo: AssetInfo }} HotUpdateMainContentByRuntimeItem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;string, HotUpdateMainContentByRuntimeItem&gt;} HotUpdateMainContentByRuntime */</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;JavascriptParser, HMRJavascriptParserHooks&gt;} */</span>
+<span class="s4">const </span><span class="s1">parserHooksMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s4">const </span><span class="s1">PLUGIN_NAME </span><span class="s3">= </span><span class="s2">&quot;HotModuleReplacementPlugin&quot;</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">HotModuleReplacementPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{HMRJavascriptParserHooks} the attached hooks</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">getParserHooks</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!(</span><span class="s1">parser </span><span class="s4">instanceof </span><span class="s1">JavascriptParser</span><span class="s3">)) {</span>
+			<span class="s4">throw new </span><span class="s1">TypeError</span><span class="s3">(</span>
+				<span class="s2">&quot;The 'parser' argument must be an instance of JavascriptParser&quot;</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">parserHooksMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hooks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">hooks </span><span class="s3">= {</span>
+				<span class="s1">hotAcceptCallback</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;expression&quot;</span><span class="s3">, </span><span class="s2">&quot;requests&quot;</span><span class="s3">]),</span>
+				<span class="s1">hotAcceptWithoutCallback</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;expression&quot;</span><span class="s3">, </span><span class="s2">&quot;requests&quot;</span><span class="s3">])</span>
+			<span class="s3">};</span>
+			<span class="s1">parserHooksMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">hooks</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">hooks</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">_backCompat</span><span class="s3">: </span><span class="s1">backCompat </span><span class="s3">} = </span><span class="s1">compiler</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">output</span><span class="s3">.</span><span class="s1">strictModuleErrorHandling </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">)</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">output</span><span class="s3">.</span><span class="s1">strictModuleErrorHandling </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">runtimeRequirements </span><span class="s3">= [</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">module</span><span class="s3">];</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{typeof ModuleHotAcceptDependency} ParamDependency dependency</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(expr: CallExpression) =&gt; boolean | undefined} callback</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">createAcceptHandler </span><span class="s3">= (</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">ParamDependency</span><span class="s3">) =&gt; {</span>
+			<span class="s4">const </span><span class="s3">{ </span><span class="s1">hotAcceptCallback</span><span class="s3">, </span><span class="s1">hotAcceptWithoutCallback </span><span class="s3">} =</span>
+				<span class="s1">HotModuleReplacementPlugin</span><span class="s3">.</span><span class="s1">getParserHooks</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">);</span>
+
+			<span class="s4">return </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+					<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">moduleArgument</span><span class="s3">}</span><span class="s2">.hot.accept`</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+					<span class="s1">runtimeRequirements</span>
+				<span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+				<span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+				<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">moduleConcatenationBailout </span><span class="s3">=</span>
+					<span class="s2">&quot;Hot Module Replacement&quot;</span><span class="s3">;</span>
+
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt;= </span><span class="s7">1</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">arg </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">0</span><span class="s3">]);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BasicEvaluatedExpression[]} */</span>
+					<span class="s4">let </span><span class="s1">params </span><span class="s3">= [];</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">arg</span><span class="s3">.</span><span class="s1">isString</span><span class="s3">()) {</span>
+						<span class="s1">params </span><span class="s3">= [</span><span class="s1">arg</span><span class="s3">];</span>
+					<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">arg</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">()) {</span>
+						<span class="s1">params </span><span class="s3">=</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BasicEvaluatedExpression[]} */</span>
+							<span class="s3">(</span><span class="s1">arg</span><span class="s3">.</span><span class="s1">items</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">param </span><span class="s3">=&gt; </span><span class="s1">param</span><span class="s3">.</span><span class="s1">isString</span><span class="s3">());</span>
+					<span class="s3">}</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */</span>
+					<span class="s4">const </span><span class="s1">requests </span><span class="s3">= [];</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">params</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">idx</span><span class="s3">, </span><span class="s1">param</span><span class="s3">] </span><span class="s1">of params</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">()) {</span>
+							<span class="s4">const </span><span class="s1">request </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">string</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ParamDependency</span><span class="s3">(</span>
+								<span class="s1">request</span><span class="s3">,</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">optional </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">.</span><span class="s1">index </span><span class="s3">= </span><span class="s1">idx</span><span class="s3">;</span>
+							<span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+							<span class="s1">requests</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">request</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">1</span><span class="s3">) {</span>
+							<span class="s1">hotAcceptCallback</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">1</span><span class="s3">], </span><span class="s1">requests</span><span class="s3">);</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">1</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+								<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]);</span>
+							<span class="s3">}</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s1">hotAcceptWithoutCallback</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">requests</span><span class="s3">);</span>
+						<span class="s4">return true</span><span class="s3">;</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpressions</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">);</span>
+				<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">};</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{typeof ModuleHotDeclineDependency} ParamDependency dependency</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(expr: CallExpression) =&gt; boolean | undefined} callback</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">createDeclineHandler </span><span class="s3">= (</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">ParamDependency</span><span class="s3">) =&gt; </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+			<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+				<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">moduleArgument</span><span class="s3">}</span><span class="s2">.hot.decline`</span><span class="s3">,</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+				<span class="s1">runtimeRequirements</span>
+			<span class="s3">);</span>
+			<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+			<span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+			<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">moduleConcatenationBailout </span><span class="s3">= </span><span class="s2">&quot;Hot Module Replacement&quot;</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">1</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">arg </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">0</span><span class="s3">]);</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BasicEvaluatedExpression[]} */</span>
+				<span class="s4">let </span><span class="s1">params </span><span class="s3">= [];</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">arg</span><span class="s3">.</span><span class="s1">isString</span><span class="s3">()) {</span>
+					<span class="s1">params </span><span class="s3">= [</span><span class="s1">arg</span><span class="s3">];</span>
+				<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">arg</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">()) {</span>
+					<span class="s1">params </span><span class="s3">=</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BasicEvaluatedExpression[]} */</span>
+						<span class="s3">(</span><span class="s1">arg</span><span class="s3">.</span><span class="s1">items</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">param </span><span class="s3">=&gt; </span><span class="s1">param</span><span class="s3">.</span><span class="s1">isString</span><span class="s3">());</span>
+				<span class="s3">}</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">idx</span><span class="s3">, </span><span class="s1">param</span><span class="s3">] </span><span class="s1">of params</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">()) {</span>
+					<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ParamDependency</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">string</span><span class="s3">),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">param</span><span class="s3">.</span><span class="s1">range</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">optional </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">));</span>
+					<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">.</span><span class="s1">index </span><span class="s3">= </span><span class="s1">idx</span><span class="s3">;</span>
+					<span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(expr: Expression) =&gt; boolean | undefined} callback</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">createHMRExpressionHandler </span><span class="s3">= </span><span class="s1">parser </span><span class="s3">=&gt; </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+			<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConstDependency</span><span class="s3">(</span>
+				<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">moduleArgument</span><span class="s3">}</span><span class="s2">.hot`</span><span class="s3">,</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+				<span class="s1">runtimeRequirements</span>
+			<span class="s3">);</span>
+			<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+			<span class="s1">module</span><span class="s3">.</span><span class="s1">addPresentationalDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */</span>
+			<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">moduleConcatenationBailout </span><span class="s3">= </span><span class="s2">&quot;Hot Module Replacement&quot;</span><span class="s3">;</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">applyModuleHot </span><span class="s3">= </span><span class="s1">parser </span><span class="s3">=&gt; {</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module.hot&quot;</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span>
+				<span class="s3">{</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+					<span class="s1">before</span><span class="s3">: </span><span class="s2">&quot;NodeStuffPlugin&quot;</span>
+				<span class="s3">},</span>
+				<span class="s1">expr </span><span class="s3">=&gt;</span>
+					<span class="s1">evaluateToIdentifier</span><span class="s3">(</span>
+						<span class="s2">&quot;module.hot&quot;</span><span class="s3">,</span>
+						<span class="s2">&quot;module&quot;</span><span class="s3">,</span>
+						<span class="s3">() =&gt; [</span><span class="s2">&quot;hot&quot;</span><span class="s3">],</span>
+						<span class="s4">true</span>
+					<span class="s3">)(</span><span class="s1">expr</span><span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">call</span>
+				<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module.hot.accept&quot;</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+					<span class="s1">createAcceptHandler</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">ModuleHotAcceptDependency</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">call</span>
+				<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module.hot.decline&quot;</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+					<span class="s1">createDeclineHandler</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">ModuleHotDeclineDependency</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+				<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module.hot&quot;</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">createHMRExpressionHandler</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">));</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">applyImportMetaHot </span><span class="s3">= </span><span class="s1">parser </span><span class="s3">=&gt; {</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateIdentifier</span>
+				<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpackHot&quot;</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt;</span>
+					<span class="s1">evaluateToIdentifier</span><span class="s3">(</span>
+						<span class="s2">&quot;import.meta.webpackHot&quot;</span><span class="s3">,</span>
+						<span class="s2">&quot;import.meta&quot;</span><span class="s3">,</span>
+						<span class="s3">() =&gt; [</span><span class="s2">&quot;webpackHot&quot;</span><span class="s3">],</span>
+						<span class="s4">true</span>
+					<span class="s3">)(</span><span class="s1">expr</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">call</span>
+				<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpackHot.accept&quot;</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+					<span class="s1">createAcceptHandler</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">ImportMetaHotAcceptDependency</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">call</span>
+				<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpackHot.decline&quot;</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+					<span class="s1">createDeclineHandler</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">ImportMetaHotDeclineDependency</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+				<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;import.meta.webpackHot&quot;</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">createHMRExpressionHandler</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">));</span>
+		<span class="s3">};</span>
+
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s0">// This applies the HMR plugin only to the targeted compiler</span>
+				<span class="s0">// It should not affect child compilations</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">compiler </span><span class="s3">!== </span><span class="s1">compiler</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+
+				<span class="s0">// #region module.hot.* API</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyFactories</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ModuleHotAcceptDependency</span><span class="s3">,</span>
+					<span class="s1">normalModuleFactory</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ModuleHotAcceptDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">ModuleHotAcceptDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyFactories</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ModuleHotDeclineDependency</span><span class="s3">,</span>
+					<span class="s1">normalModuleFactory</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ModuleHotDeclineDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">ModuleHotDeclineDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+				<span class="s0">// #endregion</span>
+
+				<span class="s0">// #region import.meta.webpackHot.* API</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyFactories</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ImportMetaHotAcceptDependency</span><span class="s3">,</span>
+					<span class="s1">normalModuleFactory</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ImportMetaHotAcceptDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">ImportMetaHotAcceptDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyFactories</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ImportMetaHotDeclineDependency</span><span class="s3">,</span>
+					<span class="s1">normalModuleFactory</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+					<span class="s1">ImportMetaHotDeclineDependency</span><span class="s3">,</span>
+					<span class="s4">new </span><span class="s1">ImportMetaHotDeclineDependency</span><span class="s3">.</span><span class="s1">Template</span><span class="s3">()</span>
+				<span class="s3">);</span>
+				<span class="s0">// #endregion</span>
+
+				<span class="s4">let </span><span class="s1">hotIndex </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, string&gt;} */</span>
+				<span class="s4">const </span><span class="s1">fullHashChunkModuleHashes </span><span class="s3">= {};</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Record&lt;string, string&gt;} */</span>
+				<span class="s4">const </span><span class="s1">chunkModuleHashes </span><span class="s3">= {};</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">record</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, (</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">records</span><span class="s3">) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">=== </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+					<span class="s1">records</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">;</span>
+					<span class="s1">records</span><span class="s3">.</span><span class="s1">hotIndex </span><span class="s3">= </span><span class="s1">hotIndex</span><span class="s3">;</span>
+					<span class="s1">records</span><span class="s3">.</span><span class="s1">fullHashChunkModuleHashes </span><span class="s3">= </span><span class="s1">fullHashChunkModuleHashes</span><span class="s3">;</span>
+					<span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleHashes </span><span class="s3">= </span><span class="s1">chunkModuleHashes</span><span class="s3">;</span>
+					<span class="s1">records</span><span class="s3">.</span><span class="s1">chunkHashes </span><span class="s3">= {};</span>
+					<span class="s1">records</span><span class="s3">.</span><span class="s1">chunkRuntime </span><span class="s3">= {};</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">chunkId </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId} */ </span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">);</span>
+						<span class="s1">records</span><span class="s3">.</span><span class="s1">chunkHashes</span><span class="s3">[</span><span class="s1">chunkId</span><span class="s3">] = </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">;</span>
+						<span class="s1">records</span><span class="s3">.</span><span class="s1">chunkRuntime</span><span class="s3">[</span><span class="s1">chunkId</span><span class="s3">] = </span><span class="s1">getRuntimeKey</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleIds </span><span class="s3">= {};</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+						<span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleIds</span><span class="s3">[</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId} */ </span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">)] =</span>
+							<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getOrderedChunkModulesIterable</span><span class="s3">(</span>
+									<span class="s1">chunk</span><span class="s3">,</span>
+									<span class="s1">compareModulesById</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">)</span>
+								<span class="s3">),</span>
+								<span class="s1">m </span><span class="s3">=&gt; </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">m</span><span class="s3">)</span>
+							<span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">});</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TupleSet&lt;[Module, Chunk]&gt;} */</span>
+				<span class="s4">const </span><span class="s1">updatedModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">TupleSet</span><span class="s3">();</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TupleSet&lt;[Module, Chunk]&gt;} */</span>
+				<span class="s4">const </span><span class="s1">fullHashModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">TupleSet</span><span class="s3">();</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TupleSet&lt;[Module, RuntimeSpec]&gt;} */</span>
+				<span class="s4">const </span><span class="s1">nonCodeGeneratedModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">TupleSet</span><span class="s3">();</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">fullHash</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">hash </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">records </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Records} */ </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">records</span><span class="s3">);</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module module</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} module hash</span>
+						 <span class="s5">*/</span>
+						<span class="s4">const </span><span class="s1">getModuleHash </span><span class="s3">= </span><span class="s1">module </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">codeGenerationResults</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">return </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">codeGenerationResults</span><span class="s3">.</span><span class="s1">getHash</span><span class="s3">(</span>
+									<span class="s1">module</span><span class="s3">,</span>
+									<span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s1">nonCodeGeneratedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">);</span>
+							<span class="s4">return </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">);</span>
+						<span class="s3">};</span>
+						<span class="s4">const </span><span class="s1">fullHashModulesInThisChunk </span><span class="s3">=</span>
+							<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkFullHashModulesSet</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">fullHashModulesInThisChunk </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of fullHashModulesInThisChunk</span><span class="s3">) {</span>
+								<span class="s1">fullHashModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+						<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkModulesIterable</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">modules </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleHashes</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">fullHashModulesInThisChunk </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+										<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()}</span><span class="s2">`</span><span class="s3">;</span>
+										<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span>
+											<span class="s1">fullHashModulesInThisChunk</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{RuntimeModule} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">)</span>
+											<span class="s3">)</span>
+										<span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">fullHashChunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] !== </span><span class="s1">hash</span><span class="s3">) {</span>
+												<span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s1">fullHashChunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">hash</span><span class="s3">;</span>
+										<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] !== </span><span class="s1">hash</span><span class="s3">) {</span>
+												<span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">hash</span><span class="s3">;</span>
+										<span class="s3">}</span>
+									<span class="s3">}</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+										<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()}</span><span class="s2">`</span><span class="s3">;</span>
+										<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] !== </span><span class="s1">hash</span><span class="s3">) {</span>
+											<span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">hash</span><span class="s3">;</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">fullHashModulesInThisChunk </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()}</span><span class="s2">`</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s1">fullHashModulesInThisChunk</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{RuntimeModule} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">)</span>
+										<span class="s3">)</span>
+									<span class="s3">) {</span>
+										<span class="s1">fullHashChunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">hash</span><span class="s3">;</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">hash</span><span class="s3">;</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()}</span><span class="s2">`</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+									<span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">hash</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+
+					<span class="s1">hotIndex </span><span class="s3">= </span><span class="s1">records</span><span class="s3">.</span><span class="s1">hotIndex </span><span class="s3">|| </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) </span><span class="s1">hotIndex</span><span class="s3">++;</span>
+
+					<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">hotIndex</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+				<span class="s3">});</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">processAssets</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s3">{</span>
+						<span class="s1">name</span><span class="s3">: </span><span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+						<span class="s1">stage</span><span class="s3">: </span><span class="s1">Compilation</span><span class="s3">.</span><span class="s1">PROCESS_ASSETS_STAGE_ADDITIONAL</span>
+					<span class="s3">},</span>
+					<span class="s3">() =&gt; {</span>
+						<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">records </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Records} */ </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">records</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">=== </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(</span>
+							<span class="s3">!</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleHashes </span><span class="s3">||</span>
+							<span class="s3">!</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkHashes </span><span class="s3">||</span>
+							<span class="s3">!</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleIds</span>
+						<span class="s3">) {</span>
+							<span class="s4">return</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">] </span><span class="s1">of fullHashModules</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()}</span><span class="s2">`</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">nonCodeGeneratedModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">)</span>
+								<span class="s3">? </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">)</span>
+								<span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">codeGenerationResults</span><span class="s3">.</span><span class="s1">getHash</span><span class="s3">(</span>
+										<span class="s1">module</span><span class="s3">,</span>
+										<span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span>
+									<span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] !== </span><span class="s1">hash</span><span class="s3">) {</span>
+								<span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">key</span><span class="s3">] = </span><span class="s1">hash</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HotUpdateMainContentByRuntime} */</span>
+						<span class="s4">const </span><span class="s1">hotUpdateMainContentByRuntime </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+						<span class="s4">let </span><span class="s1">allOldRuntime</span><span class="s3">;</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkRuntime</span><span class="s3">)) {</span>
+							<span class="s4">const </span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">keyToRuntime</span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkRuntime</span><span class="s3">[</span><span class="s1">key</span><span class="s3">]);</span>
+							<span class="s1">allOldRuntime </span><span class="s3">= </span><span class="s1">mergeRuntimeOwned</span><span class="s3">(</span><span class="s1">allOldRuntime</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s1">forEachRuntime</span><span class="s3">(</span><span class="s1">allOldRuntime</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">=&gt; {</span>
+							<span class="s4">const </span><span class="s3">{ </span><span class="s1">path</span><span class="s3">: </span><span class="s1">filename</span><span class="s3">, </span><span class="s1">info</span><span class="s3">: </span><span class="s1">assetInfo </span><span class="s3">} =</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPathWithInfo</span><span class="s3">(</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;OutputNormalized[&quot;hotUpdateMainFilename&quot;]&gt;} */</span>
+									<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hotUpdateMainFilename</span><span class="s3">),</span>
+									<span class="s3">{</span>
+										<span class="s1">hash</span><span class="s3">: </span><span class="s1">records</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">,</span>
+										<span class="s1">runtime</span>
+									<span class="s3">}</span>
+								<span class="s3">);</span>
+							<span class="s1">hotUpdateMainContentByRuntime</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">),</span>
+								<span class="s3">{</span>
+									<span class="s1">updatedChunkIds</span><span class="s3">: </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(),</span>
+									<span class="s1">removedChunkIds</span><span class="s3">: </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(),</span>
+									<span class="s1">removedModules</span><span class="s3">: </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(),</span>
+									<span class="s1">filename</span><span class="s3">,</span>
+									<span class="s1">assetInfo</span>
+								<span class="s3">}</span>
+							<span class="s3">);</span>
+						<span class="s3">});</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">hotUpdateMainContentByRuntime</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+
+						<span class="s0">// Create a list of all active modules to verify which modules are removed completely</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;number|string, Module&gt;} */</span>
+						<span class="s4">const </span><span class="s1">allModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of compilation</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">id </span><span class="s3">=</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */</span>
+								<span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">module</span><span class="s3">));</span>
+							<span class="s1">allModules</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">id</span><span class="s3">, </span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// List of completely removed modules</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string | number&gt;} */</span>
+						<span class="s4">const </span><span class="s1">completelyRemovedModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkHashes</span><span class="s3">)) {</span>
+							<span class="s4">const </span><span class="s1">oldRuntime </span><span class="s3">= </span><span class="s1">keyToRuntime</span><span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkRuntime</span><span class="s3">[</span><span class="s1">key</span><span class="s3">]);</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module[]} */</span>
+							<span class="s4">const </span><span class="s1">remainingModules </span><span class="s3">= [];</span>
+							<span class="s0">// Check which modules are removed</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">id of records</span><span class="s3">.</span><span class="s1">chunkModuleIds</span><span class="s3">[</span><span class="s1">key</span><span class="s3">]) {</span>
+								<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">allModules</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">id</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">module </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+									<span class="s1">completelyRemovedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">id</span><span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">remainingModules</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId | null} */</span>
+							<span class="s4">let </span><span class="s1">chunkId</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">newModules</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">newRuntimeModules</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">newFullHashModules</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">newDependentHashModules</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">newRuntime</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">removedFromRuntime</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">currentChunk </span><span class="s3">= </span><span class="s1">find</span><span class="s3">(</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">,</span>
+								<span class="s1">chunk </span><span class="s3">=&gt; </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">}</span><span class="s2">` </span><span class="s3">=== </span><span class="s1">key</span>
+							<span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">) {</span>
+								<span class="s1">chunkId </span><span class="s3">= </span><span class="s1">currentChunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">;</span>
+								<span class="s1">newRuntime </span><span class="s3">= </span><span class="s1">intersectRuntime</span><span class="s3">(</span>
+									<span class="s1">currentChunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">,</span>
+									<span class="s1">allOldRuntime</span>
+								<span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">newRuntime </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s1">newModules </span><span class="s3">= </span><span class="s1">chunkGraph</span>
+									<span class="s3">.</span><span class="s1">getChunkModules</span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">)</span>
+									<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">module </span><span class="s3">=&gt; </span><span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">currentChunk</span><span class="s3">));</span>
+								<span class="s1">newRuntimeModules </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+									<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkRuntimeModulesIterable</span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">)</span>
+								<span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">module </span><span class="s3">=&gt; </span><span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">currentChunk</span><span class="s3">));</span>
+								<span class="s4">const </span><span class="s1">fullHashModules </span><span class="s3">=</span>
+									<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkFullHashModulesIterable</span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">);</span>
+								<span class="s1">newFullHashModules </span><span class="s3">=</span>
+									<span class="s1">fullHashModules </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">fullHashModules</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">module </span><span class="s3">=&gt;</span>
+										<span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">currentChunk</span><span class="s3">)</span>
+									<span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">dependentHashModules </span><span class="s3">=</span>
+									<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkDependentHashModulesIterable</span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">);</span>
+								<span class="s1">newDependentHashModules </span><span class="s3">=</span>
+									<span class="s1">dependentHashModules </span><span class="s3">&amp;&amp;</span>
+									<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">dependentHashModules</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">module </span><span class="s3">=&gt;</span>
+										<span class="s1">updatedModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">currentChunk</span><span class="s3">)</span>
+									<span class="s3">);</span>
+								<span class="s1">removedFromRuntime </span><span class="s3">= </span><span class="s1">subtractRuntime</span><span class="s3">(</span><span class="s1">oldRuntime</span><span class="s3">, </span><span class="s1">newRuntime</span><span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s0">// chunk has completely removed</span>
+								<span class="s1">chunkId </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Number</span><span class="s3">(</span><span class="s1">key</span><span class="s3">)}</span><span class="s2">` </span><span class="s3">=== </span><span class="s1">key </span><span class="s3">? </span><span class="s1">Number</span><span class="s3">(</span><span class="s1">key</span><span class="s3">) : </span><span class="s1">key</span><span class="s3">;</span>
+								<span class="s1">removedFromRuntime </span><span class="s3">= </span><span class="s1">oldRuntime</span><span class="s3">;</span>
+								<span class="s1">newRuntime </span><span class="s3">= </span><span class="s1">oldRuntime</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">removedFromRuntime</span><span class="s3">) {</span>
+								<span class="s0">// chunk was removed from some runtimes</span>
+								<span class="s1">forEachRuntime</span><span class="s3">(</span><span class="s1">removedFromRuntime</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">=&gt; {</span>
+									<span class="s4">const </span><span class="s1">item </span><span class="s3">=</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HotUpdateMainContentByRuntimeItem} */</span>
+										<span class="s3">(</span>
+											<span class="s1">hotUpdateMainContentByRuntime</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+											<span class="s3">)</span>
+										<span class="s3">);</span>
+									<span class="s1">item</span><span class="s3">.</span><span class="s1">removedChunkIds</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId} */ </span><span class="s3">(</span><span class="s1">chunkId</span><span class="s3">));</span>
+								<span class="s3">});</span>
+								<span class="s0">// dispose modules from the chunk in these runtimes</span>
+								<span class="s0">// where they are no longer in this runtime</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of remainingModules</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">moduleKey </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()}</span><span class="s2">`</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">oldHash </span><span class="s3">= </span><span class="s1">records</span><span class="s3">.</span><span class="s1">chunkModuleHashes</span><span class="s3">[</span><span class="s1">moduleKey</span><span class="s3">];</span>
+									<span class="s4">const </span><span class="s1">runtimes </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleRuntimes</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">oldRuntime </span><span class="s3">=== </span><span class="s1">newRuntime </span><span class="s3">&amp;&amp; </span><span class="s1">runtimes</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">newRuntime</span><span class="s3">)) {</span>
+										<span class="s0">// Module is still in the same runtime combination</span>
+										<span class="s4">const </span><span class="s1">hash </span><span class="s3">= </span><span class="s1">nonCodeGeneratedModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">newRuntime</span><span class="s3">)</span>
+											<span class="s3">? </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleHash</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">newRuntime</span><span class="s3">)</span>
+											<span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">codeGenerationResults</span><span class="s3">.</span><span class="s1">getHash</span><span class="s3">(</span>
+													<span class="s1">module</span><span class="s3">,</span>
+													<span class="s1">newRuntime</span>
+												<span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">hash </span><span class="s3">!== </span><span class="s1">oldHash</span><span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s1">WEBPACK_MODULE_TYPE_RUNTIME</span><span class="s3">) {</span>
+												<span class="s1">newRuntimeModules </span><span class="s3">= </span><span class="s1">newRuntimeModules </span><span class="s3">|| [];</span>
+												<span class="s1">newRuntimeModules</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+													<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{RuntimeModule} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">)</span>
+												<span class="s3">);</span>
+											<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+												<span class="s1">newModules </span><span class="s3">= </span><span class="s1">newModules </span><span class="s3">|| [];</span>
+												<span class="s1">newModules</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s0">// module is no longer in this runtime combination</span>
+										<span class="s0">// We (incorrectly) assume that it's not in an overlapping runtime combination</span>
+										<span class="s0">// and dispose it from the main runtimes the chunk was removed from</span>
+										<span class="s1">forEachRuntime</span><span class="s3">(</span><span class="s1">removedFromRuntime</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">=&gt; {</span>
+											<span class="s0">// If the module is still used in this runtime, do not dispose it</span>
+											<span class="s0">// This could create a bad runtime state where the module is still loaded,</span>
+											<span class="s0">// but no chunk which contains it. This means we don't receive further HMR updates</span>
+											<span class="s0">// to this module and that's bad.</span>
+											<span class="s0">// TODO force load one of the chunks which contains the module</span>
+											<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">moduleRuntime of runtimes</span><span class="s3">) {</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">moduleRuntime </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+													<span class="s4">if </span><span class="s3">(</span><span class="s1">moduleRuntime </span><span class="s3">=== </span><span class="s1">runtime</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+												<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span>
+													<span class="s1">moduleRuntime </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp;</span>
+													<span class="s1">moduleRuntime</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">))</span>
+												<span class="s3">)</span>
+													<span class="s4">return</span><span class="s3">;</span>
+											<span class="s3">}</span>
+											<span class="s4">const </span><span class="s1">item </span><span class="s3">=</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HotUpdateMainContentByRuntimeItem} */ </span><span class="s3">(</span>
+													<span class="s1">hotUpdateMainContentByRuntime</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+														<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+													<span class="s3">)</span>
+												<span class="s3">);</span>
+											<span class="s1">item</span><span class="s3">.</span><span class="s1">removedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+										<span class="s3">});</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s3">(</span><span class="s1">newModules </span><span class="s3">&amp;&amp; </span><span class="s1">newModules</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) ||</span>
+								<span class="s3">(</span><span class="s1">newRuntimeModules </span><span class="s3">&amp;&amp; </span><span class="s1">newRuntimeModules</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">)</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">hotUpdateChunk </span><span class="s3">= </span><span class="s4">new </span><span class="s1">HotUpdateChunk</span><span class="s3">();</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">backCompat</span><span class="s3">)</span>
+									<span class="s1">ChunkGraph</span><span class="s3">.</span><span class="s1">setChunkGraphForChunk</span><span class="s3">(</span><span class="s1">hotUpdateChunk</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+								<span class="s1">hotUpdateChunk</span><span class="s3">.</span><span class="s1">id </span><span class="s3">= </span><span class="s1">chunkId</span><span class="s3">;</span>
+								<span class="s1">hotUpdateChunk</span><span class="s3">.</span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">currentChunk</span>
+									<span class="s3">? </span><span class="s1">currentChunk</span><span class="s3">.</span><span class="s1">runtime</span>
+									<span class="s3">: </span><span class="s1">newRuntime</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">) {</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">group of currentChunk</span><span class="s3">.</span><span class="s1">groupsIterable</span><span class="s3">)</span>
+										<span class="s1">hotUpdateChunk</span><span class="s3">.</span><span class="s1">addGroup</span><span class="s3">(</span><span class="s1">group</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">attachModules</span><span class="s3">(</span><span class="s1">hotUpdateChunk</span><span class="s3">, </span><span class="s1">newModules </span><span class="s3">|| []);</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">attachRuntimeModules</span><span class="s3">(</span>
+									<span class="s1">hotUpdateChunk</span><span class="s3">,</span>
+									<span class="s1">newRuntimeModules </span><span class="s3">|| []</span>
+								<span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">newFullHashModules</span><span class="s3">) {</span>
+									<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">attachFullHashModules</span><span class="s3">(</span>
+										<span class="s1">hotUpdateChunk</span><span class="s3">,</span>
+										<span class="s1">newFullHashModules</span>
+									<span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">newDependentHashModules</span><span class="s3">) {</span>
+									<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">attachDependentHashModules</span><span class="s3">(</span>
+										<span class="s1">hotUpdateChunk</span><span class="s3">,</span>
+										<span class="s1">newDependentHashModules</span>
+									<span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s4">const </span><span class="s1">renderManifest </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getRenderManifest</span><span class="s3">({</span>
+									<span class="s1">chunk</span><span class="s3">: </span><span class="s1">hotUpdateChunk</span><span class="s3">,</span>
+									<span class="s1">hash</span><span class="s3">: </span><span class="s1">records</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">,</span>
+									<span class="s1">fullHash</span><span class="s3">: </span><span class="s1">records</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">,</span>
+									<span class="s1">outputOptions</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">,</span>
+									<span class="s1">moduleTemplates</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleTemplates</span><span class="s3">,</span>
+									<span class="s1">dependencyTemplates</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">dependencyTemplates</span><span class="s3">,</span>
+									<span class="s1">codeGenerationResults</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">codeGenerationResults</span><span class="s3">,</span>
+									<span class="s1">runtimeTemplate</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">runtimeTemplate</span><span class="s3">,</span>
+									<span class="s1">moduleGraph</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">,</span>
+									<span class="s1">chunkGraph</span>
+								<span class="s3">});</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">entry of renderManifest</span><span class="s3">) {</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+									<span class="s4">let </span><span class="s1">filename</span><span class="s3">;</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssetInfo} */</span>
+									<span class="s4">let </span><span class="s1">assetInfo</span><span class="s3">;</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;filename&quot; </span><span class="s4">in </span><span class="s1">entry</span><span class="s3">) {</span>
+										<span class="s1">filename </span><span class="s3">= </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">filename</span><span class="s3">;</span>
+										<span class="s1">assetInfo </span><span class="s3">= </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">info</span><span class="s3">;</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s3">({ </span><span class="s1">path</span><span class="s3">: </span><span class="s1">filename</span><span class="s3">, </span><span class="s1">info</span><span class="s3">: </span><span class="s1">assetInfo </span><span class="s3">} =</span>
+											<span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPathWithInfo</span><span class="s3">(</span>
+												<span class="s1">entry</span><span class="s3">.</span><span class="s1">filenameTemplate</span><span class="s3">,</span>
+												<span class="s1">entry</span><span class="s3">.</span><span class="s1">pathOptions</span>
+											<span class="s3">));</span>
+									<span class="s3">}</span>
+									<span class="s4">const </span><span class="s1">source </span><span class="s3">= </span><span class="s1">entry</span><span class="s3">.</span><span class="s1">render</span><span class="s3">();</span>
+									<span class="s1">compilation</span><span class="s3">.</span><span class="s1">additionalChunkAssets</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">);</span>
+									<span class="s1">compilation</span><span class="s3">.</span><span class="s1">emitAsset</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, {</span>
+										<span class="s1">hotModuleReplacement</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+										<span class="s1">...assetInfo</span>
+									<span class="s3">});</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">) {</span>
+										<span class="s1">currentChunk</span><span class="s3">.</span><span class="s1">files</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">);</span>
+										<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">chunkAsset</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">currentChunk</span><span class="s3">, </span><span class="s1">filename</span><span class="s3">);</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+								<span class="s1">forEachRuntime</span><span class="s3">(</span><span class="s1">newRuntime</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">=&gt; {</span>
+									<span class="s4">const </span><span class="s1">item </span><span class="s3">=</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{HotUpdateMainContentByRuntimeItem} */ </span><span class="s3">(</span>
+											<span class="s1">hotUpdateMainContentByRuntime</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+											<span class="s3">)</span>
+										<span class="s3">);</span>
+									<span class="s1">item</span><span class="s3">.</span><span class="s1">updatedChunkIds</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId} */ </span><span class="s3">(</span><span class="s1">chunkId</span><span class="s3">));</span>
+								<span class="s3">});</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+						<span class="s4">const </span><span class="s1">completelyRemovedModulesArray </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+							<span class="s1">completelyRemovedModules</span>
+						<span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">hotUpdateMainContentByFilename </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">{</span>
+							<span class="s1">removedChunkIds</span><span class="s3">,</span>
+							<span class="s1">removedModules</span><span class="s3">,</span>
+							<span class="s1">updatedChunkIds</span><span class="s3">,</span>
+							<span class="s1">filename</span><span class="s3">,</span>
+							<span class="s1">assetInfo</span>
+						<span class="s3">} </span><span class="s1">of hotUpdateMainContentByRuntime</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()) {</span>
+							<span class="s4">const </span><span class="s1">old </span><span class="s3">= </span><span class="s1">hotUpdateMainContentByFilename</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">old </span><span class="s3">&amp;&amp;</span>
+								<span class="s3">(!</span><span class="s1">isSubset</span><span class="s3">(</span><span class="s1">old</span><span class="s3">.</span><span class="s1">removedChunkIds</span><span class="s3">, </span><span class="s1">removedChunkIds</span><span class="s3">) ||</span>
+									<span class="s3">!</span><span class="s1">isSubset</span><span class="s3">(</span><span class="s1">old</span><span class="s3">.</span><span class="s1">removedModules</span><span class="s3">, </span><span class="s1">removedModules</span><span class="s3">) ||</span>
+									<span class="s3">!</span><span class="s1">isSubset</span><span class="s3">(</span><span class="s1">old</span><span class="s3">.</span><span class="s1">updatedChunkIds</span><span class="s3">, </span><span class="s1">updatedChunkIds</span><span class="s3">))</span>
+							<span class="s3">) {</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">warnings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+									<span class="s4">new </span><span class="s1">WebpackError</span><span class="s3">(</span><span class="s2">`HotModuleReplacementPlugin 
+The configured output.hotUpdateMainFilename doesn't lead to unique filenames per runtime and HMR update differs between runtimes. 
+This might lead to incorrect runtime behavior of the applied update. 
+To fix this, make sure to include [runtime] in the output.hotUpdateMainFilename option, or use the default config.`</span><span class="s3">)</span>
+								<span class="s3">);</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkId of removedChunkIds</span><span class="s3">)</span>
+									<span class="s1">old</span><span class="s3">.</span><span class="s1">removedChunkIds</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunkId</span><span class="s3">);</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkId of removedModules</span><span class="s3">)</span>
+									<span class="s1">old</span><span class="s3">.</span><span class="s1">removedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunkId</span><span class="s3">);</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkId of updatedChunkIds</span><span class="s3">)</span>
+									<span class="s1">old</span><span class="s3">.</span><span class="s1">updatedChunkIds</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunkId</span><span class="s3">);</span>
+								<span class="s4">continue</span><span class="s3">;</span>
+							<span class="s3">}</span>
+							<span class="s1">hotUpdateMainContentByFilename</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">, {</span>
+								<span class="s1">removedChunkIds</span><span class="s3">,</span>
+								<span class="s1">removedModules</span><span class="s3">,</span>
+								<span class="s1">updatedChunkIds</span><span class="s3">,</span>
+								<span class="s1">assetInfo</span>
+							<span class="s3">});</span>
+						<span class="s3">}</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span>
+							<span class="s1">filename</span><span class="s3">,</span>
+							<span class="s3">{ </span><span class="s1">removedChunkIds</span><span class="s3">, </span><span class="s1">removedModules</span><span class="s3">, </span><span class="s1">updatedChunkIds</span><span class="s3">, </span><span class="s1">assetInfo </span><span class="s3">}</span>
+						<span class="s3">] </span><span class="s1">of hotUpdateMainContentByFilename</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">hotUpdateMainJson </span><span class="s3">= {</span>
+								<span class="s1">c</span><span class="s3">: </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">updatedChunkIds</span><span class="s3">),</span>
+								<span class="s1">r</span><span class="s3">: </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">removedChunkIds</span><span class="s3">),</span>
+								<span class="s1">m</span><span class="s3">:</span>
+									<span class="s1">removedModules</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">0</span>
+										<span class="s3">? </span><span class="s1">completelyRemovedModulesArray</span>
+										<span class="s3">: </span><span class="s1">completelyRemovedModulesArray</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span>
+												<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+													<span class="s1">removedModules</span><span class="s3">,</span>
+													<span class="s1">m </span><span class="s3">=&gt;</span>
+														<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">m</span><span class="s3">))</span>
+												<span class="s3">)</span>
+											<span class="s3">)</span>
+							<span class="s3">};</span>
+
+							<span class="s4">const </span><span class="s1">source </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">hotUpdateMainJson</span><span class="s3">));</span>
+							<span class="s1">compilation</span><span class="s3">.</span><span class="s1">emitAsset</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, {</span>
+								<span class="s1">hotModuleReplacement</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+								<span class="s1">...assetInfo</span>
+							<span class="s3">});</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">additionalTreeRuntimeRequirements</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+					<span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">runtimeRequirements</span><span class="s3">) =&gt; {</span>
+						<span class="s1">runtimeRequirements</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hmrDownloadManifest</span><span class="s3">);</span>
+						<span class="s1">runtimeRequirements</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">hmrDownloadUpdateHandlers</span><span class="s3">);</span>
+						<span class="s1">runtimeRequirements</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">interceptModuleExecution</span><span class="s3">);</span>
+						<span class="s1">runtimeRequirements</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">moduleCache</span><span class="s3">);</span>
+						<span class="s1">compilation</span><span class="s3">.</span><span class="s1">addRuntimeModule</span><span class="s3">(</span>
+							<span class="s1">chunk</span><span class="s3">,</span>
+							<span class="s4">new </span><span class="s1">HotModuleReplacementRuntimeModule</span><span class="s3">()</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_AUTO</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">parser </span><span class="s3">=&gt; {</span>
+						<span class="s1">applyModuleHot</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">);</span>
+						<span class="s1">applyImportMetaHot</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">);</span>
+					<span class="s3">});</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_DYNAMIC</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">parser </span><span class="s3">=&gt; {</span>
+						<span class="s1">applyModuleHot</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">);</span>
+					<span class="s3">});</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">parser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">JAVASCRIPT_MODULE_TYPE_ESM</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">parser </span><span class="s3">=&gt; {</span>
+						<span class="s1">applyImportMetaHot</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">);</span>
+					<span class="s3">});</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">PLUGIN_NAME</span><span class="s3">, </span><span class="s1">module </span><span class="s3">=&gt; {</span>
+					<span class="s1">module</span><span class="s3">.</span><span class="s1">hot </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s4">return </span><span class="s1">module</span><span class="s3">;</span>
+				<span class="s3">});</span>
+
+				<span class="s1">NormalModule</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">).</span><span class="s1">loader</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s1">PLUGIN_NAME</span><span class="s3">,</span>
+					<span class="s1">context </span><span class="s3">=&gt; {</span>
+						<span class="s1">context</span><span class="s3">.</span><span class="s1">hot </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">HotModuleReplacementPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

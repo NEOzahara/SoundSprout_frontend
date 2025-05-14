@@ -1,0 +1,163 @@
+<html>
+<head>
+<title>base64-vlq.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #cf8e6d;}
+.s3 { color: #bcbec4;}
+.s4 { color: #6aab73;}
+.s5 { color: #2aacb8;}
+.s6 { color: #5f826b; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+base64-vlq.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* -*- Mode: js; js-indent-level: 2; -*- */</span>
+<span class="s0">/* 
+ * Copyright 2011 Mozilla Foundation and contributors 
+ * Licensed under the New BSD license. See LICENSE or: 
+ * http://opensource.org/licenses/BSD-3-Clause 
+ * 
+ * Based on the Base 64 VLQ implementation in Closure Compiler: 
+ * https://code.google.com/p/closure-compiler/source/browse/trunk/src/com/google/debugging/sourcemap/Base64VLQ.java 
+ * 
+ * Copyright 2011 The Closure Compiler Authors. All rights reserved. 
+ * Redistribution and use in source and binary forms, with or without 
+ * modification, are permitted provided that the following conditions are 
+ * met: 
+ * 
+ *  * Redistributions of source code must retain the above copyright 
+ *    notice, this list of conditions and the following disclaimer. 
+ *  * Redistributions in binary form must reproduce the above 
+ *    copyright notice, this list of conditions and the following 
+ *    disclaimer in the documentation and/or other materials provided 
+ *    with the distribution. 
+ *  * Neither the name of Google Inc. nor the names of its 
+ *    contributors may be used to endorse or promote products derived 
+ *    from this software without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS 
+ * &quot;AS IS&quot; AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT 
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR 
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT 
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, 
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT 
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, 
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY 
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT 
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ */</span>
+
+<span class="s2">var </span><span class="s1">base64 </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s4">'./base64'</span><span class="s3">);</span>
+
+<span class="s0">// A single base 64 digit can contain 6 bits of data. For the base 64 variable</span>
+<span class="s0">// length quantities we use in the source map spec, the first bit is the sign,</span>
+<span class="s0">// the next four bits are the actual value, and the 6th bit is the</span>
+<span class="s0">// continuation bit. The continuation bit tells us whether there are more</span>
+<span class="s0">// digits in this value following this digit.</span>
+<span class="s0">//</span>
+<span class="s0">//   Continuation</span>
+<span class="s0">//   |    Sign</span>
+<span class="s0">//   |    |</span>
+<span class="s0">//   V    V</span>
+<span class="s0">//   101011</span>
+
+<span class="s2">var </span><span class="s1">VLQ_BASE_SHIFT </span><span class="s3">= </span><span class="s5">5</span><span class="s3">;</span>
+
+<span class="s0">// binary: 100000</span>
+<span class="s2">var </span><span class="s1">VLQ_BASE </span><span class="s3">= </span><span class="s5">1 </span><span class="s3">&lt;&lt; </span><span class="s1">VLQ_BASE_SHIFT</span><span class="s3">;</span>
+
+<span class="s0">// binary: 011111</span>
+<span class="s2">var </span><span class="s1">VLQ_BASE_MASK </span><span class="s3">= </span><span class="s1">VLQ_BASE </span><span class="s3">- </span><span class="s5">1</span><span class="s3">;</span>
+
+<span class="s0">// binary: 100000</span>
+<span class="s2">var </span><span class="s1">VLQ_CONTINUATION_BIT </span><span class="s3">= </span><span class="s1">VLQ_BASE</span><span class="s3">;</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Converts from a two-complement value to a value where the sign bit is</span>
+ <span class="s6">* placed in the least significant bit.  For example, as decimals:</span>
+ <span class="s6">*   1 becomes 2 (10 binary), -1 becomes 3 (11 binary)</span>
+ <span class="s6">*   2 becomes 4 (100 binary), -2 becomes 5 (101 binary)</span>
+ <span class="s6">*/</span>
+<span class="s2">function </span><span class="s1">toVLQSigned</span><span class="s3">(</span><span class="s1">aValue</span><span class="s3">) {</span>
+  <span class="s2">return </span><span class="s1">aValue </span><span class="s3">&lt; </span><span class="s5">0</span>
+    <span class="s3">? ((-</span><span class="s1">aValue</span><span class="s3">) &lt;&lt; </span><span class="s5">1</span><span class="s3">) + </span><span class="s5">1</span>
+    <span class="s3">: (</span><span class="s1">aValue </span><span class="s3">&lt;&lt; </span><span class="s5">1</span><span class="s3">) + </span><span class="s5">0</span><span class="s3">;</span>
+<span class="s3">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Converts to a two-complement value from a value where the sign bit is</span>
+ <span class="s6">* placed in the least significant bit.  For example, as decimals:</span>
+ <span class="s6">*   2 (10 binary) becomes 1, 3 (11 binary) becomes -1</span>
+ <span class="s6">*   4 (100 binary) becomes 2, 5 (101 binary) becomes -2</span>
+ <span class="s6">*/</span>
+<span class="s2">function </span><span class="s1">fromVLQSigned</span><span class="s3">(</span><span class="s1">aValue</span><span class="s3">) {</span>
+  <span class="s2">var </span><span class="s1">isNegative </span><span class="s3">= (</span><span class="s1">aValue </span><span class="s3">&amp; </span><span class="s5">1</span><span class="s3">) === </span><span class="s5">1</span><span class="s3">;</span>
+  <span class="s2">var </span><span class="s1">shifted </span><span class="s3">= </span><span class="s1">aValue </span><span class="s3">&gt;&gt; </span><span class="s5">1</span><span class="s3">;</span>
+  <span class="s2">return </span><span class="s1">isNegative</span>
+    <span class="s3">? -</span><span class="s1">shifted</span>
+    <span class="s3">: </span><span class="s1">shifted</span><span class="s3">;</span>
+<span class="s3">}</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Returns the base 64 VLQ encoded value.</span>
+ <span class="s6">*/</span>
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">encode </span><span class="s3">= </span><span class="s2">function </span><span class="s1">base64VLQ_encode</span><span class="s3">(</span><span class="s1">aValue</span><span class="s3">) {</span>
+  <span class="s2">var </span><span class="s1">encoded </span><span class="s3">= </span><span class="s4">&quot;&quot;</span><span class="s3">;</span>
+  <span class="s2">var </span><span class="s1">digit</span><span class="s3">;</span>
+
+  <span class="s2">var </span><span class="s1">vlq </span><span class="s3">= </span><span class="s1">toVLQSigned</span><span class="s3">(</span><span class="s1">aValue</span><span class="s3">);</span>
+
+  <span class="s2">do </span><span class="s3">{</span>
+    <span class="s1">digit </span><span class="s3">= </span><span class="s1">vlq </span><span class="s3">&amp; </span><span class="s1">VLQ_BASE_MASK</span><span class="s3">;</span>
+    <span class="s1">vlq </span><span class="s3">&gt;&gt;&gt;= </span><span class="s1">VLQ_BASE_SHIFT</span><span class="s3">;</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">vlq </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+      <span class="s0">// There are still more digits in this value, so we must make sure the</span>
+      <span class="s0">// continuation bit is marked.</span>
+      <span class="s1">digit </span><span class="s3">|= </span><span class="s1">VLQ_CONTINUATION_BIT</span><span class="s3">;</span>
+    <span class="s3">}</span>
+    <span class="s1">encoded </span><span class="s3">+= </span><span class="s1">base64</span><span class="s3">.</span><span class="s1">encode</span><span class="s3">(</span><span class="s1">digit</span><span class="s3">);</span>
+  <span class="s3">} </span><span class="s2">while </span><span class="s3">(</span><span class="s1">vlq </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">);</span>
+
+  <span class="s2">return </span><span class="s1">encoded</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Decodes the next base 64 VLQ value from the given string and returns the</span>
+ <span class="s6">* value and the rest of the string via the out parameter.</span>
+ <span class="s6">*/</span>
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">decode </span><span class="s3">= </span><span class="s2">function </span><span class="s1">base64VLQ_decode</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">, </span><span class="s1">aIndex</span><span class="s3">, </span><span class="s1">aOutParam</span><span class="s3">) {</span>
+  <span class="s2">var </span><span class="s1">strLen </span><span class="s3">= </span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+  <span class="s2">var </span><span class="s1">result </span><span class="s3">= </span><span class="s5">0</span><span class="s3">;</span>
+  <span class="s2">var </span><span class="s1">shift </span><span class="s3">= </span><span class="s5">0</span><span class="s3">;</span>
+  <span class="s2">var </span><span class="s1">continuation</span><span class="s3">, </span><span class="s1">digit</span><span class="s3">;</span>
+
+  <span class="s2">do </span><span class="s3">{</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">aIndex </span><span class="s3">&gt;= </span><span class="s1">strLen</span><span class="s3">) {</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">&quot;Expected more digits in base 64 VLQ value.&quot;</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s1">digit </span><span class="s3">= </span><span class="s1">base64</span><span class="s3">.</span><span class="s1">decode</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">aIndex</span><span class="s3">++));</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">digit </span><span class="s3">=== -</span><span class="s5">1</span><span class="s3">) {</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">&quot;Invalid base64 digit: &quot; </span><span class="s3">+ </span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">charAt</span><span class="s3">(</span><span class="s1">aIndex </span><span class="s3">- </span><span class="s5">1</span><span class="s3">));</span>
+    <span class="s3">}</span>
+
+    <span class="s1">continuation </span><span class="s3">= !!(</span><span class="s1">digit </span><span class="s3">&amp; </span><span class="s1">VLQ_CONTINUATION_BIT</span><span class="s3">);</span>
+    <span class="s1">digit </span><span class="s3">&amp;= </span><span class="s1">VLQ_BASE_MASK</span><span class="s3">;</span>
+    <span class="s1">result </span><span class="s3">= </span><span class="s1">result </span><span class="s3">+ (</span><span class="s1">digit </span><span class="s3">&lt;&lt; </span><span class="s1">shift</span><span class="s3">);</span>
+    <span class="s1">shift </span><span class="s3">+= </span><span class="s1">VLQ_BASE_SHIFT</span><span class="s3">;</span>
+  <span class="s3">} </span><span class="s2">while </span><span class="s3">(</span><span class="s1">continuation</span><span class="s3">);</span>
+
+  <span class="s1">aOutParam</span><span class="s3">.</span><span class="s1">value </span><span class="s3">= </span><span class="s1">fromVLQSigned</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+  <span class="s1">aOutParam</span><span class="s3">.</span><span class="s1">rest </span><span class="s3">= </span><span class="s1">aIndex</span><span class="s3">;</span>
+<span class="s3">};</span>
+</pre>
+</body>
+</html>

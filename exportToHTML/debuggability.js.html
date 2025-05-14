@@ -1,0 +1,1031 @@
+<html>
+<head>
+<title>debuggability.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #42c3d4;}
+.s5 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+debuggability.js</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;use strict&quot;</span><span class="s1">;</span>
+<span class="s2">module</span><span class="s1">.</span><span class="s2">exports </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">Promise</span><span class="s1">, </span><span class="s2">Context</span><span class="s1">,</span>
+    <span class="s2">enableAsyncHooks</span><span class="s1">, </span><span class="s2">disableAsyncHooks</span><span class="s1">) {</span>
+<span class="s3">var </span><span class="s2">async </span><span class="s1">= </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">_async</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">Warning </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./errors&quot;</span><span class="s1">).</span><span class="s2">Warning</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">util </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./util&quot;</span><span class="s1">);</span>
+<span class="s3">var </span><span class="s2">es5 </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;./es5&quot;</span><span class="s1">);</span>
+<span class="s3">var </span><span class="s2">canAttachTrace </span><span class="s1">= </span><span class="s2">util</span><span class="s1">.</span><span class="s2">canAttachTrace</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">unhandledRejectionHandled</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">possiblyUnhandledRejection</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">bluebirdFramePattern </span><span class="s1">=</span>
+    <span class="s4">/[\\\/]bluebird[\\\/]js[\\\/](release|debug|instrumented)/</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">nodeFramePattern </span><span class="s1">= </span><span class="s4">/\((?:timers\.js):\d+:\d+\)/</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">parseLinePattern </span><span class="s1">= </span><span class="s4">/[\/&lt;\(](.+?):(\d+):(\d+)\)?\s*$/</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">stackFramePattern </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">formatStack </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">indentStackFrames </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">printWarning</span><span class="s1">;</span>
+<span class="s3">var </span><span class="s2">debugging </span><span class="s1">= !!(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_DEBUG&quot;</span><span class="s1">) != </span><span class="s5">0 </span><span class="s1">&amp;&amp;</span>
+                        <span class="s1">(</span><span class="s3">false </span><span class="s1">||</span>
+                         <span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_DEBUG&quot;</span><span class="s1">) ||</span>
+                         <span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;NODE_ENV&quot;</span><span class="s1">) === </span><span class="s0">&quot;development&quot;</span><span class="s1">));</span>
+
+<span class="s3">var </span><span class="s2">warnings </span><span class="s1">= !!(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_WARNINGS&quot;</span><span class="s1">) != </span><span class="s5">0 </span><span class="s1">&amp;&amp;</span>
+    <span class="s1">(</span><span class="s2">debugging </span><span class="s1">|| </span><span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_WARNINGS&quot;</span><span class="s1">)));</span>
+
+<span class="s3">var </span><span class="s2">longStackTraces </span><span class="s1">= !!(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_LONG_STACK_TRACES&quot;</span><span class="s1">) != </span><span class="s5">0 </span><span class="s1">&amp;&amp;</span>
+    <span class="s1">(</span><span class="s2">debugging </span><span class="s1">|| </span><span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_LONG_STACK_TRACES&quot;</span><span class="s1">)));</span>
+
+<span class="s3">var </span><span class="s2">wForgottenReturn </span><span class="s1">= </span><span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_W_FORGOTTEN_RETURN&quot;</span><span class="s1">) != </span><span class="s5">0 </span><span class="s1">&amp;&amp;</span>
+    <span class="s1">(</span><span class="s2">warnings </span><span class="s1">|| !!</span><span class="s2">util</span><span class="s1">.</span><span class="s2">env</span><span class="s1">(</span><span class="s0">&quot;BLUEBIRD_W_FORGOTTEN_RETURN&quot;</span><span class="s1">));</span>
+
+<span class="s3">var </span><span class="s2">deferUnhandledRejectionCheck</span><span class="s1">;</span>
+<span class="s1">(</span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">var </span><span class="s2">promises </span><span class="s1">= [];</span>
+
+    <span class="s3">function </span><span class="s2">unhandledRejectionCheck</span><span class="s1">() {</span>
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">promises</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+            <span class="s2">promises</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">_notifyUnhandledRejection</span><span class="s1">();</span>
+        <span class="s1">}</span>
+        <span class="s2">unhandledRejectionClear</span><span class="s1">();</span>
+    <span class="s1">}</span>
+
+    <span class="s3">function </span><span class="s2">unhandledRejectionClear</span><span class="s1">() {</span>
+        <span class="s2">promises</span><span class="s1">.</span><span class="s2">length </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">deferUnhandledRejectionCheck </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">promise</span><span class="s1">) {</span>
+        <span class="s2">promises</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">promise</span><span class="s1">);</span>
+        <span class="s2">setTimeout</span><span class="s1">(</span><span class="s2">unhandledRejectionCheck</span><span class="s1">, </span><span class="s5">1</span><span class="s1">);</span>
+    <span class="s1">};</span>
+
+    <span class="s2">es5</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span><span class="s2">Promise</span><span class="s1">, </span><span class="s0">&quot;_unhandledRejectionCheck&quot;</span><span class="s1">, {</span>
+        <span class="s2">value</span><span class="s1">: </span><span class="s2">unhandledRejectionCheck</span>
+    <span class="s1">});</span>
+    <span class="s2">es5</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span><span class="s2">Promise</span><span class="s1">, </span><span class="s0">&quot;_unhandledRejectionClear&quot;</span><span class="s1">, {</span>
+        <span class="s2">value</span><span class="s1">: </span><span class="s2">unhandledRejectionClear</span>
+    <span class="s1">});</span>
+<span class="s1">})();</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">suppressUnhandledRejections </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">var </span><span class="s2">target </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_target</span><span class="s1">();</span>
+    <span class="s2">target</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">= ((</span><span class="s2">target</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; (~</span><span class="s5">1048576</span><span class="s1">)) |</span>
+                      <span class="s5">524288</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_ensurePossibleRejectionHandled </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">if </span><span class="s1">((</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; </span><span class="s5">524288</span><span class="s1">) !== </span><span class="s5">0</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_setRejectionIsUnhandled</span><span class="s1">();</span>
+    <span class="s2">deferUnhandledRejectionCheck</span><span class="s1">(</span><span class="s3">this</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_notifyUnhandledRejectionIsHandled </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s2">fireRejectionEvent</span><span class="s1">(</span><span class="s0">&quot;rejectionHandled&quot;</span><span class="s1">,</span>
+                                  <span class="s2">unhandledRejectionHandled</span><span class="s1">, </span><span class="s2">undefined</span><span class="s1">, </span><span class="s3">this</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_setReturnedNonUndefined </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">| </span><span class="s5">268435456</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_returnedNonUndefined </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">return </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; </span><span class="s5">268435456</span><span class="s1">) !== </span><span class="s5">0</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_notifyUnhandledRejection </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_isRejectionUnhandled</span><span class="s1">()) {</span>
+        <span class="s3">var </span><span class="s2">reason </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_settledValue</span><span class="s1">();</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_setUnhandledRejectionIsNotified</span><span class="s1">();</span>
+        <span class="s2">fireRejectionEvent</span><span class="s1">(</span><span class="s0">&quot;unhandledRejection&quot;</span><span class="s1">,</span>
+                                      <span class="s2">possiblyUnhandledRejection</span><span class="s1">, </span><span class="s2">reason</span><span class="s1">, </span><span class="s3">this</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_setUnhandledRejectionIsNotified </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">| </span><span class="s5">262144</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_unsetUnhandledRejectionIsNotified </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; (~</span><span class="s5">262144</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_isUnhandledRejectionNotified </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">return </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; </span><span class="s5">262144</span><span class="s1">) &gt; </span><span class="s5">0</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_setRejectionIsUnhandled </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">| </span><span class="s5">1048576</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_unsetRejectionIsUnhandled </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; (~</span><span class="s5">1048576</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_isUnhandledRejectionNotified</span><span class="s1">()) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_unsetUnhandledRejectionIsNotified</span><span class="s1">();</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_notifyUnhandledRejectionIsHandled</span><span class="s1">();</span>
+    <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_isRejectionUnhandled </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">return </span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; </span><span class="s5">1048576</span><span class="s1">) &gt; </span><span class="s5">0</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_warn </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">shouldUseOwnTrace</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s2">warn</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">shouldUseOwnTrace</span><span class="s1">, </span><span class="s2">promise </span><span class="s1">|| </span><span class="s3">this</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">onPossiblyUnhandledRejection </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">fn</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">context </span><span class="s1">= </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">_getContext</span><span class="s1">();</span>
+    <span class="s2">possiblyUnhandledRejection </span><span class="s1">= </span><span class="s2">util</span><span class="s1">.</span><span class="s2">contextBind</span><span class="s1">(</span><span class="s2">context</span><span class="s1">, </span><span class="s2">fn</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">onUnhandledRejectionHandled </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">fn</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">context </span><span class="s1">= </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">_getContext</span><span class="s1">();</span>
+    <span class="s2">unhandledRejectionHandled </span><span class="s1">= </span><span class="s2">util</span><span class="s1">.</span><span class="s2">contextBind</span><span class="s1">(</span><span class="s2">context</span><span class="s1">, </span><span class="s2">fn</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s3">var </span><span class="s2">disableLongStackTraces </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">longStackTraces </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">async</span><span class="s1">.</span><span class="s2">haveItemsQueued</span><span class="s1">() &amp;&amp; !</span><span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces</span><span class="s1">) {</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;cannot enable long stack traces after promises have been created</span><span class="s3">\u000a\u000a    </span><span class="s0">See http://goo.gl/MqrFmX</span><span class="s3">\u000a</span><span class="s0">&quot;</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces </span><span class="s1">&amp;&amp; </span><span class="s2">longStackTracesIsSupported</span><span class="s1">()) {</span>
+        <span class="s3">var </span><span class="s2">Promise_captureStackTrace </span><span class="s1">= </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_captureStackTrace</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">Promise_attachExtraTrace </span><span class="s1">= </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_attachExtraTrace</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">Promise_dereferenceTrace </span><span class="s1">= </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_dereferenceTrace</span><span class="s1">;</span>
+        <span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s2">disableLongStackTraces </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">async</span><span class="s1">.</span><span class="s2">haveItemsQueued</span><span class="s1">() &amp;&amp; !</span><span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces</span><span class="s1">) {</span>
+                <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;cannot enable long stack traces after promises have been created</span><span class="s3">\u000a\u000a    </span><span class="s0">See http://goo.gl/MqrFmX</span><span class="s3">\u000a</span><span class="s0">&quot;</span><span class="s1">);</span>
+            <span class="s1">}</span>
+            <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_captureStackTrace </span><span class="s1">= </span><span class="s2">Promise_captureStackTrace</span><span class="s1">;</span>
+            <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_attachExtraTrace </span><span class="s1">= </span><span class="s2">Promise_attachExtraTrace</span><span class="s1">;</span>
+            <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_dereferenceTrace </span><span class="s1">= </span><span class="s2">Promise_dereferenceTrace</span><span class="s1">;</span>
+            <span class="s2">Context</span><span class="s1">.</span><span class="s2">deactivateLongStackTraces</span><span class="s1">();</span>
+            <span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+        <span class="s1">};</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_captureStackTrace </span><span class="s1">= </span><span class="s2">longStackTracesCaptureStackTrace</span><span class="s1">;</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_attachExtraTrace </span><span class="s1">= </span><span class="s2">longStackTracesAttachExtraTrace</span><span class="s1">;</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_dereferenceTrace </span><span class="s1">= </span><span class="s2">longStackTracesDereferenceTrace</span><span class="s1">;</span>
+        <span class="s2">Context</span><span class="s1">.</span><span class="s2">activateLongStackTraces</span><span class="s1">();</span>
+    <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">hasLongStackTraces </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+    <span class="s3">return </span><span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces </span><span class="s1">&amp;&amp; </span><span class="s2">longStackTracesIsSupported</span><span class="s1">();</span>
+<span class="s1">};</span>
+
+
+<span class="s3">var </span><span class="s2">legacyHandlers </span><span class="s1">= {</span>
+    <span class="s2">unhandledrejection</span><span class="s1">: {</span>
+        <span class="s2">before</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+            <span class="s3">var </span><span class="s2">ret </span><span class="s1">= </span><span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">onunhandledrejection</span><span class="s1">;</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">onunhandledrejection </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+            <span class="s3">return </span><span class="s2">ret</span><span class="s1">;</span>
+        <span class="s1">},</span>
+        <span class="s2">after</span><span class="s1">: </span><span class="s3">function</span><span class="s1">(</span><span class="s2">fn</span><span class="s1">) {</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">onunhandledrejection </span><span class="s1">= </span><span class="s2">fn</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">},</span>
+    <span class="s2">rejectionhandled</span><span class="s1">: {</span>
+        <span class="s2">before</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+            <span class="s3">var </span><span class="s2">ret </span><span class="s1">= </span><span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">onrejectionhandled</span><span class="s1">;</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">onrejectionhandled </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+            <span class="s3">return </span><span class="s2">ret</span><span class="s1">;</span>
+        <span class="s1">},</span>
+        <span class="s2">after</span><span class="s1">: </span><span class="s3">function</span><span class="s1">(</span><span class="s2">fn</span><span class="s1">) {</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">onrejectionhandled </span><span class="s1">= </span><span class="s2">fn</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s3">var </span><span class="s2">fireDomEvent </span><span class="s1">= (</span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">var </span><span class="s2">dispatch </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">legacy</span><span class="s1">, </span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">legacy</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">fn</span><span class="s1">;</span>
+            <span class="s3">try </span><span class="s1">{</span>
+                <span class="s2">fn </span><span class="s1">= </span><span class="s2">legacy</span><span class="s1">.</span><span class="s2">before</span><span class="s1">();</span>
+                <span class="s3">return </span><span class="s1">!</span><span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">dispatchEvent</span><span class="s1">(</span><span class="s2">e</span><span class="s1">);</span>
+            <span class="s1">} </span><span class="s3">finally </span><span class="s1">{</span>
+                <span class="s2">legacy</span><span class="s1">.</span><span class="s2">after</span><span class="s1">(</span><span class="s2">fn</span><span class="s1">);</span>
+            <span class="s1">}</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s3">return </span><span class="s1">!</span><span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">dispatchEvent</span><span class="s1">(</span><span class="s2">e</span><span class="s1">);</span>
+        <span class="s1">}</span>
+    <span class="s1">};</span>
+    <span class="s3">try </span><span class="s1">{</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">CustomEvent </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">event </span><span class="s1">= </span><span class="s3">new </span><span class="s2">CustomEvent</span><span class="s1">(</span><span class="s0">&quot;CustomEvent&quot;</span><span class="s1">);</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">dispatchEvent</span><span class="s1">(</span><span class="s2">event</span><span class="s1">);</span>
+            <span class="s3">return function</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">event</span><span class="s1">) {</span>
+                <span class="s2">name </span><span class="s1">= </span><span class="s2">name</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+                <span class="s3">var </span><span class="s2">eventData </span><span class="s1">= {</span>
+                    <span class="s2">detail</span><span class="s1">: </span><span class="s2">event</span><span class="s1">,</span>
+                    <span class="s2">cancelable</span><span class="s1">: </span><span class="s3">true</span>
+                <span class="s1">};</span>
+                <span class="s3">var </span><span class="s2">domEvent </span><span class="s1">= </span><span class="s3">new </span><span class="s2">CustomEvent</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">eventData</span><span class="s1">);</span>
+                <span class="s2">es5</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span>
+                    <span class="s2">domEvent</span><span class="s1">, </span><span class="s0">&quot;promise&quot;</span><span class="s1">, {</span><span class="s2">value</span><span class="s1">: </span><span class="s2">event</span><span class="s1">.</span><span class="s2">promise</span><span class="s1">});</span>
+                <span class="s2">es5</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span>
+                    <span class="s2">domEvent</span><span class="s1">, </span><span class="s0">&quot;reason&quot;</span><span class="s1">, {</span><span class="s2">value</span><span class="s1">: </span><span class="s2">event</span><span class="s1">.</span><span class="s2">reason</span><span class="s1">});</span>
+
+                <span class="s3">return </span><span class="s2">dispatch</span><span class="s1">(</span><span class="s2">legacyHandlers</span><span class="s1">[</span><span class="s2">name</span><span class="s1">], </span><span class="s2">domEvent</span><span class="s1">);</span>
+            <span class="s1">};</span>
+        <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">Event </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">event </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Event</span><span class="s1">(</span><span class="s0">&quot;CustomEvent&quot;</span><span class="s1">);</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">dispatchEvent</span><span class="s1">(</span><span class="s2">event</span><span class="s1">);</span>
+            <span class="s3">return function</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">event</span><span class="s1">) {</span>
+                <span class="s2">name </span><span class="s1">= </span><span class="s2">name</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+                <span class="s3">var </span><span class="s2">domEvent </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Event</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, {</span>
+                    <span class="s2">cancelable</span><span class="s1">: </span><span class="s3">true</span>
+                <span class="s1">});</span>
+                <span class="s2">domEvent</span><span class="s1">.</span><span class="s2">detail </span><span class="s1">= </span><span class="s2">event</span><span class="s1">;</span>
+                <span class="s2">es5</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span><span class="s2">domEvent</span><span class="s1">, </span><span class="s0">&quot;promise&quot;</span><span class="s1">, {</span><span class="s2">value</span><span class="s1">: </span><span class="s2">event</span><span class="s1">.</span><span class="s2">promise</span><span class="s1">});</span>
+                <span class="s2">es5</span><span class="s1">.</span><span class="s2">defineProperty</span><span class="s1">(</span><span class="s2">domEvent</span><span class="s1">, </span><span class="s0">&quot;reason&quot;</span><span class="s1">, {</span><span class="s2">value</span><span class="s1">: </span><span class="s2">event</span><span class="s1">.</span><span class="s2">reason</span><span class="s1">});</span>
+                <span class="s3">return </span><span class="s2">dispatch</span><span class="s1">(</span><span class="s2">legacyHandlers</span><span class="s1">[</span><span class="s2">name</span><span class="s1">], </span><span class="s2">domEvent</span><span class="s1">);</span>
+            <span class="s1">};</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s3">var </span><span class="s2">event </span><span class="s1">= </span><span class="s2">document</span><span class="s1">.</span><span class="s2">createEvent</span><span class="s1">(</span><span class="s0">&quot;CustomEvent&quot;</span><span class="s1">);</span>
+            <span class="s2">event</span><span class="s1">.</span><span class="s2">initCustomEvent</span><span class="s1">(</span><span class="s0">&quot;testingtheevent&quot;</span><span class="s1">, </span><span class="s3">false</span><span class="s1">, </span><span class="s3">true</span><span class="s1">, {});</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">.</span><span class="s2">dispatchEvent</span><span class="s1">(</span><span class="s2">event</span><span class="s1">);</span>
+            <span class="s3">return function</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">event</span><span class="s1">) {</span>
+                <span class="s2">name </span><span class="s1">= </span><span class="s2">name</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+                <span class="s3">var </span><span class="s2">domEvent </span><span class="s1">= </span><span class="s2">document</span><span class="s1">.</span><span class="s2">createEvent</span><span class="s1">(</span><span class="s0">&quot;CustomEvent&quot;</span><span class="s1">);</span>
+                <span class="s2">domEvent</span><span class="s1">.</span><span class="s2">initCustomEvent</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s3">false</span><span class="s1">, </span><span class="s3">true</span><span class="s1">,</span>
+                    <span class="s2">event</span><span class="s1">);</span>
+                <span class="s3">return </span><span class="s2">dispatch</span><span class="s1">(</span><span class="s2">legacyHandlers</span><span class="s1">[</span><span class="s2">name</span><span class="s1">], </span><span class="s2">domEvent</span><span class="s1">);</span>
+            <span class="s1">};</span>
+        <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {}</span>
+    <span class="s3">return function</span><span class="s1">() {</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">};</span>
+<span class="s1">})();</span>
+
+<span class="s3">var </span><span class="s2">fireGlobalEvent </span><span class="s1">= (</span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">isNode</span><span class="s1">) {</span>
+        <span class="s3">return function</span><span class="s1">() {</span>
+            <span class="s3">return </span><span class="s2">process</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">.</span><span class="s2">apply</span><span class="s1">(</span><span class="s2">process</span><span class="s1">, </span><span class="s2">arguments</span><span class="s1">);</span>
+        <span class="s1">};</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s3">if </span><span class="s1">(!</span><span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">) {</span>
+            <span class="s3">return function</span><span class="s1">() {</span>
+                <span class="s3">return false</span><span class="s1">;</span>
+            <span class="s1">};</span>
+        <span class="s1">}</span>
+        <span class="s3">return function</span><span class="s1">(</span><span class="s2">name</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">methodName </span><span class="s1">= </span><span class="s0">&quot;on&quot; </span><span class="s1">+ </span><span class="s2">name</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+            <span class="s3">var </span><span class="s2">method </span><span class="s1">= </span><span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">[</span><span class="s2">methodName</span><span class="s1">];</span>
+            <span class="s3">if </span><span class="s1">(!</span><span class="s2">method</span><span class="s1">) </span><span class="s3">return false</span><span class="s1">;</span>
+            <span class="s2">method</span><span class="s1">.</span><span class="s2">apply</span><span class="s1">(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">global</span><span class="s1">, [].</span><span class="s2">slice</span><span class="s1">.</span><span class="s2">call</span><span class="s1">(</span><span class="s2">arguments</span><span class="s1">, </span><span class="s5">1</span><span class="s1">));</span>
+            <span class="s3">return true</span><span class="s1">;</span>
+        <span class="s1">};</span>
+    <span class="s1">}</span>
+<span class="s1">})();</span>
+
+<span class="s3">function </span><span class="s2">generatePromiseLifecycleEventObject</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">) {</span>
+    <span class="s3">return </span><span class="s1">{</span><span class="s2">promise</span><span class="s1">: </span><span class="s2">promise</span><span class="s1">};</span>
+<span class="s1">}</span>
+
+<span class="s3">var </span><span class="s2">eventToObjectGenerator </span><span class="s1">= {</span>
+    <span class="s2">promiseCreated</span><span class="s1">: </span><span class="s2">generatePromiseLifecycleEventObject</span><span class="s1">,</span>
+    <span class="s2">promiseFulfilled</span><span class="s1">: </span><span class="s2">generatePromiseLifecycleEventObject</span><span class="s1">,</span>
+    <span class="s2">promiseRejected</span><span class="s1">: </span><span class="s2">generatePromiseLifecycleEventObject</span><span class="s1">,</span>
+    <span class="s2">promiseResolved</span><span class="s1">: </span><span class="s2">generatePromiseLifecycleEventObject</span><span class="s1">,</span>
+    <span class="s2">promiseCancelled</span><span class="s1">: </span><span class="s2">generatePromiseLifecycleEventObject</span><span class="s1">,</span>
+    <span class="s2">promiseChained</span><span class="s1">: </span><span class="s3">function</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">, </span><span class="s2">child</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s1">{</span><span class="s2">promise</span><span class="s1">: </span><span class="s2">promise</span><span class="s1">, </span><span class="s2">child</span><span class="s1">: </span><span class="s2">child</span><span class="s1">};</span>
+    <span class="s1">},</span>
+    <span class="s2">warning</span><span class="s1">: </span><span class="s3">function</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">warning</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s1">{</span><span class="s2">warning</span><span class="s1">: </span><span class="s2">warning</span><span class="s1">};</span>
+    <span class="s1">},</span>
+    <span class="s2">unhandledRejection</span><span class="s1">: </span><span class="s3">function </span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">reason</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s1">{</span><span class="s2">reason</span><span class="s1">: </span><span class="s2">reason</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">: </span><span class="s2">promise</span><span class="s1">};</span>
+    <span class="s1">},</span>
+    <span class="s2">rejectionHandled</span><span class="s1">: </span><span class="s2">generatePromiseLifecycleEventObject</span>
+<span class="s1">};</span>
+
+<span class="s3">var </span><span class="s2">activeFireEvent </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">name</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">globalEventFired </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+    <span class="s3">try </span><span class="s1">{</span>
+        <span class="s2">globalEventFired </span><span class="s1">= </span><span class="s2">fireGlobalEvent</span><span class="s1">.</span><span class="s2">apply</span><span class="s1">(</span><span class="s3">null</span><span class="s1">, </span><span class="s2">arguments</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s2">async</span><span class="s1">.</span><span class="s2">throwLater</span><span class="s1">(</span><span class="s2">e</span><span class="s1">);</span>
+        <span class="s2">globalEventFired </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">var </span><span class="s2">domEventFired </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+    <span class="s3">try </span><span class="s1">{</span>
+        <span class="s2">domEventFired </span><span class="s1">= </span><span class="s2">fireDomEvent</span><span class="s1">(</span><span class="s2">name</span><span class="s1">,</span>
+                    <span class="s2">eventToObjectGenerator</span><span class="s1">[</span><span class="s2">name</span><span class="s1">].</span><span class="s2">apply</span><span class="s1">(</span><span class="s3">null</span><span class="s1">, </span><span class="s2">arguments</span><span class="s1">));</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s2">async</span><span class="s1">.</span><span class="s2">throwLater</span><span class="s1">(</span><span class="s2">e</span><span class="s1">);</span>
+        <span class="s2">domEventFired </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s3">return </span><span class="s2">domEventFired </span><span class="s1">|| </span><span class="s2">globalEventFired</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">config </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">opts</span><span class="s1">) {</span>
+    <span class="s2">opts </span><span class="s1">= </span><span class="s2">Object</span><span class="s1">(</span><span class="s2">opts</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s0">&quot;longStackTraces&quot; </span><span class="s3">in </span><span class="s2">opts</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">opts</span><span class="s1">.</span><span class="s2">longStackTraces</span><span class="s1">) {</span>
+            <span class="s2">Promise</span><span class="s1">.</span><span class="s2">longStackTraces</span><span class="s1">();</span>
+        <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">opts</span><span class="s1">.</span><span class="s2">longStackTraces </span><span class="s1">&amp;&amp; </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">hasLongStackTraces</span><span class="s1">()) {</span>
+            <span class="s2">disableLongStackTraces</span><span class="s1">();</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s0">&quot;warnings&quot; </span><span class="s3">in </span><span class="s2">opts</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">warningsOption </span><span class="s1">= </span><span class="s2">opts</span><span class="s1">.</span><span class="s2">warnings</span><span class="s1">;</span>
+        <span class="s2">config</span><span class="s1">.</span><span class="s2">warnings </span><span class="s1">= !!</span><span class="s2">warningsOption</span><span class="s1">;</span>
+        <span class="s2">wForgottenReturn </span><span class="s1">= </span><span class="s2">config</span><span class="s1">.</span><span class="s2">warnings</span><span class="s1">;</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">isObject</span><span class="s1">(</span><span class="s2">warningsOption</span><span class="s1">)) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s0">&quot;wForgottenReturn&quot; </span><span class="s3">in </span><span class="s2">warningsOption</span><span class="s1">) {</span>
+                <span class="s2">wForgottenReturn </span><span class="s1">= !!</span><span class="s2">warningsOption</span><span class="s1">.</span><span class="s2">wForgottenReturn</span><span class="s1">;</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s0">&quot;cancellation&quot; </span><span class="s3">in </span><span class="s2">opts </span><span class="s1">&amp;&amp; </span><span class="s2">opts</span><span class="s1">.</span><span class="s2">cancellation </span><span class="s1">&amp;&amp; !</span><span class="s2">config</span><span class="s1">.</span><span class="s2">cancellation</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">async</span><span class="s1">.</span><span class="s2">haveItemsQueued</span><span class="s1">()) {</span>
+            <span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(</span>
+                <span class="s0">&quot;cannot enable cancellation after promises are in use&quot;</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_clearCancellationData </span><span class="s1">=</span>
+            <span class="s2">cancellationClearCancellationData</span><span class="s1">;</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_propagateFrom </span><span class="s1">= </span><span class="s2">cancellationPropagateFrom</span><span class="s1">;</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_onCancel </span><span class="s1">= </span><span class="s2">cancellationOnCancel</span><span class="s1">;</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_setOnCancel </span><span class="s1">= </span><span class="s2">cancellationSetOnCancel</span><span class="s1">;</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_attachCancellationCallback </span><span class="s1">=</span>
+            <span class="s2">cancellationAttachCancellationCallback</span><span class="s1">;</span>
+        <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_execute </span><span class="s1">= </span><span class="s2">cancellationExecute</span><span class="s1">;</span>
+        <span class="s2">propagateFromFunction </span><span class="s1">= </span><span class="s2">cancellationPropagateFrom</span><span class="s1">;</span>
+        <span class="s2">config</span><span class="s1">.</span><span class="s2">cancellation </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s0">&quot;monitoring&quot; </span><span class="s3">in </span><span class="s2">opts</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">opts</span><span class="s1">.</span><span class="s2">monitoring </span><span class="s1">&amp;&amp; !</span><span class="s2">config</span><span class="s1">.</span><span class="s2">monitoring</span><span class="s1">) {</span>
+            <span class="s2">config</span><span class="s1">.</span><span class="s2">monitoring </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+            <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_fireEvent </span><span class="s1">= </span><span class="s2">activeFireEvent</span><span class="s1">;</span>
+        <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">opts</span><span class="s1">.</span><span class="s2">monitoring </span><span class="s1">&amp;&amp; </span><span class="s2">config</span><span class="s1">.</span><span class="s2">monitoring</span><span class="s1">) {</span>
+            <span class="s2">config</span><span class="s1">.</span><span class="s2">monitoring </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+            <span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_fireEvent </span><span class="s1">= </span><span class="s2">defaultFireEvent</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s0">&quot;asyncHooks&quot; </span><span class="s3">in </span><span class="s2">opts </span><span class="s1">&amp;&amp; </span><span class="s2">util</span><span class="s1">.</span><span class="s2">nodeSupportsAsyncResource</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">prev </span><span class="s1">= </span><span class="s2">config</span><span class="s1">.</span><span class="s2">asyncHooks</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">cur </span><span class="s1">= !!</span><span class="s2">opts</span><span class="s1">.</span><span class="s2">asyncHooks</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">prev </span><span class="s1">!== </span><span class="s2">cur</span><span class="s1">) {</span>
+            <span class="s2">config</span><span class="s1">.</span><span class="s2">asyncHooks </span><span class="s1">= </span><span class="s2">cur</span><span class="s1">;</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">cur</span><span class="s1">) {</span>
+                <span class="s2">enableAsyncHooks</span><span class="s1">();</span>
+            <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                <span class="s2">disableAsyncHooks</span><span class="s1">();</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">Promise</span><span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">function </span><span class="s2">defaultFireEvent</span><span class="s1">() { </span><span class="s3">return false</span><span class="s1">; }</span>
+
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_fireEvent </span><span class="s1">= </span><span class="s2">defaultFireEvent</span><span class="s1">;</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_execute </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">executor</span><span class="s1">, </span><span class="s2">resolve</span><span class="s1">, </span><span class="s2">reject</span><span class="s1">) {</span>
+    <span class="s3">try </span><span class="s1">{</span>
+        <span class="s2">executor</span><span class="s1">(</span><span class="s2">resolve</span><span class="s1">, </span><span class="s2">reject</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">e</span><span class="s1">;</span>
+    <span class="s1">}</span>
+<span class="s1">};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_onCancel </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_setOnCancel </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">handler</span><span class="s1">) { ; };</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_attachCancellationCallback </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">) {</span>
+    <span class="s1">;</span>
+<span class="s1">};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_captureStackTrace </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_attachExtraTrace </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_dereferenceTrace </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_clearCancellationData </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {};</span>
+<span class="s2">Promise</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">_propagateFrom </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">parent</span><span class="s1">, </span><span class="s2">flags</span><span class="s1">) {</span>
+    <span class="s1">;</span>
+    <span class="s1">;</span>
+<span class="s1">};</span>
+
+<span class="s3">function </span><span class="s2">cancellationExecute</span><span class="s1">(</span><span class="s2">executor</span><span class="s1">, </span><span class="s2">resolve</span><span class="s1">, </span><span class="s2">reject</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">promise </span><span class="s1">= </span><span class="s3">this</span><span class="s1">;</span>
+    <span class="s3">try </span><span class="s1">{</span>
+        <span class="s2">executor</span><span class="s1">(</span><span class="s2">resolve</span><span class="s1">, </span><span class="s2">reject</span><span class="s1">, </span><span class="s3">function</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">onCancel </span><span class="s1">!== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+                <span class="s3">throw new </span><span class="s2">TypeError</span><span class="s1">(</span><span class="s0">&quot;onCancel must be a function, got: &quot; </span><span class="s1">+</span>
+                                    <span class="s2">util</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">));</span>
+            <span class="s1">}</span>
+            <span class="s2">promise</span><span class="s1">.</span><span class="s2">_attachCancellationCallback</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">);</span>
+        <span class="s1">});</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">e</span><span class="s1">;</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">cancellationAttachCancellationCallback</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_isCancellable</span><span class="s1">()) </span><span class="s3">return this</span><span class="s1">;</span>
+
+    <span class="s3">var </span><span class="s2">previousOnCancel </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_onCancel</span><span class="s1">();</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">previousOnCancel </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">isArray</span><span class="s1">(</span><span class="s2">previousOnCancel</span><span class="s1">)) {</span>
+            <span class="s2">previousOnCancel</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s3">this</span><span class="s1">.</span><span class="s2">_setOnCancel</span><span class="s1">([</span><span class="s2">previousOnCancel</span><span class="s1">, </span><span class="s2">onCancel</span><span class="s1">]);</span>
+        <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_setOnCancel</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">cancellationOnCancel</span><span class="s1">() {</span>
+    <span class="s3">return this</span><span class="s1">.</span><span class="s2">_onCancelField</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">cancellationSetOnCancel</span><span class="s1">(</span><span class="s2">onCancel</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_onCancelField </span><span class="s1">= </span><span class="s2">onCancel</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">cancellationClearCancellationData</span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_cancellationParent </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_onCancelField </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">cancellationPropagateFrom</span><span class="s1">(</span><span class="s2">parent</span><span class="s1">, </span><span class="s2">flags</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">((</span><span class="s2">flags </span><span class="s1">&amp; </span><span class="s5">1</span><span class="s1">) !== </span><span class="s5">0</span><span class="s1">) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_cancellationParent </span><span class="s1">= </span><span class="s2">parent</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">branchesRemainingToCancel </span><span class="s1">= </span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_branchesRemainingToCancel</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">branchesRemainingToCancel </span><span class="s1">=== </span><span class="s2">undefined</span><span class="s1">) {</span>
+            <span class="s2">branchesRemainingToCancel </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s2">parent</span><span class="s1">.</span><span class="s2">_branchesRemainingToCancel </span><span class="s1">= </span><span class="s2">branchesRemainingToCancel </span><span class="s1">+ </span><span class="s5">1</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">((</span><span class="s2">flags </span><span class="s1">&amp; </span><span class="s5">2</span><span class="s1">) !== </span><span class="s5">0 </span><span class="s1">&amp;&amp; </span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_isBound</span><span class="s1">()) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_setBoundTo</span><span class="s1">(</span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_boundTo</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">bindingPropagateFrom</span><span class="s1">(</span><span class="s2">parent</span><span class="s1">, </span><span class="s2">flags</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">((</span><span class="s2">flags </span><span class="s1">&amp; </span><span class="s5">2</span><span class="s1">) !== </span><span class="s5">0 </span><span class="s1">&amp;&amp; </span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_isBound</span><span class="s1">()) {</span>
+        <span class="s3">this</span><span class="s1">.</span><span class="s2">_setBoundTo</span><span class="s1">(</span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_boundTo</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+<span class="s3">var </span><span class="s2">propagateFromFunction </span><span class="s1">= </span><span class="s2">bindingPropagateFrom</span><span class="s1">;</span>
+
+<span class="s3">function </span><span class="s2">boundValueFunction</span><span class="s1">() {</span>
+    <span class="s3">var </span><span class="s2">ret </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_boundTo</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">ret </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">ret </span><span class="s3">instanceof </span><span class="s2">Promise</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">ret</span><span class="s1">.</span><span class="s2">isFulfilled</span><span class="s1">()) {</span>
+                <span class="s3">return </span><span class="s2">ret</span><span class="s1">.</span><span class="s2">value</span><span class="s1">();</span>
+            <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                <span class="s3">return </span><span class="s2">undefined</span><span class="s1">;</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">ret</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">longStackTracesCaptureStackTrace</span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_trace </span><span class="s1">= </span><span class="s3">new </span><span class="s2">CapturedTrace</span><span class="s1">(</span><span class="s3">this</span><span class="s1">.</span><span class="s2">_peekContext</span><span class="s1">());</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">longStackTracesAttachExtraTrace</span><span class="s1">(</span><span class="s2">error</span><span class="s1">, </span><span class="s2">ignoreSelf</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">canAttachTrace</span><span class="s1">(</span><span class="s2">error</span><span class="s1">)) {</span>
+        <span class="s3">var </span><span class="s2">trace </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_trace</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">trace </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">ignoreSelf</span><span class="s1">) </span><span class="s2">trace </span><span class="s1">= </span><span class="s2">trace</span><span class="s1">.</span><span class="s2">_parent</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">trace </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+            <span class="s2">trace</span><span class="s1">.</span><span class="s2">attachExtraTrace</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">error</span><span class="s1">.</span><span class="s2">__stackCleaned__</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">parsed </span><span class="s1">= </span><span class="s2">parseStackAndMessage</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">notEnumerableProp</span><span class="s1">(</span><span class="s2">error</span><span class="s1">, </span><span class="s0">&quot;stack&quot;</span><span class="s1">,</span>
+                <span class="s2">parsed</span><span class="s1">.</span><span class="s2">message </span><span class="s1">+ </span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot; </span><span class="s1">+ </span><span class="s2">parsed</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">));</span>
+            <span class="s2">util</span><span class="s1">.</span><span class="s2">notEnumerableProp</span><span class="s1">(</span><span class="s2">error</span><span class="s1">, </span><span class="s0">&quot;__stackCleaned__&quot;</span><span class="s1">, </span><span class="s3">true</span><span class="s1">);</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">longStackTracesDereferenceTrace</span><span class="s1">() {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_trace </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">checkForgottenReturns</span><span class="s1">(</span><span class="s2">returnValue</span><span class="s1">, </span><span class="s2">promiseCreated</span><span class="s1">, </span><span class="s2">name</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">,</span>
+                               <span class="s2">parent</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">returnValue </span><span class="s1">=== </span><span class="s2">undefined </span><span class="s1">&amp;&amp; </span><span class="s2">promiseCreated </span><span class="s1">!== </span><span class="s3">null </span><span class="s1">&amp;&amp;</span>
+        <span class="s2">wForgottenReturn</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">parent </span><span class="s1">!== </span><span class="s2">undefined </span><span class="s1">&amp;&amp; </span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_returnedNonUndefined</span><span class="s1">()) </span><span class="s3">return</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">((</span><span class="s2">promise</span><span class="s1">.</span><span class="s2">_bitField </span><span class="s1">&amp; </span><span class="s5">65535</span><span class="s1">) === </span><span class="s5">0</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">name</span><span class="s1">) </span><span class="s2">name </span><span class="s1">= </span><span class="s2">name </span><span class="s1">+ </span><span class="s0">&quot; &quot;</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">handlerLine </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">creatorLine </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">promiseCreated</span><span class="s1">.</span><span class="s2">_trace</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">traceLines </span><span class="s1">= </span><span class="s2">promiseCreated</span><span class="s1">.</span><span class="s2">_trace</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">.</span><span class="s2">split</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+            <span class="s3">var </span><span class="s2">stack </span><span class="s1">= </span><span class="s2">cleanStack</span><span class="s1">(</span><span class="s2">traceLines</span><span class="s1">);</span>
+            <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s2">stack</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s5">1</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">; --</span><span class="s2">i</span><span class="s1">) {</span>
+                <span class="s3">var </span><span class="s2">line </span><span class="s1">= </span><span class="s2">stack</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+                <span class="s3">if </span><span class="s1">(!</span><span class="s2">nodeFramePattern</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">line</span><span class="s1">)) {</span>
+                    <span class="s3">var </span><span class="s2">lineMatches </span><span class="s1">= </span><span class="s2">line</span><span class="s1">.</span><span class="s2">match</span><span class="s1">(</span><span class="s2">parseLinePattern</span><span class="s1">);</span>
+                    <span class="s3">if </span><span class="s1">(</span><span class="s2">lineMatches</span><span class="s1">) {</span>
+                        <span class="s2">handlerLine  </span><span class="s1">= </span><span class="s0">&quot;at &quot; </span><span class="s1">+ </span><span class="s2">lineMatches</span><span class="s1">[</span><span class="s5">1</span><span class="s1">] +</span>
+                            <span class="s0">&quot;:&quot; </span><span class="s1">+ </span><span class="s2">lineMatches</span><span class="s1">[</span><span class="s5">2</span><span class="s1">] + </span><span class="s0">&quot;:&quot; </span><span class="s1">+ </span><span class="s2">lineMatches</span><span class="s1">[</span><span class="s5">3</span><span class="s1">] + </span><span class="s0">&quot; &quot;</span><span class="s1">;</span>
+                    <span class="s1">}</span>
+                    <span class="s3">break</span><span class="s1">;</span>
+                <span class="s1">}</span>
+            <span class="s1">}</span>
+
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">stack</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">) {</span>
+                <span class="s3">var </span><span class="s2">firstUserLine </span><span class="s1">= </span><span class="s2">stack</span><span class="s1">[</span><span class="s5">0</span><span class="s1">];</span>
+                <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">traceLines</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+
+                    <span class="s3">if </span><span class="s1">(</span><span class="s2">traceLines</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] === </span><span class="s2">firstUserLine</span><span class="s1">) {</span>
+                        <span class="s3">if </span><span class="s1">(</span><span class="s2">i </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">) {</span>
+                            <span class="s2">creatorLine </span><span class="s1">= </span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot; </span><span class="s1">+ </span><span class="s2">traceLines</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s5">1</span><span class="s1">];</span>
+                        <span class="s1">}</span>
+                        <span class="s3">break</span><span class="s1">;</span>
+                    <span class="s1">}</span>
+                <span class="s1">}</span>
+
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+        <span class="s3">var </span><span class="s2">msg </span><span class="s1">= </span><span class="s0">&quot;a promise was created in a &quot; </span><span class="s1">+ </span><span class="s2">name </span><span class="s1">+</span>
+            <span class="s0">&quot;handler &quot; </span><span class="s1">+ </span><span class="s2">handlerLine </span><span class="s1">+ </span><span class="s0">&quot;but was not returned from it, &quot; </span><span class="s1">+</span>
+            <span class="s0">&quot;see http://goo.gl/rRqMUw&quot; </span><span class="s1">+</span>
+            <span class="s2">creatorLine</span><span class="s1">;</span>
+        <span class="s2">promise</span><span class="s1">.</span><span class="s2">_warn</span><span class="s1">(</span><span class="s2">msg</span><span class="s1">, </span><span class="s3">true</span><span class="s1">, </span><span class="s2">promiseCreated</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">deprecated</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">replacement</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">message </span><span class="s1">= </span><span class="s2">name </span><span class="s1">+</span>
+        <span class="s0">&quot; is deprecated and will be removed in a future version.&quot;</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">replacement</span><span class="s1">) </span><span class="s2">message </span><span class="s1">+= </span><span class="s0">&quot; Use &quot; </span><span class="s1">+ </span><span class="s2">replacement </span><span class="s1">+ </span><span class="s0">&quot; instead.&quot;</span><span class="s1">;</span>
+    <span class="s3">return </span><span class="s2">warn</span><span class="s1">(</span><span class="s2">message</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">warn</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">shouldUseOwnTrace</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">config</span><span class="s1">.</span><span class="s2">warnings</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">warning </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Warning</span><span class="s1">(</span><span class="s2">message</span><span class="s1">);</span>
+    <span class="s3">var </span><span class="s2">ctx</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">shouldUseOwnTrace</span><span class="s1">) {</span>
+        <span class="s2">promise</span><span class="s1">.</span><span class="s2">_attachExtraTrace</span><span class="s1">(</span><span class="s2">warning</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces </span><span class="s1">&amp;&amp; (</span><span class="s2">ctx </span><span class="s1">= </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">_peekContext</span><span class="s1">())) {</span>
+        <span class="s2">ctx</span><span class="s1">.</span><span class="s2">attachExtraTrace</span><span class="s1">(</span><span class="s2">warning</span><span class="s1">);</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s3">var </span><span class="s2">parsed </span><span class="s1">= </span><span class="s2">parseStackAndMessage</span><span class="s1">(</span><span class="s2">warning</span><span class="s1">);</span>
+        <span class="s2">warning</span><span class="s1">.</span><span class="s2">stack </span><span class="s1">= </span><span class="s2">parsed</span><span class="s1">.</span><span class="s2">message </span><span class="s1">+ </span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot; </span><span class="s1">+ </span><span class="s2">parsed</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">activeFireEvent</span><span class="s1">(</span><span class="s0">&quot;warning&quot;</span><span class="s1">, </span><span class="s2">warning</span><span class="s1">)) {</span>
+        <span class="s2">formatAndLogError</span><span class="s1">(</span><span class="s2">warning</span><span class="s1">, </span><span class="s0">&quot;&quot;</span><span class="s1">, </span><span class="s3">true</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">reconstructStack</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">stacks</span><span class="s1">) {</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">stacks</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s5">1</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">push</span><span class="s1">(</span><span class="s0">&quot;From previous event:&quot;</span><span class="s1">);</span>
+        <span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] = </span><span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">join</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">stacks</span><span class="s1">.</span><span class="s2">length</span><span class="s1">) {</span>
+        <span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">] = </span><span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">join</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">message </span><span class="s1">+ </span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot; </span><span class="s1">+ </span><span class="s2">stacks</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">removeDuplicateOrEmptyJumps</span><span class="s1">(</span><span class="s2">stacks</span><span class="s1">) {</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">stacks</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">length </span><span class="s1">=== </span><span class="s5">0 </span><span class="s1">||</span>
+            <span class="s1">((</span><span class="s2">i </span><span class="s1">+ </span><span class="s5">1 </span><span class="s1">&lt; </span><span class="s2">stacks</span><span class="s1">.</span><span class="s2">length</span><span class="s1">) &amp;&amp; </span><span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">][</span><span class="s5">0</span><span class="s1">] === </span><span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">+</span><span class="s5">1</span><span class="s1">][</span><span class="s5">0</span><span class="s1">])) {</span>
+            <span class="s2">stacks</span><span class="s1">.</span><span class="s2">splice</span><span class="s1">(</span><span class="s2">i</span><span class="s1">, </span><span class="s5">1</span><span class="s1">);</span>
+            <span class="s2">i</span><span class="s1">--;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">removeCommonRoots</span><span class="s1">(</span><span class="s2">stacks</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">current </span><span class="s1">= </span><span class="s2">stacks</span><span class="s1">[</span><span class="s5">0</span><span class="s1">];</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">1</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">stacks</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">prev </span><span class="s1">= </span><span class="s2">stacks</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+        <span class="s3">var </span><span class="s2">currentLastIndex </span><span class="s1">= </span><span class="s2">current</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s5">1</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">currentLastLine </span><span class="s1">= </span><span class="s2">current</span><span class="s1">[</span><span class="s2">currentLastIndex</span><span class="s1">];</span>
+        <span class="s3">var </span><span class="s2">commonRootMeetPoint </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">j </span><span class="s1">= </span><span class="s2">prev</span><span class="s1">.</span><span class="s2">length </span><span class="s1">- </span><span class="s5">1</span><span class="s1">; </span><span class="s2">j </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">; --</span><span class="s2">j</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">prev</span><span class="s1">[</span><span class="s2">j</span><span class="s1">] === </span><span class="s2">currentLastLine</span><span class="s1">) {</span>
+                <span class="s2">commonRootMeetPoint </span><span class="s1">= </span><span class="s2">j</span><span class="s1">;</span>
+                <span class="s3">break</span><span class="s1">;</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+
+        <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">j </span><span class="s1">= </span><span class="s2">commonRootMeetPoint</span><span class="s1">; </span><span class="s2">j </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">; --</span><span class="s2">j</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">line </span><span class="s1">= </span><span class="s2">prev</span><span class="s1">[</span><span class="s2">j</span><span class="s1">];</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">current</span><span class="s1">[</span><span class="s2">currentLastIndex</span><span class="s1">] === </span><span class="s2">line</span><span class="s1">) {</span>
+                <span class="s2">current</span><span class="s1">.</span><span class="s2">pop</span><span class="s1">();</span>
+                <span class="s2">currentLastIndex</span><span class="s1">--;</span>
+            <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                <span class="s3">break</span><span class="s1">;</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+        <span class="s2">current </span><span class="s1">= </span><span class="s2">prev</span><span class="s1">;</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">cleanStack</span><span class="s1">(</span><span class="s2">stack</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">ret </span><span class="s1">= [];</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">stack</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">line </span><span class="s1">= </span><span class="s2">stack</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+        <span class="s3">var </span><span class="s2">isTraceLine </span><span class="s1">= </span><span class="s0">&quot;    (No stack trace)&quot; </span><span class="s1">=== </span><span class="s2">line </span><span class="s1">||</span>
+            <span class="s2">stackFramePattern</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">line</span><span class="s1">);</span>
+        <span class="s3">var </span><span class="s2">isInternalFrame </span><span class="s1">= </span><span class="s2">isTraceLine </span><span class="s1">&amp;&amp; </span><span class="s2">shouldIgnore</span><span class="s1">(</span><span class="s2">line</span><span class="s1">);</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">isTraceLine </span><span class="s1">&amp;&amp; !</span><span class="s2">isInternalFrame</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">indentStackFrames </span><span class="s1">&amp;&amp; </span><span class="s2">line</span><span class="s1">.</span><span class="s2">charAt</span><span class="s1">(</span><span class="s5">0</span><span class="s1">) !== </span><span class="s0">&quot; &quot;</span><span class="s1">) {</span>
+                <span class="s2">line </span><span class="s1">= </span><span class="s0">&quot;    &quot; </span><span class="s1">+ </span><span class="s2">line</span><span class="s1">;</span>
+            <span class="s1">}</span>
+            <span class="s2">ret</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">line</span><span class="s1">);</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">ret</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">stackFramesAsArray</span><span class="s1">(</span><span class="s2">error</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">stack </span><span class="s1">= </span><span class="s2">error</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">.</span><span class="s2">replace</span><span class="s1">(</span><span class="s4">/\s+$/g</span><span class="s1">, </span><span class="s0">&quot;&quot;</span><span class="s1">).</span><span class="s2">split</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">stack</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">line </span><span class="s1">= </span><span class="s2">stack</span><span class="s1">[</span><span class="s2">i</span><span class="s1">];</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s0">&quot;    (No stack trace)&quot; </span><span class="s1">=== </span><span class="s2">line </span><span class="s1">|| </span><span class="s2">stackFramePattern</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">line</span><span class="s1">)) {</span>
+            <span class="s3">break</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">i </span><span class="s1">&gt; </span><span class="s5">0 </span><span class="s1">&amp;&amp; </span><span class="s2">error</span><span class="s1">.</span><span class="s2">name </span><span class="s1">!= </span><span class="s0">&quot;SyntaxError&quot;</span><span class="s1">) {</span>
+        <span class="s2">stack </span><span class="s1">= </span><span class="s2">stack</span><span class="s1">.</span><span class="s2">slice</span><span class="s1">(</span><span class="s2">i</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">stack</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">parseStackAndMessage</span><span class="s1">(</span><span class="s2">error</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">stack </span><span class="s1">= </span><span class="s2">error</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">message </span><span class="s1">= </span><span class="s2">error</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">();</span>
+    <span class="s2">stack </span><span class="s1">= </span><span class="s3">typeof </span><span class="s2">stack </span><span class="s1">=== </span><span class="s0">&quot;string&quot; </span><span class="s1">&amp;&amp; </span><span class="s2">stack</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">0</span>
+                <span class="s1">? </span><span class="s2">stackFramesAsArray</span><span class="s1">(</span><span class="s2">error</span><span class="s1">) : [</span><span class="s0">&quot;    (No stack trace)&quot;</span><span class="s1">];</span>
+    <span class="s3">return </span><span class="s1">{</span>
+        <span class="s2">message</span><span class="s1">: </span><span class="s2">message</span><span class="s1">,</span>
+        <span class="s2">stack</span><span class="s1">: </span><span class="s2">error</span><span class="s1">.</span><span class="s2">name </span><span class="s1">== </span><span class="s0">&quot;SyntaxError&quot; </span><span class="s1">? </span><span class="s2">stack </span><span class="s1">: </span><span class="s2">cleanStack</span><span class="s1">(</span><span class="s2">stack</span><span class="s1">)</span>
+    <span class="s1">};</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">formatAndLogError</span><span class="s1">(</span><span class="s2">error</span><span class="s1">, </span><span class="s2">title</span><span class="s1">, </span><span class="s2">isSoft</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">console </span><span class="s1">!== </span><span class="s0">&quot;undefined&quot;</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">message</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">isObject</span><span class="s1">(</span><span class="s2">error</span><span class="s1">)) {</span>
+            <span class="s3">var </span><span class="s2">stack </span><span class="s1">= </span><span class="s2">error</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">;</span>
+            <span class="s2">message </span><span class="s1">= </span><span class="s2">title </span><span class="s1">+ </span><span class="s2">formatStack</span><span class="s1">(</span><span class="s2">stack</span><span class="s1">, </span><span class="s2">error</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s2">message </span><span class="s1">= </span><span class="s2">title </span><span class="s1">+ </span><span class="s2">String</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">printWarning </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+            <span class="s2">printWarning</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">isSoft</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s3">else if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">console</span><span class="s1">.</span><span class="s2">log </span><span class="s1">=== </span><span class="s0">&quot;function&quot; </span><span class="s1">||</span>
+            <span class="s3">typeof </span><span class="s2">console</span><span class="s1">.</span><span class="s2">log </span><span class="s1">=== </span><span class="s0">&quot;object&quot;</span><span class="s1">) {</span>
+            <span class="s2">console</span><span class="s1">.</span><span class="s2">log</span><span class="s1">(</span><span class="s2">message</span><span class="s1">);</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">fireRejectionEvent</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">localHandler</span><span class="s1">, </span><span class="s2">reason</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">localEventFired </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+    <span class="s3">try </span><span class="s1">{</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">localHandler </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+            <span class="s2">localEventFired </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">&quot;rejectionHandled&quot;</span><span class="s1">) {</span>
+                <span class="s2">localHandler</span><span class="s1">(</span><span class="s2">promise</span><span class="s1">);</span>
+            <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                <span class="s2">localHandler</span><span class="s1">(</span><span class="s2">reason</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">);</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s2">async</span><span class="s1">.</span><span class="s2">throwLater</span><span class="s1">(</span><span class="s2">e</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">name </span><span class="s1">=== </span><span class="s0">&quot;unhandledRejection&quot;</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(!</span><span class="s2">activeFireEvent</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">reason</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">) &amp;&amp; !</span><span class="s2">localEventFired</span><span class="s1">) {</span>
+            <span class="s2">formatAndLogError</span><span class="s1">(</span><span class="s2">reason</span><span class="s1">, </span><span class="s0">&quot;Unhandled rejection &quot;</span><span class="s1">);</span>
+        <span class="s1">}</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s2">activeFireEvent</span><span class="s1">(</span><span class="s2">name</span><span class="s1">, </span><span class="s2">promise</span><span class="s1">);</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">formatNonError</span><span class="s1">(</span><span class="s2">obj</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">str</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">obj </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+        <span class="s2">str </span><span class="s1">= </span><span class="s0">&quot;[function &quot; </span><span class="s1">+</span>
+            <span class="s1">(</span><span class="s2">obj</span><span class="s1">.</span><span class="s2">name </span><span class="s1">|| </span><span class="s0">&quot;anonymous&quot;</span><span class="s1">) +</span>
+            <span class="s0">&quot;]&quot;</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+        <span class="s2">str </span><span class="s1">= </span><span class="s2">obj </span><span class="s1">&amp;&amp; </span><span class="s3">typeof </span><span class="s2">obj</span><span class="s1">.</span><span class="s2">toString </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span>
+            <span class="s1">? </span><span class="s2">obj</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">() : </span><span class="s2">util</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">(</span><span class="s2">obj</span><span class="s1">);</span>
+        <span class="s3">var </span><span class="s2">ruselessToString </span><span class="s1">= </span><span class="s4">/\[object [a-zA-Z0-9$_]+\]/</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">ruselessToString</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">str</span><span class="s1">)) {</span>
+            <span class="s3">try </span><span class="s1">{</span>
+                <span class="s3">var </span><span class="s2">newStr </span><span class="s1">= </span><span class="s2">JSON</span><span class="s1">.</span><span class="s2">stringify</span><span class="s1">(</span><span class="s2">obj</span><span class="s1">);</span>
+                <span class="s2">str </span><span class="s1">= </span><span class="s2">newStr</span><span class="s1">;</span>
+            <span class="s1">}</span>
+            <span class="s3">catch</span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">str</span><span class="s1">.</span><span class="s2">length </span><span class="s1">=== </span><span class="s5">0</span><span class="s1">) {</span>
+            <span class="s2">str </span><span class="s1">= </span><span class="s0">&quot;(empty array)&quot;</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s1">(</span><span class="s0">&quot;(&lt;&quot; </span><span class="s1">+ </span><span class="s2">snip</span><span class="s1">(</span><span class="s2">str</span><span class="s1">) + </span><span class="s0">&quot;&gt;, no stack trace)&quot;</span><span class="s1">);</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">snip</span><span class="s1">(</span><span class="s2">str</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">maxChars </span><span class="s1">= </span><span class="s5">41</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">str</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&lt; </span><span class="s2">maxChars</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s2">str</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s3">return </span><span class="s2">str</span><span class="s1">.</span><span class="s2">substr</span><span class="s1">(</span><span class="s5">0</span><span class="s1">, </span><span class="s2">maxChars </span><span class="s1">- </span><span class="s5">3</span><span class="s1">) + </span><span class="s0">&quot;...&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">longStackTracesIsSupported</span><span class="s1">() {</span>
+    <span class="s3">return typeof </span><span class="s2">captureStackTrace </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">var </span><span class="s2">shouldIgnore </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() { </span><span class="s3">return false</span><span class="s1">; };</span>
+<span class="s3">var </span><span class="s2">parseLineInfoRegex </span><span class="s1">= </span><span class="s4">/[\/&lt;\(]([^:\/]+):(\d+):(?:\d+)\)?\s*$/</span><span class="s1">;</span>
+<span class="s3">function </span><span class="s2">parseLineInfo</span><span class="s1">(</span><span class="s2">line</span><span class="s1">) {</span>
+    <span class="s3">var </span><span class="s2">matches </span><span class="s1">= </span><span class="s2">line</span><span class="s1">.</span><span class="s2">match</span><span class="s1">(</span><span class="s2">parseLineInfoRegex</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">matches</span><span class="s1">) {</span>
+        <span class="s3">return </span><span class="s1">{</span>
+            <span class="s2">fileName</span><span class="s1">: </span><span class="s2">matches</span><span class="s1">[</span><span class="s5">1</span><span class="s1">],</span>
+            <span class="s2">line</span><span class="s1">: </span><span class="s2">parseInt</span><span class="s1">(</span><span class="s2">matches</span><span class="s1">[</span><span class="s5">2</span><span class="s1">], </span><span class="s5">10</span><span class="s1">)</span>
+        <span class="s1">};</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">setBounds</span><span class="s1">(</span><span class="s2">firstLineError</span><span class="s1">, </span><span class="s2">lastLineError</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(!</span><span class="s2">longStackTracesIsSupported</span><span class="s1">()) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">firstStackLines </span><span class="s1">= (</span><span class="s2">firstLineError</span><span class="s1">.</span><span class="s2">stack </span><span class="s1">|| </span><span class="s0">&quot;&quot;</span><span class="s1">).</span><span class="s2">split</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+    <span class="s3">var </span><span class="s2">lastStackLines </span><span class="s1">= (</span><span class="s2">lastLineError</span><span class="s1">.</span><span class="s2">stack </span><span class="s1">|| </span><span class="s0">&quot;&quot;</span><span class="s1">).</span><span class="s2">split</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+    <span class="s3">var </span><span class="s2">firstIndex </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">lastIndex </span><span class="s1">= -</span><span class="s5">1</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">firstFileName</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">lastFileName</span><span class="s1">;</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">firstStackLines</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">result </span><span class="s1">= </span><span class="s2">parseLineInfo</span><span class="s1">(</span><span class="s2">firstStackLines</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]);</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">result</span><span class="s1">) {</span>
+            <span class="s2">firstFileName </span><span class="s1">= </span><span class="s2">result</span><span class="s1">.</span><span class="s2">fileName</span><span class="s1">;</span>
+            <span class="s2">firstIndex </span><span class="s1">= </span><span class="s2">result</span><span class="s1">.</span><span class="s2">line</span><span class="s1">;</span>
+            <span class="s3">break</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">lastStackLines</span><span class="s1">.</span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">result </span><span class="s1">= </span><span class="s2">parseLineInfo</span><span class="s1">(</span><span class="s2">lastStackLines</span><span class="s1">[</span><span class="s2">i</span><span class="s1">]);</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">result</span><span class="s1">) {</span>
+            <span class="s2">lastFileName </span><span class="s1">= </span><span class="s2">result</span><span class="s1">.</span><span class="s2">fileName</span><span class="s1">;</span>
+            <span class="s2">lastIndex </span><span class="s1">= </span><span class="s2">result</span><span class="s1">.</span><span class="s2">line</span><span class="s1">;</span>
+            <span class="s3">break</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">firstIndex </span><span class="s1">&lt; </span><span class="s5">0 </span><span class="s1">|| </span><span class="s2">lastIndex </span><span class="s1">&lt; </span><span class="s5">0 </span><span class="s1">|| !</span><span class="s2">firstFileName </span><span class="s1">|| !</span><span class="s2">lastFileName </span><span class="s1">||</span>
+        <span class="s2">firstFileName </span><span class="s1">!== </span><span class="s2">lastFileName </span><span class="s1">|| </span><span class="s2">firstIndex </span><span class="s1">&gt;= </span><span class="s2">lastIndex</span><span class="s1">) {</span>
+        <span class="s3">return</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">shouldIgnore </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">line</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">bluebirdFramePattern</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">line</span><span class="s1">)) </span><span class="s3">return true</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">info </span><span class="s1">= </span><span class="s2">parseLineInfo</span><span class="s1">(</span><span class="s2">line</span><span class="s1">);</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">info</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">info</span><span class="s1">.</span><span class="s2">fileName </span><span class="s1">=== </span><span class="s2">firstFileName </span><span class="s1">&amp;&amp;</span>
+                <span class="s1">(</span><span class="s2">firstIndex </span><span class="s1">&lt;= </span><span class="s2">info</span><span class="s1">.</span><span class="s2">line </span><span class="s1">&amp;&amp; </span><span class="s2">info</span><span class="s1">.</span><span class="s2">line </span><span class="s1">&lt;= </span><span class="s2">lastIndex</span><span class="s1">)) {</span>
+                <span class="s3">return true</span><span class="s1">;</span>
+            <span class="s1">}</span>
+        <span class="s1">}</span>
+        <span class="s3">return false</span><span class="s1">;</span>
+    <span class="s1">};</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">CapturedTrace</span><span class="s1">(</span><span class="s2">parent</span><span class="s1">) {</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_parent </span><span class="s1">= </span><span class="s2">parent</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">_promisesCreated </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">length </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_length </span><span class="s1">= </span><span class="s5">1 </span><span class="s1">+ (</span><span class="s2">parent </span><span class="s1">=== </span><span class="s2">undefined </span><span class="s1">? </span><span class="s5">0 </span><span class="s1">: </span><span class="s2">parent</span><span class="s1">.</span><span class="s2">_length</span><span class="s1">);</span>
+    <span class="s2">captureStackTrace</span><span class="s1">(</span><span class="s3">this</span><span class="s1">, </span><span class="s2">CapturedTrace</span><span class="s1">);</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">32</span><span class="s1">) </span><span class="s3">this</span><span class="s1">.</span><span class="s2">uncycle</span><span class="s1">();</span>
+<span class="s1">}</span>
+<span class="s2">util</span><span class="s1">.</span><span class="s2">inherits</span><span class="s1">(</span><span class="s2">CapturedTrace</span><span class="s1">, </span><span class="s2">Error</span><span class="s1">);</span>
+<span class="s2">Context</span><span class="s1">.</span><span class="s2">CapturedTrace </span><span class="s1">= </span><span class="s2">CapturedTrace</span><span class="s1">;</span>
+
+<span class="s2">CapturedTrace</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">uncycle </span><span class="s1">= </span><span class="s3">function</span><span class="s1">() {</span>
+    <span class="s3">var </span><span class="s2">length </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_length</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">length </span><span class="s1">&lt; </span><span class="s5">2</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">nodes </span><span class="s1">= [];</span>
+    <span class="s3">var </span><span class="s2">stackToIndex </span><span class="s1">= {};</span>
+
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">, </span><span class="s2">node </span><span class="s1">= </span><span class="s3">this</span><span class="s1">; </span><span class="s2">node </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s2">nodes</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">node</span><span class="s1">);</span>
+        <span class="s2">node </span><span class="s1">= </span><span class="s2">node</span><span class="s1">.</span><span class="s2">_parent</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s2">length </span><span class="s1">= </span><span class="s3">this</span><span class="s1">.</span><span class="s2">_length </span><span class="s1">= </span><span class="s2">i</span><span class="s1">;</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s2">length </span><span class="s1">- </span><span class="s5">1</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">; --</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">stack </span><span class="s1">= </span><span class="s2">nodes</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">stack</span><span class="s1">;</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">stackToIndex</span><span class="s1">[</span><span class="s2">stack</span><span class="s1">] === </span><span class="s2">undefined</span><span class="s1">) {</span>
+            <span class="s2">stackToIndex</span><span class="s1">[</span><span class="s2">stack</span><span class="s1">] = </span><span class="s2">i</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">i </span><span class="s1">= </span><span class="s5">0</span><span class="s1">; </span><span class="s2">i </span><span class="s1">&lt; </span><span class="s2">length</span><span class="s1">; ++</span><span class="s2">i</span><span class="s1">) {</span>
+        <span class="s3">var </span><span class="s2">currentStack </span><span class="s1">= </span><span class="s2">nodes</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">stack</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">index </span><span class="s1">= </span><span class="s2">stackToIndex</span><span class="s1">[</span><span class="s2">currentStack</span><span class="s1">];</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">index </span><span class="s1">!== </span><span class="s2">undefined </span><span class="s1">&amp;&amp; </span><span class="s2">index </span><span class="s1">!== </span><span class="s2">i</span><span class="s1">) {</span>
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">index </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">) {</span>
+                <span class="s2">nodes</span><span class="s1">[</span><span class="s2">index </span><span class="s1">- </span><span class="s5">1</span><span class="s1">].</span><span class="s2">_parent </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                <span class="s2">nodes</span><span class="s1">[</span><span class="s2">index </span><span class="s1">- </span><span class="s5">1</span><span class="s1">].</span><span class="s2">_length </span><span class="s1">= </span><span class="s5">1</span><span class="s1">;</span>
+            <span class="s1">}</span>
+            <span class="s2">nodes</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">_parent </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+            <span class="s2">nodes</span><span class="s1">[</span><span class="s2">i</span><span class="s1">].</span><span class="s2">_length </span><span class="s1">= </span><span class="s5">1</span><span class="s1">;</span>
+            <span class="s3">var </span><span class="s2">cycleEdgeNode </span><span class="s1">= </span><span class="s2">i </span><span class="s1">&gt; </span><span class="s5">0 </span><span class="s1">? </span><span class="s2">nodes</span><span class="s1">[</span><span class="s2">i </span><span class="s1">- </span><span class="s5">1</span><span class="s1">] : </span><span class="s3">this</span><span class="s1">;</span>
+
+            <span class="s3">if </span><span class="s1">(</span><span class="s2">index </span><span class="s1">&lt; </span><span class="s2">length </span><span class="s1">- </span><span class="s5">1</span><span class="s1">) {</span>
+                <span class="s2">cycleEdgeNode</span><span class="s1">.</span><span class="s2">_parent </span><span class="s1">= </span><span class="s2">nodes</span><span class="s1">[</span><span class="s2">index </span><span class="s1">+ </span><span class="s5">1</span><span class="s1">];</span>
+                <span class="s2">cycleEdgeNode</span><span class="s1">.</span><span class="s2">_parent</span><span class="s1">.</span><span class="s2">uncycle</span><span class="s1">();</span>
+                <span class="s2">cycleEdgeNode</span><span class="s1">.</span><span class="s2">_length </span><span class="s1">=</span>
+                    <span class="s2">cycleEdgeNode</span><span class="s1">.</span><span class="s2">_parent</span><span class="s1">.</span><span class="s2">_length </span><span class="s1">+ </span><span class="s5">1</span><span class="s1">;</span>
+            <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+                <span class="s2">cycleEdgeNode</span><span class="s1">.</span><span class="s2">_parent </span><span class="s1">= </span><span class="s2">undefined</span><span class="s1">;</span>
+                <span class="s2">cycleEdgeNode</span><span class="s1">.</span><span class="s2">_length </span><span class="s1">= </span><span class="s5">1</span><span class="s1">;</span>
+            <span class="s1">}</span>
+            <span class="s3">var </span><span class="s2">currentChildLength </span><span class="s1">= </span><span class="s2">cycleEdgeNode</span><span class="s1">.</span><span class="s2">_length </span><span class="s1">+ </span><span class="s5">1</span><span class="s1">;</span>
+            <span class="s3">for </span><span class="s1">(</span><span class="s3">var </span><span class="s2">j </span><span class="s1">= </span><span class="s2">i </span><span class="s1">- </span><span class="s5">2</span><span class="s1">; </span><span class="s2">j </span><span class="s1">&gt;= </span><span class="s5">0</span><span class="s1">; --</span><span class="s2">j</span><span class="s1">) {</span>
+                <span class="s2">nodes</span><span class="s1">[</span><span class="s2">j</span><span class="s1">].</span><span class="s2">_length </span><span class="s1">= </span><span class="s2">currentChildLength</span><span class="s1">;</span>
+                <span class="s2">currentChildLength</span><span class="s1">++;</span>
+            <span class="s1">}</span>
+            <span class="s3">return</span><span class="s1">;</span>
+        <span class="s1">}</span>
+    <span class="s1">}</span>
+<span class="s1">};</span>
+
+<span class="s2">CapturedTrace</span><span class="s1">.</span><span class="s2">prototype</span><span class="s1">.</span><span class="s2">attachExtraTrace </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">error</span><span class="s1">) {</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">error</span><span class="s1">.</span><span class="s2">__stackCleaned__</span><span class="s1">) </span><span class="s3">return</span><span class="s1">;</span>
+    <span class="s3">this</span><span class="s1">.</span><span class="s2">uncycle</span><span class="s1">();</span>
+    <span class="s3">var </span><span class="s2">parsed </span><span class="s1">= </span><span class="s2">parseStackAndMessage</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+    <span class="s3">var </span><span class="s2">message </span><span class="s1">= </span><span class="s2">parsed</span><span class="s1">.</span><span class="s2">message</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">stacks </span><span class="s1">= [</span><span class="s2">parsed</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">];</span>
+
+    <span class="s3">var </span><span class="s2">trace </span><span class="s1">= </span><span class="s3">this</span><span class="s1">;</span>
+    <span class="s3">while </span><span class="s1">(</span><span class="s2">trace </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+        <span class="s2">stacks</span><span class="s1">.</span><span class="s2">push</span><span class="s1">(</span><span class="s2">cleanStack</span><span class="s1">(</span><span class="s2">trace</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">.</span><span class="s2">split</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">)));</span>
+        <span class="s2">trace </span><span class="s1">= </span><span class="s2">trace</span><span class="s1">.</span><span class="s2">_parent</span><span class="s1">;</span>
+    <span class="s1">}</span>
+    <span class="s2">removeCommonRoots</span><span class="s1">(</span><span class="s2">stacks</span><span class="s1">);</span>
+    <span class="s2">removeDuplicateOrEmptyJumps</span><span class="s1">(</span><span class="s2">stacks</span><span class="s1">);</span>
+    <span class="s2">util</span><span class="s1">.</span><span class="s2">notEnumerableProp</span><span class="s1">(</span><span class="s2">error</span><span class="s1">, </span><span class="s0">&quot;stack&quot;</span><span class="s1">, </span><span class="s2">reconstructStack</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">stacks</span><span class="s1">));</span>
+    <span class="s2">util</span><span class="s1">.</span><span class="s2">notEnumerableProp</span><span class="s1">(</span><span class="s2">error</span><span class="s1">, </span><span class="s0">&quot;__stackCleaned__&quot;</span><span class="s1">, </span><span class="s3">true</span><span class="s1">);</span>
+<span class="s1">};</span>
+
+<span class="s3">var </span><span class="s2">captureStackTrace </span><span class="s1">= (</span><span class="s3">function </span><span class="s2">stackDetection</span><span class="s1">() {</span>
+    <span class="s3">var </span><span class="s2">v8stackFramePattern </span><span class="s1">= </span><span class="s4">/^\s*at\s*/</span><span class="s1">;</span>
+    <span class="s3">var </span><span class="s2">v8stackFormatter </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">stack</span><span class="s1">, </span><span class="s2">error</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">stack </span><span class="s1">=== </span><span class="s0">&quot;string&quot;</span><span class="s1">) </span><span class="s3">return </span><span class="s2">stack</span><span class="s1">;</span>
+
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">error</span><span class="s1">.</span><span class="s2">name </span><span class="s1">!== </span><span class="s2">undefined </span><span class="s1">&amp;&amp;</span>
+            <span class="s2">error</span><span class="s1">.</span><span class="s2">message </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+            <span class="s3">return </span><span class="s2">error</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">();</span>
+        <span class="s1">}</span>
+        <span class="s3">return </span><span class="s2">formatNonError</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+    <span class="s1">};</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">Error</span><span class="s1">.</span><span class="s2">stackTraceLimit </span><span class="s1">=== </span><span class="s0">&quot;number&quot; </span><span class="s1">&amp;&amp;</span>
+        <span class="s3">typeof </span><span class="s2">Error</span><span class="s1">.</span><span class="s2">captureStackTrace </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) {</span>
+        <span class="s2">Error</span><span class="s1">.</span><span class="s2">stackTraceLimit </span><span class="s1">+= </span><span class="s5">6</span><span class="s1">;</span>
+        <span class="s2">stackFramePattern </span><span class="s1">= </span><span class="s2">v8stackFramePattern</span><span class="s1">;</span>
+        <span class="s2">formatStack </span><span class="s1">= </span><span class="s2">v8stackFormatter</span><span class="s1">;</span>
+        <span class="s3">var </span><span class="s2">captureStackTrace </span><span class="s1">= </span><span class="s2">Error</span><span class="s1">.</span><span class="s2">captureStackTrace</span><span class="s1">;</span>
+
+        <span class="s2">shouldIgnore </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">line</span><span class="s1">) {</span>
+            <span class="s3">return </span><span class="s2">bluebirdFramePattern</span><span class="s1">.</span><span class="s2">test</span><span class="s1">(</span><span class="s2">line</span><span class="s1">);</span>
+        <span class="s1">};</span>
+        <span class="s3">return function</span><span class="s1">(</span><span class="s2">receiver</span><span class="s1">, </span><span class="s2">ignoreUntil</span><span class="s1">) {</span>
+            <span class="s2">Error</span><span class="s1">.</span><span class="s2">stackTraceLimit </span><span class="s1">+= </span><span class="s5">6</span><span class="s1">;</span>
+            <span class="s2">captureStackTrace</span><span class="s1">(</span><span class="s2">receiver</span><span class="s1">, </span><span class="s2">ignoreUntil</span><span class="s1">);</span>
+            <span class="s2">Error</span><span class="s1">.</span><span class="s2">stackTraceLimit </span><span class="s1">-= </span><span class="s5">6</span><span class="s1">;</span>
+        <span class="s1">};</span>
+    <span class="s1">}</span>
+    <span class="s3">var </span><span class="s2">err </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s1">();</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">err</span><span class="s1">.</span><span class="s2">stack </span><span class="s1">=== </span><span class="s0">&quot;string&quot; </span><span class="s1">&amp;&amp;</span>
+        <span class="s2">err</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">.</span><span class="s2">split</span><span class="s1">(</span><span class="s0">&quot;</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">)[</span><span class="s5">0</span><span class="s1">].</span><span class="s2">indexOf</span><span class="s1">(</span><span class="s0">&quot;stackDetection@&quot;</span><span class="s1">) &gt;= </span><span class="s5">0</span><span class="s1">) {</span>
+        <span class="s2">stackFramePattern </span><span class="s1">= </span><span class="s4">/@/</span><span class="s1">;</span>
+        <span class="s2">formatStack </span><span class="s1">= </span><span class="s2">v8stackFormatter</span><span class="s1">;</span>
+        <span class="s2">indentStackFrames </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s3">return function </span><span class="s2">captureStackTrace</span><span class="s1">(</span><span class="s2">o</span><span class="s1">) {</span>
+            <span class="s2">o</span><span class="s1">.</span><span class="s2">stack </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s1">().</span><span class="s2">stack</span><span class="s1">;</span>
+        <span class="s1">};</span>
+    <span class="s1">}</span>
+
+    <span class="s3">var </span><span class="s2">hasStackAfterThrow</span><span class="s1">;</span>
+    <span class="s3">try </span><span class="s1">{ </span><span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(); }</span>
+    <span class="s3">catch</span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+        <span class="s2">hasStackAfterThrow </span><span class="s1">= (</span><span class="s0">&quot;stack&quot; </span><span class="s3">in </span><span class="s2">e</span><span class="s1">);</span>
+    <span class="s1">}</span>
+    <span class="s3">if </span><span class="s1">(!(</span><span class="s0">&quot;stack&quot; </span><span class="s3">in </span><span class="s2">err</span><span class="s1">) &amp;&amp; </span><span class="s2">hasStackAfterThrow </span><span class="s1">&amp;&amp;</span>
+        <span class="s3">typeof </span><span class="s2">Error</span><span class="s1">.</span><span class="s2">stackTraceLimit </span><span class="s1">=== </span><span class="s0">&quot;number&quot;</span><span class="s1">) {</span>
+        <span class="s2">stackFramePattern </span><span class="s1">= </span><span class="s2">v8stackFramePattern</span><span class="s1">;</span>
+        <span class="s2">formatStack </span><span class="s1">= </span><span class="s2">v8stackFormatter</span><span class="s1">;</span>
+        <span class="s3">return function </span><span class="s2">captureStackTrace</span><span class="s1">(</span><span class="s2">o</span><span class="s1">) {</span>
+            <span class="s2">Error</span><span class="s1">.</span><span class="s2">stackTraceLimit </span><span class="s1">+= </span><span class="s5">6</span><span class="s1">;</span>
+            <span class="s3">try </span><span class="s1">{ </span><span class="s3">throw new </span><span class="s2">Error</span><span class="s1">(); }</span>
+            <span class="s3">catch</span><span class="s1">(</span><span class="s2">e</span><span class="s1">) { </span><span class="s2">o</span><span class="s1">.</span><span class="s2">stack </span><span class="s1">= </span><span class="s2">e</span><span class="s1">.</span><span class="s2">stack</span><span class="s1">; }</span>
+            <span class="s2">Error</span><span class="s1">.</span><span class="s2">stackTraceLimit </span><span class="s1">-= </span><span class="s5">6</span><span class="s1">;</span>
+        <span class="s1">};</span>
+    <span class="s1">}</span>
+
+    <span class="s2">formatStack </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">stack</span><span class="s1">, </span><span class="s2">error</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">stack </span><span class="s1">=== </span><span class="s0">&quot;string&quot;</span><span class="s1">) </span><span class="s3">return </span><span class="s2">stack</span><span class="s1">;</span>
+
+        <span class="s3">if </span><span class="s1">((</span><span class="s3">typeof </span><span class="s2">error </span><span class="s1">=== </span><span class="s0">&quot;object&quot; </span><span class="s1">||</span>
+            <span class="s3">typeof </span><span class="s2">error </span><span class="s1">=== </span><span class="s0">&quot;function&quot;</span><span class="s1">) &amp;&amp;</span>
+            <span class="s2">error</span><span class="s1">.</span><span class="s2">name </span><span class="s1">!== </span><span class="s2">undefined </span><span class="s1">&amp;&amp;</span>
+            <span class="s2">error</span><span class="s1">.</span><span class="s2">message </span><span class="s1">!== </span><span class="s2">undefined</span><span class="s1">) {</span>
+            <span class="s3">return </span><span class="s2">error</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">();</span>
+        <span class="s1">}</span>
+        <span class="s3">return </span><span class="s2">formatNonError</span><span class="s1">(</span><span class="s2">error</span><span class="s1">);</span>
+    <span class="s1">};</span>
+
+    <span class="s3">return null</span><span class="s1">;</span>
+
+<span class="s1">})([]);</span>
+
+<span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">console </span><span class="s1">!== </span><span class="s0">&quot;undefined&quot; </span><span class="s1">&amp;&amp; </span><span class="s3">typeof </span><span class="s2">console</span><span class="s1">.</span><span class="s2">warn </span><span class="s1">!== </span><span class="s0">&quot;undefined&quot;</span><span class="s1">) {</span>
+    <span class="s2">printWarning </span><span class="s1">= </span><span class="s3">function </span><span class="s1">(</span><span class="s2">message</span><span class="s1">) {</span>
+        <span class="s2">console</span><span class="s1">.</span><span class="s2">warn</span><span class="s1">(</span><span class="s2">message</span><span class="s1">);</span>
+    <span class="s1">};</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">util</span><span class="s1">.</span><span class="s2">isNode </span><span class="s1">&amp;&amp; </span><span class="s2">process</span><span class="s1">.</span><span class="s2">stderr</span><span class="s1">.</span><span class="s2">isTTY</span><span class="s1">) {</span>
+        <span class="s2">printWarning </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">isSoft</span><span class="s1">) {</span>
+            <span class="s3">var </span><span class="s2">color </span><span class="s1">= </span><span class="s2">isSoft </span><span class="s1">? </span><span class="s0">&quot;</span><span class="s3">\u001b</span><span class="s0">[33m&quot; </span><span class="s1">: </span><span class="s0">&quot;</span><span class="s3">\u001b</span><span class="s0">[31m&quot;</span><span class="s1">;</span>
+            <span class="s2">console</span><span class="s1">.</span><span class="s2">warn</span><span class="s1">(</span><span class="s2">color </span><span class="s1">+ </span><span class="s2">message </span><span class="s1">+ </span><span class="s0">&quot;</span><span class="s3">\u001b</span><span class="s0">[0m</span><span class="s3">\n</span><span class="s0">&quot;</span><span class="s1">);</span>
+        <span class="s1">};</span>
+    <span class="s1">} </span><span class="s3">else if </span><span class="s1">(!</span><span class="s2">util</span><span class="s1">.</span><span class="s2">isNode </span><span class="s1">&amp;&amp; </span><span class="s3">typeof </span><span class="s1">(</span><span class="s3">new </span><span class="s2">Error</span><span class="s1">().</span><span class="s2">stack</span><span class="s1">) === </span><span class="s0">&quot;string&quot;</span><span class="s1">) {</span>
+        <span class="s2">printWarning </span><span class="s1">= </span><span class="s3">function</span><span class="s1">(</span><span class="s2">message</span><span class="s1">, </span><span class="s2">isSoft</span><span class="s1">) {</span>
+            <span class="s2">console</span><span class="s1">.</span><span class="s2">warn</span><span class="s1">(</span><span class="s0">&quot;%c&quot; </span><span class="s1">+ </span><span class="s2">message</span><span class="s1">,</span>
+                        <span class="s2">isSoft </span><span class="s1">? </span><span class="s0">&quot;color: darkorange&quot; </span><span class="s1">: </span><span class="s0">&quot;color: red&quot;</span><span class="s1">);</span>
+        <span class="s1">};</span>
+    <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">var </span><span class="s2">config </span><span class="s1">= {</span>
+    <span class="s2">warnings</span><span class="s1">: </span><span class="s2">warnings</span><span class="s1">,</span>
+    <span class="s2">longStackTraces</span><span class="s1">: </span><span class="s3">false</span><span class="s1">,</span>
+    <span class="s2">cancellation</span><span class="s1">: </span><span class="s3">false</span><span class="s1">,</span>
+    <span class="s2">monitoring</span><span class="s1">: </span><span class="s3">false</span><span class="s1">,</span>
+    <span class="s2">asyncHooks</span><span class="s1">: </span><span class="s3">false</span>
+<span class="s1">};</span>
+
+<span class="s3">if </span><span class="s1">(</span><span class="s2">longStackTraces</span><span class="s1">) </span><span class="s2">Promise</span><span class="s1">.</span><span class="s2">longStackTraces</span><span class="s1">();</span>
+
+<span class="s3">return </span><span class="s1">{</span>
+    <span class="s2">asyncHooks</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+        <span class="s3">return </span><span class="s2">config</span><span class="s1">.</span><span class="s2">asyncHooks</span><span class="s1">;</span>
+    <span class="s1">},</span>
+    <span class="s2">longStackTraces</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+        <span class="s3">return </span><span class="s2">config</span><span class="s1">.</span><span class="s2">longStackTraces</span><span class="s1">;</span>
+    <span class="s1">},</span>
+    <span class="s2">warnings</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+        <span class="s3">return </span><span class="s2">config</span><span class="s1">.</span><span class="s2">warnings</span><span class="s1">;</span>
+    <span class="s1">},</span>
+    <span class="s2">cancellation</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+        <span class="s3">return </span><span class="s2">config</span><span class="s1">.</span><span class="s2">cancellation</span><span class="s1">;</span>
+    <span class="s1">},</span>
+    <span class="s2">monitoring</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+        <span class="s3">return </span><span class="s2">config</span><span class="s1">.</span><span class="s2">monitoring</span><span class="s1">;</span>
+    <span class="s1">},</span>
+    <span class="s2">propagateFromFunction</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+        <span class="s3">return </span><span class="s2">propagateFromFunction</span><span class="s1">;</span>
+    <span class="s1">},</span>
+    <span class="s2">boundValueFunction</span><span class="s1">: </span><span class="s3">function</span><span class="s1">() {</span>
+        <span class="s3">return </span><span class="s2">boundValueFunction</span><span class="s1">;</span>
+    <span class="s1">},</span>
+    <span class="s2">checkForgottenReturns</span><span class="s1">: </span><span class="s2">checkForgottenReturns</span><span class="s1">,</span>
+    <span class="s2">setBounds</span><span class="s1">: </span><span class="s2">setBounds</span><span class="s1">,</span>
+    <span class="s2">warn</span><span class="s1">: </span><span class="s2">warn</span><span class="s1">,</span>
+    <span class="s2">deprecated</span><span class="s1">: </span><span class="s2">deprecated</span><span class="s1">,</span>
+    <span class="s2">CapturedTrace</span><span class="s1">: </span><span class="s2">CapturedTrace</span><span class="s1">,</span>
+    <span class="s2">fireDomEvent</span><span class="s1">: </span><span class="s2">fireDomEvent</span><span class="s1">,</span>
+    <span class="s2">fireGlobalEvent</span><span class="s1">: </span><span class="s2">fireGlobalEvent</span>
+<span class="s1">};</span>
+<span class="s1">};</span>
+</pre>
+</body>
+</html>

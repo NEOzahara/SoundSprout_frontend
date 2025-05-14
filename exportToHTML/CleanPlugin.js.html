@@ -1,0 +1,468 @@
+<html>
+<head>
+<title>CleanPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+CleanPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Sergey Melyukov @smelukov 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">SyncBailHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Compilation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Compilation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createSchemaValidation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/create-schema-validation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">join </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/fs&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">processAsyncTree </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/processAsyncTree&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../declarations/WebpackOptions&quot;).CleanOptions} CleanOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./logging/Logger&quot;).Logger} Logger */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).IStats} IStats */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).OutputFileSystem} OutputFileSystem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).StatsCallback} StatsCallback */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;string, number&gt;} Assets */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} CleanPluginCompilationHooks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SyncBailHook&lt;[string], boolean | void&gt;} keep when returning true the file/directory will be kept during cleaning, returning false will clean it and ignore the following plugins and config</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">KeepFn</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} path path</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean | void} true, if the path should be kept</span>
+ <span class="s5">*/</span>
+
+<span class="s4">const </span><span class="s1">validate </span><span class="s3">= </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+	<span class="s1">undefined</span><span class="s3">,</span>
+	<span class="s3">() =&gt; {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">definitions </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../schemas/WebpackOptions.json&quot;</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s3">{</span>
+			<span class="s1">definitions</span><span class="s3">,</span>
+			<span class="s1">oneOf</span><span class="s3">: [{ </span><span class="s1">$ref</span><span class="s3">: </span><span class="s2">&quot;#/definitions/CleanOptions&quot; </span><span class="s3">}]</span>
+		<span class="s3">};</span>
+	<span class="s3">},</span>
+	<span class="s3">{</span>
+		<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;Clean Plugin&quot;</span><span class="s3">,</span>
+		<span class="s1">baseDataPath</span><span class="s3">: </span><span class="s2">&quot;options&quot;</span>
+	<span class="s3">}</span>
+<span class="s3">);</span>
+<span class="s4">const </span><span class="s1">_10sec </span><span class="s3">= </span><span class="s7">10 </span><span class="s3">* </span><span class="s7">1000</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* merge assets map 2 into map 1</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Assets} as1 assets</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Assets} as2 assets</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">mergeAssets </span><span class="s3">= (</span><span class="s1">as1</span><span class="s3">, </span><span class="s1">as2</span><span class="s3">) =&gt; {</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">value1</span><span class="s3">] </span><span class="s1">of as2</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">value2 </span><span class="s3">= </span><span class="s1">as1</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">value2 </span><span class="s3">|| </span><span class="s1">value1 </span><span class="s3">&gt; </span><span class="s1">value2</span><span class="s3">) </span><span class="s1">as1</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">value1</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Set&lt;string&gt;} Diff */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{OutputFileSystem} fs filesystem</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} outputPath output path</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Map&lt;string, number&gt;} currentAssets filename of the current assets (must not start with .. or ., must only use / as path separator)</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err?: Error | null, set?: Diff) =&gt; void} callback returns the filenames of the assets that shouldn't be there</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getDiffToFs </span><span class="s3">= (</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">outputPath</span><span class="s3">, </span><span class="s1">currentAssets</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">directories </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+	<span class="s0">// get directories of assets</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">asset</span><span class="s3">] </span><span class="s1">of currentAssets</span><span class="s3">) {</span>
+		<span class="s1">directories</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/(^|\/)[^/]*$/</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">));</span>
+	<span class="s3">}</span>
+	<span class="s0">// and all parent directories</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">directory of directories</span><span class="s3">) {</span>
+		<span class="s1">directories</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">directory</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/(^|\/)[^/]*$/</span><span class="s3">, </span><span class="s2">&quot;&quot;</span><span class="s3">));</span>
+	<span class="s3">}</span>
+	<span class="s4">const </span><span class="s1">diff </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+	<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">forEachLimit</span><span class="s3">(</span>
+		<span class="s1">directories</span><span class="s3">,</span>
+		<span class="s7">10</span><span class="s3">,</span>
+		<span class="s3">(</span><span class="s1">directory</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;OutputFileSystem[&quot;readdir&quot;]&gt;} */</span>
+			<span class="s3">(</span><span class="s1">fs</span><span class="s3">.</span><span class="s1">readdir</span><span class="s3">)(</span><span class="s1">join</span><span class="s3">(</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">outputPath</span><span class="s3">, </span><span class="s1">directory</span><span class="s3">), (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">entries</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">.</span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;ENOENT&quot;</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">.</span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;ENOTDIR&quot;</span><span class="s3">) {</span>
+						<span class="s1">diff</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">directory</span><span class="s3">);</span>
+						<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+					<span class="s3">}</span>
+					<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">entry of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */ </span><span class="s3">(</span><span class="s1">entries</span><span class="s3">)) {</span>
+					<span class="s4">const </span><span class="s1">file </span><span class="s3">= </span><span class="s1">entry</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">filename </span><span class="s3">= </span><span class="s1">directory </span><span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">directory</span><span class="s3">}</span><span class="s2">/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">file</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s1">file</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">directories</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">) &amp;&amp; !</span><span class="s1">currentAssets</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">)) {</span>
+						<span class="s1">diff</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s1">callback</span><span class="s3">();</span>
+			<span class="s3">});</span>
+		<span class="s3">},</span>
+		<span class="s1">err </span><span class="s3">=&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+
+			<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">diff</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Assets} currentAssets assets list</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Assets} oldAssets old assets list</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Diff} diff</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getDiffToOldAssets </span><span class="s3">= (</span><span class="s1">currentAssets</span><span class="s3">, </span><span class="s1">oldAssets</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">diff </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+	<span class="s4">const </span><span class="s1">now </span><span class="s3">= </span><span class="s1">Date</span><span class="s3">.</span><span class="s1">now</span><span class="s3">();</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">asset</span><span class="s3">, </span><span class="s1">ts</span><span class="s3">] </span><span class="s1">of oldAssets</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">ts </span><span class="s3">&gt;= </span><span class="s1">now</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">currentAssets</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">)) </span><span class="s1">diff</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">);</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">diff</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{OutputFileSystem} fs filesystem</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} filename path to file</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{StatsCallback} callback callback for provided filename</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">doStat </span><span class="s3">= (</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">filename</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;lstat&quot; </span><span class="s4">in </span><span class="s1">fs</span><span class="s3">) {</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;OutputFileSystem[&quot;lstat&quot;]&gt;} */</span>
+		<span class="s3">(</span><span class="s1">fs</span><span class="s3">.</span><span class="s1">lstat</span><span class="s3">)(</span><span class="s1">filename</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s1">fs</span><span class="s3">.</span><span class="s1">stat</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{OutputFileSystem} fs filesystem</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} outputPath output path</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} dry only log instead of fs modification</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Logger} logger logger</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Diff} diff filenames of the assets that shouldn't be there</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(path: string) =&gt; boolean | void} isKept check if the entry is ignored</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(err?: Error, assets?: Assets) =&gt; void} callback callback</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">applyDiff </span><span class="s3">= (</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">outputPath</span><span class="s3">, </span><span class="s1">dry</span><span class="s3">, </span><span class="s1">logger</span><span class="s3">, </span><span class="s1">diff</span><span class="s3">, </span><span class="s1">isKept</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} msg message</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">log </span><span class="s3">= </span><span class="s1">msg </span><span class="s3">=&gt; {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">dry</span><span class="s3">) {</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">info</span><span class="s3">(</span><span class="s1">msg</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s1">msg</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">};</span>
+	<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{ type: &quot;check&quot; | &quot;unlink&quot; | &quot;rmdir&quot;, filename: string, parent: { remaining: number, job: Job } | undefined }} Job */</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Job[]} */</span>
+	<span class="s4">const </span><span class="s1">jobs </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">diff</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(), </span><span class="s1">filename </span><span class="s3">=&gt; ({</span>
+		<span class="s1">type</span><span class="s3">: </span><span class="s2">&quot;check&quot;</span><span class="s3">,</span>
+		<span class="s1">filename</span><span class="s3">,</span>
+		<span class="s1">parent</span><span class="s3">: </span><span class="s1">undefined</span>
+	<span class="s3">}));</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Assets} */</span>
+	<span class="s4">const </span><span class="s1">keptAssets </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s1">processAsyncTree</span><span class="s3">(</span>
+		<span class="s1">jobs</span><span class="s3">,</span>
+		<span class="s7">10</span><span class="s3">,</span>
+		<span class="s3">({ </span><span class="s1">type</span><span class="s3">, </span><span class="s1">filename</span><span class="s3">, </span><span class="s1">parent </span><span class="s3">}, </span><span class="s1">push</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Error &amp; { code?: string }} err error</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">handleError </span><span class="s3">= </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">.</span><span class="s1">code </span><span class="s3">=== </span><span class="s2">&quot;ENOENT&quot;</span><span class="s3">) {</span>
+					<span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">} </span><span class="s2">was removed during cleaning by something else`</span><span class="s3">);</span>
+					<span class="s1">handleParent</span><span class="s3">();</span>
+					<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+				<span class="s3">}</span>
+				<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+			<span class="s3">};</span>
+			<span class="s4">const </span><span class="s1">handleParent </span><span class="s3">= () =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">parent </span><span class="s3">&amp;&amp; --</span><span class="s1">parent</span><span class="s3">.</span><span class="s1">remaining </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s1">push</span><span class="s3">(</span><span class="s1">parent</span><span class="s3">.</span><span class="s1">job</span><span class="s3">);</span>
+			<span class="s3">};</span>
+			<span class="s4">const </span><span class="s1">path </span><span class="s3">= </span><span class="s1">join</span><span class="s3">(</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">outputPath</span><span class="s3">, </span><span class="s1">filename</span><span class="s3">);</span>
+			<span class="s4">switch </span><span class="s3">(</span><span class="s1">type</span><span class="s3">) {</span>
+				<span class="s4">case </span><span class="s2">&quot;check&quot;</span><span class="s3">:</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">isKept</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">)) {</span>
+						<span class="s1">keptAssets</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">, </span><span class="s7">0</span><span class="s3">);</span>
+						<span class="s0">// do not decrement parent entry as we don't want to delete the parent</span>
+						<span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">} </span><span class="s2">will be kept`</span><span class="s3">);</span>
+						<span class="s4">return </span><span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">doStat</span><span class="s3">(</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">path</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">stats</span><span class="s3">) =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">handleError</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(!(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{IStats} */ </span><span class="s3">(</span><span class="s1">stats</span><span class="s3">).</span><span class="s1">isDirectory</span><span class="s3">())) {</span>
+							<span class="s1">push</span><span class="s3">({</span>
+								<span class="s1">type</span><span class="s3">: </span><span class="s2">&quot;unlink&quot;</span><span class="s3">,</span>
+								<span class="s1">filename</span><span class="s3">,</span>
+								<span class="s1">parent</span>
+							<span class="s3">});</span>
+							<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+						<span class="s3">}</span>
+
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;OutputFileSystem[&quot;readdir&quot;]&gt;} */</span>
+						<span class="s3">(</span><span class="s1">fs</span><span class="s3">.</span><span class="s1">readdir</span><span class="s3">)(</span><span class="s1">path</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">_entries</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">handleError</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Job} */</span>
+							<span class="s4">const </span><span class="s1">deleteJob </span><span class="s3">= {</span>
+								<span class="s1">type</span><span class="s3">: </span><span class="s2">&quot;rmdir&quot;</span><span class="s3">,</span>
+								<span class="s1">filename</span><span class="s3">,</span>
+								<span class="s1">parent</span>
+							<span class="s3">};</span>
+							<span class="s4">const </span><span class="s1">entries </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */ </span><span class="s3">(</span><span class="s1">_entries</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">entries</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+								<span class="s1">push</span><span class="s3">(</span><span class="s1">deleteJob</span><span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">const </span><span class="s1">parentToken </span><span class="s3">= {</span>
+									<span class="s1">remaining</span><span class="s3">: </span><span class="s1">entries</span><span class="s3">.</span><span class="s1">length</span><span class="s3">,</span>
+									<span class="s1">job</span><span class="s3">: </span><span class="s1">deleteJob</span>
+								<span class="s3">};</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">entry of entries</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">file </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">entry</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">file</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">)) {</span>
+										<span class="s1">log</span><span class="s3">(</span>
+											<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">} </span><span class="s2">will be kept (dot-files will never be removed)`</span>
+										<span class="s3">);</span>
+										<span class="s4">continue</span><span class="s3">;</span>
+									<span class="s3">}</span>
+									<span class="s1">push</span><span class="s3">({</span>
+										<span class="s1">type</span><span class="s3">: </span><span class="s2">&quot;check&quot;</span><span class="s3">,</span>
+										<span class="s1">filename</span><span class="s3">: </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">}</span><span class="s2">/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">file</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+										<span class="s1">parent</span><span class="s3">: </span><span class="s1">parentToken</span>
+									<span class="s3">});</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+						<span class="s3">});</span>
+					<span class="s3">});</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s4">case </span><span class="s2">&quot;rmdir&quot;</span><span class="s3">:</span>
+					<span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">} </span><span class="s2">will be removed`</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">dry</span><span class="s3">) {</span>
+						<span class="s1">handleParent</span><span class="s3">();</span>
+						<span class="s4">return </span><span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">fs</span><span class="s3">.</span><span class="s1">rmdir</span><span class="s3">) {</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">warn</span><span class="s3">(</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">} </span><span class="s2">can't be removed because output file system doesn't support removing directories (rmdir)`</span>
+						<span class="s3">);</span>
+						<span class="s4">return </span><span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">fs</span><span class="s3">.</span><span class="s1">rmdir</span><span class="s3">(</span><span class="s1">path</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">handleError</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+						<span class="s1">handleParent</span><span class="s3">();</span>
+						<span class="s1">callback</span><span class="s3">();</span>
+					<span class="s3">});</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s4">case </span><span class="s2">&quot;unlink&quot;</span><span class="s3">:</span>
+					<span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">} </span><span class="s2">will be removed`</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">dry</span><span class="s3">) {</span>
+						<span class="s1">handleParent</span><span class="s3">();</span>
+						<span class="s4">return </span><span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">fs</span><span class="s3">.</span><span class="s1">unlink</span><span class="s3">) {</span>
+						<span class="s1">logger</span><span class="s3">.</span><span class="s1">warn</span><span class="s3">(</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">} </span><span class="s2">can't be removed because output file system doesn't support removing files (rmdir)`</span>
+						<span class="s3">);</span>
+						<span class="s4">return </span><span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">fs</span><span class="s3">.</span><span class="s1">unlink</span><span class="s3">(</span><span class="s1">path</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">handleError</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+						<span class="s1">handleParent</span><span class="s3">();</span>
+						<span class="s1">callback</span><span class="s3">();</span>
+					<span class="s3">});</span>
+					<span class="s4">break</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">},</span>
+		<span class="s1">err </span><span class="s3">=&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+			<span class="s1">callback</span><span class="s3">(</span><span class="s1">undefined</span><span class="s3">, </span><span class="s1">keptAssets</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Compilation, CleanPluginCompilationHooks&gt;} */</span>
+<span class="s4">const </span><span class="s1">compilationHooksMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s4">class </span><span class="s1">CleanPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CleanPluginCompilationHooks} the attached hooks</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(!(</span><span class="s1">compilation </span><span class="s4">instanceof </span><span class="s1">Compilation</span><span class="s3">)) {</span>
+			<span class="s4">throw new </span><span class="s1">TypeError</span><span class="s3">(</span>
+				<span class="s2">&quot;The 'compilation' argument must be an instance of Compilation&quot;</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hooks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">hooks </span><span class="s3">= {</span>
+				<span class="s1">keep</span><span class="s3">: </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;ignore&quot;</span><span class="s3">])</span>
+			<span class="s3">};</span>
+			<span class="s1">compilationHooksMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">hooks</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">hooks</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/** </span><span class="s6">@param </span><span class="s5">{CleanOptions} options options */</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options </span><span class="s3">= {}) {</span>
+		<span class="s1">validate</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= { </span><span class="s1">dry</span><span class="s3">: </span><span class="s4">false</span><span class="s3">, </span><span class="s1">...options </span><span class="s3">};</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">dry</span><span class="s3">, </span><span class="s1">keep </span><span class="s3">} = </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">;</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{KeepFn} */</span>
+		<span class="s4">const </span><span class="s1">keepFn </span><span class="s3">=</span>
+			<span class="s4">typeof </span><span class="s1">keep </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span>
+				<span class="s3">? </span><span class="s1">keep</span>
+				<span class="s3">: </span><span class="s4">typeof </span><span class="s1">keep </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span>
+					<span class="s3">? </span><span class="s1">path </span><span class="s3">=&gt; </span><span class="s1">path</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s1">keep</span><span class="s3">)</span>
+					<span class="s3">: </span><span class="s4">typeof </span><span class="s1">keep </span><span class="s3">=== </span><span class="s2">&quot;object&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">keep</span><span class="s3">.</span><span class="s1">test</span>
+						<span class="s3">? </span><span class="s1">path </span><span class="s3">=&gt; </span><span class="s1">keep</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">path</span><span class="s3">)</span>
+						<span class="s3">: () =&gt; </span><span class="s4">false</span><span class="s3">;</span>
+
+		<span class="s0">// We assume that no external modification happens while the compiler is active</span>
+		<span class="s0">// So we can store the old assets and only diff to them to avoid fs access on</span>
+		<span class="s0">// incremental builds</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{undefined|Assets} */</span>
+		<span class="s4">let </span><span class="s1">oldAssets</span><span class="s3">;</span>
+
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+			<span class="s3">{</span>
+				<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;CleanPlugin&quot;</span><span class="s3">,</span>
+				<span class="s1">stage</span><span class="s3">: </span><span class="s7">100</span>
+			<span class="s3">},</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">CleanPlugin</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s2">&quot;webpack.CleanPlugin&quot;</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">fs </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OutputFileSystem} */ </span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">outputFileSystem</span><span class="s3">);</span>
+
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">fs</span><span class="s3">.</span><span class="s1">readdir</span><span class="s3">) {</span>
+					<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+						<span class="s4">new </span><span class="s1">Error</span><span class="s3">(</span>
+							<span class="s2">&quot;CleanPlugin: Output filesystem doesn't support listing directories (readdir)&quot;</span>
+						<span class="s3">)</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Assets} */</span>
+				<span class="s4">const </span><span class="s1">currentAssets </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+				<span class="s4">const </span><span class="s1">now </span><span class="s3">= </span><span class="s1">Date</span><span class="s3">.</span><span class="s1">now</span><span class="s3">();</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">asset of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">assets</span><span class="s3">)) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s8">/^[A-Za-z]:\\|^\/|^\\\\/</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">normalizedAsset</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">newNormalizedAsset </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/\\/g</span><span class="s3">, </span><span class="s2">&quot;/&quot;</span><span class="s3">);</span>
+					<span class="s4">do </span><span class="s3">{</span>
+						<span class="s1">normalizedAsset </span><span class="s3">= </span><span class="s1">newNormalizedAsset</span><span class="s3">;</span>
+						<span class="s1">newNormalizedAsset </span><span class="s3">= </span><span class="s1">normalizedAsset</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span>
+							<span class="s8">/(^|\/)(?!\.\.)[^/]+\/\.\.\//g</span><span class="s3">,</span>
+							<span class="s2">&quot;$1&quot;</span>
+						<span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">while </span><span class="s3">(</span><span class="s1">newNormalizedAsset </span><span class="s3">!== </span><span class="s1">normalizedAsset</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">normalizedAsset</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">&quot;../&quot;</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">assetInfo </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">assetsInfo</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">assetInfo </span><span class="s3">&amp;&amp; </span><span class="s1">assetInfo</span><span class="s3">.</span><span class="s1">hotModuleReplacement</span><span class="s3">) {</span>
+						<span class="s1">currentAssets</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">normalizedAsset</span><span class="s3">, </span><span class="s1">now </span><span class="s3">+ </span><span class="s1">_10sec</span><span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+						<span class="s1">currentAssets</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">normalizedAsset</span><span class="s3">, </span><span class="s7">0</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+
+				<span class="s4">const </span><span class="s1">outputPath </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">outputPath</span><span class="s3">, {});</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} path path</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean | void} true, if needs to be kept</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">isKept </span><span class="s3">= </span><span class="s1">path </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">keep</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">path</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">result </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+					<span class="s4">return </span><span class="s1">keepFn</span><span class="s3">(</span><span class="s1">path</span><span class="s3">);</span>
+				<span class="s3">};</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(Error | null)=} err err</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Diff=} diff diff</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">diffCallback </span><span class="s3">= (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">diff</span><span class="s3">) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+						<span class="s1">oldAssets </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+						<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+						<span class="s4">return</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s1">applyDiff</span><span class="s3">(</span>
+						<span class="s1">fs</span><span class="s3">,</span>
+						<span class="s1">outputPath</span><span class="s3">,</span>
+						<span class="s1">dry</span><span class="s3">,</span>
+						<span class="s1">logger</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Diff} */ </span><span class="s3">(</span><span class="s1">diff</span><span class="s3">),</span>
+						<span class="s1">isKept</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">keptAssets</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+								<span class="s1">oldAssets </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">oldAssets</span><span class="s3">) </span><span class="s1">mergeAssets</span><span class="s3">(</span><span class="s1">currentAssets</span><span class="s3">, </span><span class="s1">oldAssets</span><span class="s3">);</span>
+								<span class="s1">oldAssets </span><span class="s3">= </span><span class="s1">currentAssets</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">keptAssets</span><span class="s3">) </span><span class="s1">mergeAssets</span><span class="s3">(</span><span class="s1">oldAssets</span><span class="s3">, </span><span class="s1">keptAssets</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">};</span>
+
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">oldAssets</span><span class="s3">) {</span>
+					<span class="s1">diffCallback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">getDiffToOldAssets</span><span class="s3">(</span><span class="s1">currentAssets</span><span class="s3">, </span><span class="s1">oldAssets</span><span class="s3">));</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">getDiffToFs</span><span class="s3">(</span><span class="s1">fs</span><span class="s3">, </span><span class="s1">outputPath</span><span class="s3">, </span><span class="s1">currentAssets</span><span class="s3">, </span><span class="s1">diffCallback</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">CleanPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

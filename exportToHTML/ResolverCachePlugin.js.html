@@ -1,0 +1,472 @@
+<html>
+<head>
+<title>ResolverCachePlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ResolverCachePlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">LazySet </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/LazySet&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">makeSerializable </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/makeSerializable&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;enhanced-resolve&quot;).ResolveContext} ResolveContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;enhanced-resolve&quot;).ResolveOptions} ResolveOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;enhanced-resolve&quot;).ResolveRequest} ResolveRequest */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;enhanced-resolve&quot;).Resolver} Resolver */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../CacheFacade&quot;).ItemCacheFacade} ItemCacheFacade */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../FileSystemInfo&quot;)} FileSystemInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../FileSystemInfo&quot;).Snapshot} Snapshot */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../FileSystemInfo&quot;).SnapshotOptions} SnapshotOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ResolverFactory&quot;).ResolveOptionsWithDependencyType} ResolveOptionsWithDependencyType */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../serialization/ObjectMiddleware&quot;).ObjectDeserializerContext} ObjectDeserializerContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../serialization/ObjectMiddleware&quot;).ObjectSerializerContext} ObjectSerializerContext */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{import(&quot;tapable&quot;).SyncHook&lt;T&gt;} SyncHook</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">H</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{import(&quot;tapable&quot;).HookMapInterceptor&lt;H&gt;} HookMapInterceptor</span>
+ <span class="s5">*/</span>
+
+<span class="s4">class </span><span class="s1">CacheEntry </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveRequest} result result</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Snapshot} snapshot snapshot</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">result</span><span class="s3">, </span><span class="s1">snapshot</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">result </span><span class="s3">= </span><span class="s1">result</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">snapshot </span><span class="s3">= </span><span class="s1">snapshot</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectSerializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">serialize</span><span class="s3">({ </span><span class="s1">write </span><span class="s3">}) {</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s1">write</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">snapshot</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ObjectDeserializerContext} context context</span>
+	 <span class="s5">*/</span>
+	<span class="s1">deserialize</span><span class="s3">({ </span><span class="s1">read </span><span class="s3">}) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">result </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">snapshot </span><span class="s3">= </span><span class="s1">read</span><span class="s3">();</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">makeSerializable</span><span class="s3">(</span><span class="s1">CacheEntry</span><span class="s3">, </span><span class="s2">&quot;webpack/lib/cache/ResolverCachePlugin&quot;</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;T&gt; | LazySet&lt;T&gt;} set set to add items to</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;T&gt; | LazySet&lt;T&gt; | Iterable&lt;T&gt;} otherSet set to add items from</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">addAllToSet </span><span class="s3">= (</span><span class="s1">set</span><span class="s3">, </span><span class="s1">otherSet</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">set </span><span class="s4">instanceof </span><span class="s1">LazySet</span><span class="s3">) {</span>
+		<span class="s1">set</span><span class="s3">.</span><span class="s1">addAll</span><span class="s3">(</span><span class="s1">otherSet</span><span class="s3">);</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of otherSet</span><span class="s3">) {</span>
+			<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{object} T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} object an object</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} excludeContext if true, context is not included in string</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} stringified version</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">objectToString </span><span class="s3">= (</span><span class="s1">object</span><span class="s3">, </span><span class="s1">excludeContext</span><span class="s3">) =&gt; {</span>
+	<span class="s4">let </span><span class="s1">str </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key </span><span class="s4">in </span><span class="s1">object</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">excludeContext </span><span class="s3">&amp;&amp; </span><span class="s1">key </span><span class="s3">=== </span><span class="s2">&quot;context&quot;</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">value </span><span class="s3">= </span><span class="s1">object</span><span class="s3">[</span><span class="s1">key</span><span class="s3">];</span>
+		<span class="s1">str </span><span class="s3">+=</span>
+			<span class="s4">typeof </span><span class="s1">value </span><span class="s3">=== </span><span class="s2">&quot;object&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">value </span><span class="s3">!== </span><span class="s4">null</span>
+				<span class="s3">? </span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">}</span><span class="s2">=[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">objectToString</span><span class="s3">(</span><span class="s1">value</span><span class="s3">, </span><span class="s4">false</span><span class="s3">)}</span><span class="s2">|]`</span>
+				<span class="s3">: </span><span class="s2">`|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">key</span><span class="s3">}</span><span class="s2">=|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">value</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">str</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">ResolverCachePlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">cache </span><span class="s3">= </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">getCache</span><span class="s3">(</span><span class="s2">&quot;ResolverCachePlugin&quot;</span><span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{FileSystemInfo} */</span>
+		<span class="s4">let </span><span class="s1">fileSystemInfo</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SnapshotOptions | undefined} */</span>
+		<span class="s4">let </span><span class="s1">snapshotOptions</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">realResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">cachedResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">cacheInvalidResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">concurrentResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">thisCompilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;ResolverCachePlugin&quot;</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s1">snapshotOptions </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">snapshot</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">;</span>
+			<span class="s1">fileSystemInfo </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">fileSystemInfo</span><span class="s3">;</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">finishModules</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;ResolverCachePlugin&quot;</span><span class="s3">, () =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">realResolves </span><span class="s3">+ </span><span class="s1">cachedResolves </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s2">&quot;webpack.ResolverCachePlugin&quot;</span><span class="s3">);</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Math</span><span class="s3">.</span><span class="s1">round</span><span class="s3">(</span>
+							<span class="s3">(</span><span class="s7">100 </span><span class="s3">* </span><span class="s1">realResolves</span><span class="s3">) / (</span><span class="s1">realResolves </span><span class="s3">+ </span><span class="s1">cachedResolves</span><span class="s3">)</span>
+						<span class="s3">)}</span><span class="s2">% really resolved (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">realResolves</span><span class="s3">} </span><span class="s2">real resolves with </span><span class="s1">$</span><span class="s3">{</span><span class="s1">cacheInvalidResolves</span><span class="s3">} </span><span class="s2">cached but invalid, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">cachedResolves</span><span class="s3">} </span><span class="s2">cached valid, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">concurrentResolves</span><span class="s3">} </span><span class="s2">concurrent)`</span>
+					<span class="s3">);</span>
+					<span class="s1">realResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s1">cachedResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s1">cacheInvalidResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s1">concurrentResolves </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+
+		<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(err?: Error | null, resolveRequest?: ResolveRequest | null) =&gt; void} Callback */</span>
+		<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{ResolveRequest &amp; { _ResolverCachePluginCacheMiss: true }} ResolveRequestWithCacheMiss */</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ItemCacheFacade} itemCache cache</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Resolver} resolver the resolver</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveContext} resolveContext context for resolving meta info</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ResolveRequest} request the request info object</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Callback} callback callback function</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">doRealResolve </span><span class="s3">= (</span>
+			<span class="s1">itemCache</span><span class="s3">,</span>
+			<span class="s1">resolver</span><span class="s3">,</span>
+			<span class="s1">resolveContext</span><span class="s3">,</span>
+			<span class="s1">request</span><span class="s3">,</span>
+			<span class="s1">callback</span>
+		<span class="s3">) =&gt; {</span>
+			<span class="s1">realResolves</span><span class="s3">++;</span>
+			<span class="s4">const </span><span class="s1">newRequest </span><span class="s3">=</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequestWithCacheMiss} */</span>
+				<span class="s3">({</span>
+					<span class="s1">_ResolverCachePluginCacheMiss</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+					<span class="s1">...request</span>
+				<span class="s3">});</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveContext} */</span>
+			<span class="s4">const </span><span class="s1">newResolveContext </span><span class="s3">= {</span>
+				<span class="s1">...resolveContext</span><span class="s3">,</span>
+				<span class="s1">stack</span><span class="s3">: </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(),</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LazySet&lt;string&gt;} */</span>
+				<span class="s1">missingDependencies</span><span class="s3">: </span><span class="s4">new </span><span class="s1">LazySet</span><span class="s3">(),</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LazySet&lt;string&gt;} */</span>
+				<span class="s1">fileDependencies</span><span class="s3">: </span><span class="s4">new </span><span class="s1">LazySet</span><span class="s3">(),</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LazySet&lt;string&gt;} */</span>
+				<span class="s1">contextDependencies</span><span class="s3">: </span><span class="s4">new </span><span class="s1">LazySet</span><span class="s3">()</span>
+			<span class="s3">};</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest[] | undefined} */</span>
+			<span class="s4">let </span><span class="s1">yieldResult</span><span class="s3">;</span>
+			<span class="s4">let </span><span class="s1">withYield </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">newResolveContext</span><span class="s3">.</span><span class="s1">yield </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+				<span class="s1">yieldResult </span><span class="s3">= [];</span>
+				<span class="s1">withYield </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+				<span class="s1">newResolveContext</span><span class="s3">.</span><span class="s1">yield </span><span class="s3">= </span><span class="s1">obj </span><span class="s3">=&gt;</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest[]} */</span>
+					<span class="s3">(</span><span class="s1">yieldResult</span><span class="s3">).</span><span class="s1">push</span><span class="s3">(</span><span class="s1">obj</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{&quot;fileDependencies&quot; | &quot;contextDependencies&quot; | &quot;missingDependencies&quot;} key key</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">propagate </span><span class="s3">= </span><span class="s1">key </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">[</span><span class="s1">key</span><span class="s3">]) {</span>
+					<span class="s1">addAllToSet</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */ </span><span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">[</span><span class="s1">key</span><span class="s3">]),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */ </span><span class="s3">(</span><span class="s1">newResolveContext</span><span class="s3">[</span><span class="s1">key</span><span class="s3">])</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">};</span>
+			<span class="s4">const </span><span class="s1">resolveTime </span><span class="s3">= </span><span class="s1">Date</span><span class="s3">.</span><span class="s1">now</span><span class="s3">();</span>
+			<span class="s1">resolver</span><span class="s3">.</span><span class="s1">doResolve</span><span class="s3">(</span>
+				<span class="s1">resolver</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">,</span>
+				<span class="s1">newRequest</span><span class="s3">,</span>
+				<span class="s2">&quot;Cache miss&quot;</span><span class="s3">,</span>
+				<span class="s1">newResolveContext</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+					<span class="s1">propagate</span><span class="s3">(</span><span class="s2">&quot;fileDependencies&quot;</span><span class="s3">);</span>
+					<span class="s1">propagate</span><span class="s3">(</span><span class="s2">&quot;contextDependencies&quot;</span><span class="s3">);</span>
+					<span class="s1">propagate</span><span class="s3">(</span><span class="s2">&quot;missingDependencies&quot;</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">fileDependencies </span><span class="s3">= </span><span class="s1">newResolveContext</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">contextDependencies </span><span class="s3">= </span><span class="s1">newResolveContext</span><span class="s3">.</span><span class="s1">contextDependencies</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">missingDependencies </span><span class="s3">= </span><span class="s1">newResolveContext</span><span class="s3">.</span><span class="s1">missingDependencies</span><span class="s3">;</span>
+					<span class="s1">fileSystemInfo</span><span class="s3">.</span><span class="s1">createSnapshot</span><span class="s3">(</span>
+						<span class="s1">resolveTime</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+						<span class="s3">(</span><span class="s1">fileDependencies</span><span class="s3">),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+						<span class="s3">(</span><span class="s1">contextDependencies</span><span class="s3">),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+						<span class="s3">(</span><span class="s1">missingDependencies</span><span class="s3">),</span>
+						<span class="s1">snapshotOptions</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s1">snapshot</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">resolveResult </span><span class="s3">= </span><span class="s1">withYield </span><span class="s3">? </span><span class="s1">yieldResult </span><span class="s3">: </span><span class="s1">result</span><span class="s3">;</span>
+							<span class="s0">// since we intercept resolve hook</span>
+							<span class="s0">// we still can get result in callback</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">withYield </span><span class="s3">&amp;&amp; </span><span class="s1">result</span><span class="s3">)</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest[]} */ </span><span class="s3">(</span><span class="s1">yieldResult</span><span class="s3">).</span><span class="s1">push</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">snapshot</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">resolveResult</span><span class="s3">)</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+										<span class="s4">null</span><span class="s3">,</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest} */</span>
+										<span class="s3">(</span><span class="s1">resolveResult</span><span class="s3">)</span>
+									<span class="s3">);</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+							<span class="s1">itemCache</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span>
+								<span class="s4">new </span><span class="s1">CacheEntry</span><span class="s3">(</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest} */</span>
+									<span class="s3">(</span><span class="s1">resolveResult</span><span class="s3">),</span>
+									<span class="s1">snapshot</span>
+								<span class="s3">),</span>
+								<span class="s1">storeErr </span><span class="s3">=&gt; {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">storeErr</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">storeErr</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">resolveResult</span><span class="s3">)</span>
+										<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span>
+											<span class="s4">null</span><span class="s3">,</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest} */</span>
+											<span class="s3">(</span><span class="s1">resolveResult</span><span class="s3">)</span>
+										<span class="s3">);</span>
+									<span class="s1">callback</span><span class="s3">();</span>
+								<span class="s3">}</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">};</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">resolverFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">resolver</span><span class="s3">.</span><span class="s1">intercept</span><span class="s3">({</span>
+			<span class="s1">factory</span><span class="s3">(</span><span class="s1">type</span><span class="s3">, </span><span class="s1">_hook</span><span class="s3">) {</span>
+				<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(err?: Error, resolveRequest?: ResolveRequest) =&gt; void} ActiveRequest */</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, ActiveRequest[]&gt;} */</span>
+				<span class="s4">const </span><span class="s1">activeRequests </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, [ActiveRequest, NonNullable&lt;ResolveContext[&quot;yield&quot;]&gt;][]&gt;} */</span>
+				<span class="s4">const </span><span class="s1">activeRequestsWithYield </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+				<span class="s4">const </span><span class="s1">hook </span><span class="s3">=</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SyncHook&lt;[Resolver, ResolveOptions, ResolveOptionsWithDependencyType]&gt;} */</span>
+					<span class="s3">(</span><span class="s1">_hook</span><span class="s3">);</span>
+				<span class="s1">hook</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;ResolverCachePlugin&quot;</span><span class="s3">, (</span><span class="s1">resolver</span><span class="s3">, </span><span class="s1">options</span><span class="s3">, </span><span class="s1">userOptions</span><span class="s3">) =&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */ </span><span class="s3">(</span><span class="s1">options</span><span class="s3">).</span><span class="s1">cache </span><span class="s3">!== </span><span class="s4">true</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">optionsIdent </span><span class="s3">= </span><span class="s1">objectToString</span><span class="s3">(</span><span class="s1">userOptions</span><span class="s3">, </span><span class="s4">false</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">cacheWithContext </span><span class="s3">=</span>
+						<span class="s1">options</span><span class="s3">.</span><span class="s1">cacheWithContext </span><span class="s3">!== </span><span class="s1">undefined</span>
+							<span class="s3">? </span><span class="s1">options</span><span class="s3">.</span><span class="s1">cacheWithContext</span>
+							<span class="s3">: </span><span class="s4">false</span><span class="s3">;</span>
+					<span class="s1">resolver</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">resolve</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+						<span class="s3">{</span>
+							<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;ResolverCachePlugin&quot;</span><span class="s3">,</span>
+							<span class="s1">stage</span><span class="s3">: -</span><span class="s7">100</span>
+						<span class="s3">},</span>
+						<span class="s3">(</span><span class="s1">request</span><span class="s3">, </span><span class="s1">resolveContext</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequestWithCacheMiss} */</span>
+								<span class="s3">(</span><span class="s1">request</span><span class="s3">).</span><span class="s1">_ResolverCachePluginCacheMiss </span><span class="s3">||</span>
+								<span class="s3">!</span><span class="s1">fileSystemInfo</span>
+							<span class="s3">) {</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">withYield </span><span class="s3">= </span><span class="s4">typeof </span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">yield </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">identifier </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span>
+								<span class="s1">withYield </span><span class="s3">? </span><span class="s2">&quot;|yield&quot; </span><span class="s3">: </span><span class="s2">&quot;|default&quot;</span>
+							<span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">optionsIdent</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">objectToString</span><span class="s3">(</span><span class="s1">request</span><span class="s3">, !</span><span class="s1">cacheWithContext</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">withYield</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">activeRequest </span><span class="s3">= </span><span class="s1">activeRequestsWithYield</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">activeRequest</span><span class="s3">) {</span>
+									<span class="s1">activeRequest</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">push</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+									<span class="s1">activeRequest</span><span class="s3">[</span><span class="s7">1</span><span class="s3">].</span><span class="s1">push</span><span class="s3">(</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;ResolveContext[&quot;yield&quot;]&gt;} */</span>
+										<span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">yield</span><span class="s3">)</span>
+									<span class="s3">);</span>
+									<span class="s4">return</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">const </span><span class="s1">activeRequest </span><span class="s3">= </span><span class="s1">activeRequests</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">activeRequest</span><span class="s3">) {</span>
+									<span class="s1">activeRequest</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">);</span>
+									<span class="s4">return</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s4">const </span><span class="s1">itemCache </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">.</span><span class="s1">getItemCache</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s4">null</span><span class="s3">);</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Callback[] | false | undefined} */</span>
+							<span class="s4">let </span><span class="s1">callbacks</span><span class="s3">;</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;ResolveContext[&quot;yield&quot;]&gt;[] | undefined} */</span>
+							<span class="s4">let </span><span class="s1">yields</span><span class="s3">;</span>
+
+							<span class="s5">/**</span>
+							 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{(err?: Error | null, result?: ResolveRequest | ResolveRequest[] | null) =&gt; void}</span>
+							 <span class="s5">*/</span>
+							<span class="s4">const </span><span class="s1">done </span><span class="s3">= </span><span class="s1">withYield</span>
+								<span class="s3">? (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">callbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+												<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+											<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+												<span class="s4">if </span><span class="s3">(</span><span class="s1">result</span><span class="s3">)</span>
+													<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">r of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest[]} */ </span><span class="s3">(</span>
+														<span class="s1">result</span>
+													<span class="s3">)) {</span>
+														<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;ResolveContext[&quot;yield&quot;]&gt;} */</span>
+														<span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">yield</span><span class="s3">)(</span><span class="s1">r</span><span class="s3">);</span>
+													<span class="s3">}</span>
+												<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s4">null</span><span class="s3">);</span>
+											<span class="s3">}</span>
+											<span class="s1">yields </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+											<span class="s1">callbacks </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+										<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+											<span class="s4">const </span><span class="s1">definedCallbacks </span><span class="s3">=</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Callback[]} */</span>
+												<span class="s3">(</span><span class="s1">callbacks</span><span class="s3">);</span>
+
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+												<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cb of definedCallbacks</span><span class="s3">) </span><span class="s1">cb</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+											<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+												<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">definedCallbacks</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+													<span class="s4">const </span><span class="s1">cb </span><span class="s3">= </span><span class="s1">definedCallbacks</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+													<span class="s4">const </span><span class="s1">yield_ </span><span class="s3">=</span>
+														<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;ResolveContext[&quot;yield&quot;]&gt;[]} */</span>
+														<span class="s3">(</span><span class="s1">yields</span><span class="s3">)[</span><span class="s1">i</span><span class="s3">];</span>
+													<span class="s4">if </span><span class="s3">(</span><span class="s1">result</span><span class="s3">)</span>
+														<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">r of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest[]} */ </span><span class="s3">(</span>
+															<span class="s1">result</span>
+														<span class="s3">))</span>
+															<span class="s1">yield_</span><span class="s3">(</span><span class="s1">r</span><span class="s3">);</span>
+													<span class="s1">cb</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s4">null</span><span class="s3">);</span>
+												<span class="s3">}</span>
+											<span class="s3">}</span>
+											<span class="s1">activeRequestsWithYield</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">);</span>
+											<span class="s1">yields </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+											<span class="s1">callbacks </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+										<span class="s3">}</span>
+									<span class="s3">}</span>
+								<span class="s3">: (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">callbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+											<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest} */ </span><span class="s3">(</span><span class="s1">result</span><span class="s3">));</span>
+											<span class="s1">callbacks </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+										<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+											<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">callback of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Callback[]} */ </span><span class="s3">(</span>
+												<span class="s1">callbacks</span>
+											<span class="s3">)) {</span>
+												<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">, </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ResolveRequest} */ </span><span class="s3">(</span><span class="s1">result</span><span class="s3">));</span>
+											<span class="s3">}</span>
+											<span class="s1">activeRequests</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">);</span>
+											<span class="s1">callbacks </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+										<span class="s3">}</span>
+									<span class="s3">};</span>
+							<span class="s5">/**</span>
+							 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(Error | null)=} err error if any</span>
+							 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(CacheEntry | null)=} cacheEntry cache entry</span>
+							 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+							 <span class="s5">*/</span>
+							<span class="s4">const </span><span class="s1">processCacheResult </span><span class="s3">= (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">cacheEntry</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">done</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s3">{ </span><span class="s1">snapshot</span><span class="s3">, </span><span class="s1">result </span><span class="s3">} = </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+									<span class="s1">fileSystemInfo</span><span class="s3">.</span><span class="s1">checkSnapshotValid</span><span class="s3">(</span><span class="s1">snapshot</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">valid</span><span class="s3">) =&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err </span><span class="s3">|| !</span><span class="s1">valid</span><span class="s3">) {</span>
+											<span class="s1">cacheInvalidResolves</span><span class="s3">++;</span>
+											<span class="s4">return </span><span class="s1">doRealResolve</span><span class="s3">(</span>
+												<span class="s1">itemCache</span><span class="s3">,</span>
+												<span class="s1">resolver</span><span class="s3">,</span>
+												<span class="s1">resolveContext</span><span class="s3">,</span>
+												<span class="s1">request</span><span class="s3">,</span>
+												<span class="s1">done</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">cachedResolves</span><span class="s3">++;</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">missingDependencies</span><span class="s3">) {</span>
+											<span class="s1">addAllToSet</span><span class="s3">(</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+												<span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">missingDependencies</span><span class="s3">),</span>
+												<span class="s1">snapshot</span><span class="s3">.</span><span class="s1">getMissingIterable</span><span class="s3">()</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">) {</span>
+											<span class="s1">addAllToSet</span><span class="s3">(</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+												<span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">fileDependencies</span><span class="s3">),</span>
+												<span class="s1">snapshot</span><span class="s3">.</span><span class="s1">getFileIterable</span><span class="s3">()</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">contextDependencies</span><span class="s3">) {</span>
+											<span class="s1">addAllToSet</span><span class="s3">(</span>
+												<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+												<span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">contextDependencies</span><span class="s3">),</span>
+												<span class="s1">snapshot</span><span class="s3">.</span><span class="s1">getContextIterable</span><span class="s3">()</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">done</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+									<span class="s3">});</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">doRealResolve</span><span class="s3">(</span>
+										<span class="s1">itemCache</span><span class="s3">,</span>
+										<span class="s1">resolver</span><span class="s3">,</span>
+										<span class="s1">resolveContext</span><span class="s3">,</span>
+										<span class="s1">request</span><span class="s3">,</span>
+										<span class="s1">done</span>
+									<span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">};</span>
+							<span class="s1">itemCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">processCacheResult</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">withYield </span><span class="s3">&amp;&amp; </span><span class="s1">callbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s1">callbacks </span><span class="s3">= [</span><span class="s1">callback</span><span class="s3">];</span>
+								<span class="s1">yields </span><span class="s3">= [</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;ResolveContext[&quot;yield&quot;]&gt;} */</span>
+									<span class="s3">(</span><span class="s1">resolveContext</span><span class="s3">.</span><span class="s1">yield</span><span class="s3">)</span>
+								<span class="s3">];</span>
+								<span class="s1">activeRequestsWithYield</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+									<span class="s1">identifier</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{[any, any]} */ </span><span class="s3">([</span><span class="s1">callbacks</span><span class="s3">, </span><span class="s1">yields</span><span class="s3">])</span>
+								<span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">callbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s1">callbacks </span><span class="s3">= [</span><span class="s1">callback</span><span class="s3">];</span>
+								<span class="s1">activeRequests</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">callbacks</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">});</span>
+				<span class="s4">return </span><span class="s1">hook</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ResolverCachePlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

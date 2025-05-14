@@ -1,0 +1,218 @@
+<html>
+<head>
+<title>createHash.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #2aacb8;}
+.s6 { color: #5f826b; font-style: italic;}
+.s7 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+createHash.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">Hash </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Hash&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">BULK_SIZE </span><span class="s3">= </span><span class="s5">2000</span><span class="s3">;</span>
+
+<span class="s0">// We are using an object instead of a Map as this will stay static during the runtime</span>
+<span class="s0">// so access to it can be optimized by v8</span>
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{{[key: string]: Map&lt;string, string&gt;}} */</span>
+<span class="s4">const </span><span class="s1">digestCaches </span><span class="s3">= {};</span>
+
+<span class="s6">/** </span><span class="s7">@typedef </span><span class="s6">{() =&gt; Hash} HashFactory */</span>
+
+<span class="s4">class </span><span class="s1">BulkUpdateDecorator </span><span class="s4">extends </span><span class="s1">Hash </span><span class="s3">{</span>
+	<span class="s6">/**</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Hash | HashFactory} hashOrFactory function to create a hash</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string} [hashKey] key for caching</span>
+	 <span class="s6">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">hashOrFactory</span><span class="s3">, </span><span class="s1">hashKey</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">hashKey </span><span class="s3">= </span><span class="s1">hashKey</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">hashOrFactory </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hashFactory </span><span class="s3">= </span><span class="s1">hashOrFactory</span><span class="s3">;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hashFactory </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">= </span><span class="s1">hashOrFactory</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">buffer </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s6">/**</span>
+	 <span class="s6">* Update hash {</span><span class="s7">@link </span><span class="s6">https://nodejs.org/api/crypto.html#crypto_hash_update_data_inputencoding}</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string|Buffer} data data</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string=} inputEncoding data encoding</span>
+	 <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{this} updated hash</span>
+	 <span class="s6">*/</span>
+	<span class="s1">update</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">inputEncoding</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span>
+			<span class="s1">inputEncoding </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">||</span>
+			<span class="s4">typeof </span><span class="s1">data </span><span class="s3">!== </span><span class="s2">&quot;string&quot; </span><span class="s3">||</span>
+			<span class="s1">data</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s1">BULK_SIZE</span>
+		<span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">)</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">= </span><span class="s6">/** </span><span class="s7">@type </span><span class="s6">{HashFactory} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hashFactory</span><span class="s3">)();</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">);</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">buffer </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">inputEncoding</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">buffer </span><span class="s3">+= </span><span class="s1">data</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s1">BULK_SIZE</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">)</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">= </span><span class="s6">/** </span><span class="s7">@type </span><span class="s6">{HashFactory} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hashFactory</span><span class="s3">)();</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">);</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">buffer </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">return this</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s6">/**</span>
+	 <span class="s6">* Calculates the digest {</span><span class="s7">@link </span><span class="s6">https://nodejs.org/api/crypto.html#crypto_hash_digest_encoding}</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string=} encoding encoding of the return value</span>
+	 <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{string|Buffer} digest</span>
+	 <span class="s6">*/</span>
+	<span class="s1">digest</span><span class="s3">(</span><span class="s1">encoding</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">digestCache</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">buffer </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s0">// short data for hash, we can use caching</span>
+			<span class="s4">const </span><span class="s1">cacheKey </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hashKey</span><span class="s3">}</span><span class="s2">-</span><span class="s1">$</span><span class="s3">{</span><span class="s1">encoding</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+			<span class="s1">digestCache </span><span class="s3">= </span><span class="s1">digestCaches</span><span class="s3">[</span><span class="s1">cacheKey</span><span class="s3">];</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">digestCache </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">digestCache </span><span class="s3">= </span><span class="s1">digestCaches</span><span class="s3">[</span><span class="s1">cacheKey</span><span class="s3">] = </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+			<span class="s3">}</span>
+			<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">digestCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">buffer</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">= </span><span class="s6">/** </span><span class="s7">@type </span><span class="s6">{HashFactory} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hashFactory</span><span class="s3">)();</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">buffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">buffer</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">digestResult </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">.</span><span class="s1">digest</span><span class="s3">(</span><span class="s1">encoding</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">result </span><span class="s3">=</span>
+			<span class="s4">typeof </span><span class="s1">digestResult </span><span class="s3">=== </span><span class="s2">&quot;string&quot; </span><span class="s3">? </span><span class="s1">digestResult </span><span class="s3">: </span><span class="s1">digestResult</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">();</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">digestCache </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">digestCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">buffer</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">/* istanbul ignore next */</span>
+<span class="s4">class </span><span class="s1">DebugHash </span><span class="s4">extends </span><span class="s1">Hash </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">() {</span>
+		<span class="s4">super</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">string </span><span class="s3">= </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s6">/**</span>
+	 <span class="s6">* Update hash {</span><span class="s7">@link </span><span class="s6">https://nodejs.org/api/crypto.html#crypto_hash_update_data_inputencoding}</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string|Buffer} data data</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string=} inputEncoding data encoding</span>
+	 <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{this} updated hash</span>
+	 <span class="s6">*/</span>
+	<span class="s1">update</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">inputEncoding</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">data </span><span class="s3">!== </span><span class="s2">&quot;string&quot;</span><span class="s3">) </span><span class="s1">data </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;utf-8&quot;</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">prefix </span><span class="s3">= </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s2">&quot;@webpack-debug-digest@&quot;</span><span class="s3">).</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;hex&quot;</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s1">prefix</span><span class="s3">)) {</span>
+			<span class="s1">data </span><span class="s3">= </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">prefix</span><span class="s3">.</span><span class="s1">length</span><span class="s3">), </span><span class="s2">&quot;hex&quot;</span><span class="s3">).</span><span class="s1">toString</span><span class="s3">();</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">string </span><span class="s3">+= </span><span class="s2">`[</span><span class="s1">$</span><span class="s3">{</span><span class="s1">data</span><span class="s3">}</span><span class="s2">](</span><span class="s1">$</span><span class="s3">{</span>
+			<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{string} */ </span><span class="s3">(</span><span class="s4">new </span><span class="s1">Error</span><span class="s3">().</span><span class="s1">stack</span><span class="s3">).</span><span class="s1">split</span><span class="s3">(</span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">, </span><span class="s5">3</span><span class="s3">)[</span><span class="s5">2</span><span class="s3">]</span>
+		<span class="s3">}</span><span class="s2">)</span><span class="s4">\n</span><span class="s2">`</span><span class="s3">;</span>
+		<span class="s4">return this</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s6">/**</span>
+	 <span class="s6">* Calculates the digest {</span><span class="s7">@link </span><span class="s6">https://nodejs.org/api/crypto.html#crypto_hash_digest_encoding}</span>
+	 <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string=} encoding encoding of the return value</span>
+	 <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{string|Buffer} digest</span>
+	 <span class="s6">*/</span>
+	<span class="s1">digest</span><span class="s3">(</span><span class="s1">encoding</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s2">`@webpack-debug-digest@</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">string</span><span class="s3">}</span><span class="s2">`</span><span class="s3">).</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;hex&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;crypto&quot;) | undefined} */</span>
+<span class="s4">let </span><span class="s1">crypto</span><span class="s3">;</span>
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;./hash/xxhash64&quot;) | undefined} */</span>
+<span class="s4">let </span><span class="s1">createXXHash64</span><span class="s3">;</span>
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;./hash/md4&quot;) | undefined} */</span>
+<span class="s4">let </span><span class="s1">createMd4</span><span class="s3">;</span>
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;./hash/BatchedHash&quot;) | undefined} */</span>
+<span class="s4">let </span><span class="s1">BatchedHash</span><span class="s3">;</span>
+
+<span class="s6">/** </span><span class="s7">@typedef </span><span class="s6">{string | typeof Hash} Algorithm */</span>
+
+<span class="s6">/**</span>
+ <span class="s6">* Creates a hash by name or function</span>
+ <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Algorithm} algorithm the algorithm name or a constructor creating a hash</span>
+ <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{Hash} the hash</span>
+ <span class="s6">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">algorithm </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">algorithm </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+		<span class="s0">// eslint-disable-next-line new-cap</span>
+		<span class="s4">return new </span><span class="s1">BulkUpdateDecorator</span><span class="s3">(() =&gt; </span><span class="s4">new </span><span class="s1">algorithm</span><span class="s3">());</span>
+	<span class="s3">}</span>
+	<span class="s4">switch </span><span class="s3">(</span><span class="s1">algorithm</span><span class="s3">) {</span>
+		<span class="s0">// TODO add non-cryptographic algorithm here</span>
+		<span class="s4">case </span><span class="s2">&quot;debug&quot;</span><span class="s3">:</span>
+			<span class="s4">return new </span><span class="s1">DebugHash</span><span class="s3">();</span>
+		<span class="s4">case </span><span class="s2">&quot;xxhash64&quot;</span><span class="s3">:</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">createXXHash64 </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">createXXHash64 </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./hash/xxhash64&quot;</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">BatchedHash </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s1">BatchedHash </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./hash/BatchedHash&quot;</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">return new </span><span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;./hash/BatchedHash&quot;)} */ </span><span class="s3">(</span>
+				<span class="s1">BatchedHash</span>
+			<span class="s3">)(</span><span class="s1">createXXHash64</span><span class="s3">());</span>
+		<span class="s4">case </span><span class="s2">&quot;md4&quot;</span><span class="s3">:</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">createMd4 </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">createMd4 </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./hash/md4&quot;</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">BatchedHash </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s1">BatchedHash </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./hash/BatchedHash&quot;</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">return new </span><span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;./hash/BatchedHash&quot;)} */ </span><span class="s3">(</span>
+				<span class="s1">BatchedHash</span>
+			<span class="s3">)(</span><span class="s1">createMd4</span><span class="s3">());</span>
+		<span class="s4">case </span><span class="s2">&quot;native-md4&quot;</span><span class="s3">:</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">crypto </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">crypto </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;crypto&quot;</span><span class="s3">);</span>
+			<span class="s4">return new </span><span class="s1">BulkUpdateDecorator</span><span class="s3">(</span>
+				<span class="s3">() =&gt; </span><span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;crypto&quot;)} */ </span><span class="s3">(</span><span class="s1">crypto</span><span class="s3">).</span><span class="s1">createHash</span><span class="s3">(</span><span class="s2">&quot;md4&quot;</span><span class="s3">),</span>
+				<span class="s2">&quot;md4&quot;</span>
+			<span class="s3">);</span>
+		<span class="s4">default</span><span class="s3">:</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">crypto </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">crypto </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;crypto&quot;</span><span class="s3">);</span>
+			<span class="s4">return new </span><span class="s1">BulkUpdateDecorator</span><span class="s3">(</span>
+				<span class="s3">() =&gt;</span>
+					<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{typeof import(&quot;crypto&quot;)} */ </span><span class="s3">(</span><span class="s1">crypto</span><span class="s3">).</span><span class="s1">createHash</span><span class="s3">(</span><span class="s1">algorithm</span><span class="s3">),</span>
+				<span class="s1">algorithm</span>
+			<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,440 @@
+<html>
+<head>
+<title>AssignLibraryPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+AssignLibraryPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">ConcatSource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;webpack-sources&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">UsageState </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ExportsInfo&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">RuntimeGlobals </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../RuntimeGlobals&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Template </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../Template&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">propertyAccess </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/propertyAccess&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">getEntryRuntime </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/runtime&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">AbstractLibraryPlugin </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AbstractLibraryPlugin&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).LibraryOptions} LibraryOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).LibraryType} LibraryType */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compilation&quot;)} Compilation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compilation&quot;).ChunkHashContext} ChunkHashContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptModulesPlugin&quot;).RenderContext} RenderContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptModulesPlugin&quot;).StartupRenderContext} StartupRenderContext */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/Hash&quot;)} Hash */</span>
+<span class="s5">/** </span><span class="s6">@template </span><span class="s5">T @typedef {import(&quot;./AbstractLibraryPlugin&quot;).LibraryContext&lt;T&gt;} LibraryContext&lt;T&gt; */</span>
+
+<span class="s4">const </span><span class="s1">KEYWORD_REGEX </span><span class="s3">=</span>
+	<span class="s7">/^(await|break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|implements|import|in|instanceof|interface|let|new|null|package|private|protected|public|return|super|switch|static|this|throw|try|true|typeof|var|void|while|with|yield)$/</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">IDENTIFIER_REGEX </span><span class="s3">=</span>
+	<span class="s7">/^[\p{L}\p{Nl}$_][\p{L}\p{Nl}$\p{Mn}\p{Mc}\p{Nd}\p{Pc}]*$/iu</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Validates the library name by checking for keywords and valid characters</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name name to be validated</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, when valid</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">isNameValid </span><span class="s3">= </span><span class="s1">name </span><span class="s3">=&gt;</span>
+	<span class="s3">!</span><span class="s1">KEYWORD_REGEX</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">name</span><span class="s3">) &amp;&amp; </span><span class="s1">IDENTIFIER_REGEX</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} accessor variable plus properties</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} existingLength items of accessor that are existing already</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean=} initLast if the last property should also be initialized to an object</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} code to access the accessor while initializing</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">accessWithInit </span><span class="s3">= (</span><span class="s1">accessor</span><span class="s3">, </span><span class="s1">existingLength</span><span class="s3">, </span><span class="s1">initLast </span><span class="s3">= </span><span class="s4">false</span><span class="s3">) =&gt; {</span>
+	<span class="s0">// This generates for [a, b, c, d]:</span>
+	<span class="s0">// (((a = typeof a === &quot;undefined&quot; ? {} : a).b = a.b || {}).c = a.b.c || {}).d</span>
+	<span class="s4">const </span><span class="s1">base </span><span class="s3">= </span><span class="s1">accessor</span><span class="s3">[</span><span class="s8">0</span><span class="s3">];</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">accessor</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s8">1 </span><span class="s3">&amp;&amp; !</span><span class="s1">initLast</span><span class="s3">) </span><span class="s4">return </span><span class="s1">base</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">current </span><span class="s3">=</span>
+		<span class="s1">existingLength </span><span class="s3">&gt; </span><span class="s8">0</span>
+			<span class="s3">? </span><span class="s1">base</span>
+			<span class="s3">: </span><span class="s2">`(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">} </span><span class="s2">= typeof </span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">} </span><span class="s2">=== &quot;undefined&quot; ? {} : </span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">;</span>
+
+	<span class="s0">// i is the current position in accessor that has been printed</span>
+	<span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s8">1</span><span class="s3">;</span>
+
+	<span class="s0">// all properties printed so far (excluding base)</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[] | undefined} */</span>
+	<span class="s4">let </span><span class="s1">propsSoFar</span><span class="s3">;</span>
+
+	<span class="s0">// if there is existingLength, print all properties until this position as property access</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">existingLength </span><span class="s3">&gt; </span><span class="s1">i</span><span class="s3">) {</span>
+		<span class="s1">propsSoFar </span><span class="s3">= </span><span class="s1">accessor</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s8">1</span><span class="s3">, </span><span class="s1">existingLength</span><span class="s3">);</span>
+		<span class="s1">i </span><span class="s3">= </span><span class="s1">existingLength</span><span class="s3">;</span>
+		<span class="s1">current </span><span class="s3">+= </span><span class="s1">propertyAccess</span><span class="s3">(</span><span class="s1">propsSoFar</span><span class="s3">);</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s1">propsSoFar </span><span class="s3">= [];</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// all remaining properties (except the last one when initLast is not set)</span>
+	<span class="s0">// should be printed as initializer</span>
+	<span class="s4">const </span><span class="s1">initUntil </span><span class="s3">= </span><span class="s1">initLast </span><span class="s3">? </span><span class="s1">accessor</span><span class="s3">.</span><span class="s1">length </span><span class="s3">: </span><span class="s1">accessor</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s8">1</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">initUntil</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+		<span class="s4">const </span><span class="s1">prop </span><span class="s3">= </span><span class="s1">accessor</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+		<span class="s1">propsSoFar</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">prop</span><span class="s3">);</span>
+		<span class="s1">current </span><span class="s3">= </span><span class="s2">`(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">current</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">propertyAccess</span><span class="s3">([</span><span class="s1">prop</span><span class="s3">])} </span><span class="s2">= </span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">propertyAccess</span><span class="s3">(</span>
+			<span class="s1">propsSoFar</span>
+		<span class="s3">)} </span><span class="s2">|| {})`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// print the last property as property access if not yet printed</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">accessor</span><span class="s3">.</span><span class="s1">length</span><span class="s3">)</span>
+		<span class="s1">current </span><span class="s3">= </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">current</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">propertyAccess</span><span class="s3">([</span><span class="s1">accessor</span><span class="s3">[</span><span class="s1">accessor</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s8">1</span><span class="s3">]])}</span><span class="s2">`</span><span class="s3">;</span>
+
+	<span class="s4">return </span><span class="s1">current</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} AssignLibraryPluginOptions</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{LibraryType} type</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string[] | &quot;global&quot;} prefix name prefix</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string | false} declare declare name as variable</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{&quot;error&quot;|&quot;static&quot;|&quot;copy&quot;|&quot;assign&quot;} unnamed behavior for unnamed library name</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{&quot;copy&quot;|&quot;assign&quot;=} named behavior for named library name</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} AssignLibraryPluginParsed</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string | string[]} name</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string | string[] | undefined} export</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{AssignLibraryPluginParsed} T</span>
+ <span class="s5">* </span><span class="s6">@extends </span><span class="s5">{AbstractLibraryPlugin&lt;AssignLibraryPluginParsed&gt;}</span>
+ <span class="s5">*/</span>
+<span class="s4">class </span><span class="s1">AssignLibraryPlugin </span><span class="s4">extends </span><span class="s1">AbstractLibraryPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssignLibraryPluginOptions} options the plugin options</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s4">super</span><span class="s3">({</span>
+			<span class="s1">pluginName</span><span class="s3">: </span><span class="s2">&quot;AssignLibraryPlugin&quot;</span><span class="s3">,</span>
+			<span class="s1">type</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">type</span>
+		<span class="s3">});</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">prefix </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">prefix</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">declare </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">declare</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">unnamed </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">unnamed</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">named </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">named </span><span class="s3">|| </span><span class="s2">&quot;assign&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryOptions} library normalized library option</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{T | false} preprocess as needed by overriding</span>
+	 <span class="s5">*/</span>
+	<span class="s1">parseOptions</span><span class="s3">(</span><span class="s1">library</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">name </span><span class="s3">} = </span><span class="s1">library</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">unnamed </span><span class="s3">=== </span><span class="s2">&quot;error&quot;</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">name </span><span class="s3">!== </span><span class="s2">&quot;string&quot; </span><span class="s3">&amp;&amp; !</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">name</span><span class="s3">)) {</span>
+				<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+					<span class="s2">`Library name must be a string or string array. </span><span class="s1">$</span><span class="s3">{</span><span class="s1">AbstractLibraryPlugin</span><span class="s3">.</span><span class="s1">COMMON_LIBRARY_NAME_MESSAGE</span><span class="s3">}</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">name </span><span class="s3">&amp;&amp; </span><span class="s4">typeof </span><span class="s1">name </span><span class="s3">!== </span><span class="s2">&quot;string&quot; </span><span class="s3">&amp;&amp; !</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">name</span><span class="s3">)) {</span>
+			<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+				<span class="s2">`Library name must be a string, string array or unset. </span><span class="s1">$</span><span class="s3">{</span><span class="s1">AbstractLibraryPlugin</span><span class="s3">.</span><span class="s1">COMMON_LIBRARY_NAME_MESSAGE</span><span class="s3">}</span><span class="s2">`</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">_name </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string | string[]} */ </span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s3">{</span>
+			<span class="s1">name</span><span class="s3">: </span><span class="s1">_name</span><span class="s3">,</span>
+			<span class="s4">export</span><span class="s3">: </span><span class="s1">library</span><span class="s3">.</span><span class="s1">export</span>
+		<span class="s3">};</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the exporting entry module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} entryName the name of the entrypoint</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryContext&lt;T&gt;} libraryContext context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">finishEntryModule</span><span class="s3">(</span>
+		<span class="s1">module</span><span class="s3">,</span>
+		<span class="s1">entryName</span><span class="s3">,</span>
+		<span class="s3">{ </span><span class="s1">options</span><span class="s3">, </span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">compilation</span><span class="s3">: { </span><span class="s1">moduleGraph </span><span class="s3">} }</span>
+	<span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">getEntryRuntime</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">entryName</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportInfo</span><span class="s3">(</span>
+				<span class="s1">module</span><span class="s3">,</span>
+				<span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span><span class="s3">) ? </span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span><span class="s3">[</span><span class="s8">0</span><span class="s3">] : </span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span>
+			<span class="s3">);</span>
+			<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setUsed</span><span class="s3">(</span><span class="s1">UsageState</span><span class="s3">.</span><span class="s1">Used</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+			<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">canMangleUse </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+			<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">setUsedInUnknownWay</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">addExtraReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s2">&quot;used as library export&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string[]} the prefix</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_getPrefix</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">) {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">prefix </span><span class="s3">=== </span><span class="s2">&quot;global&quot;</span>
+			<span class="s3">? [</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">runtimeTemplate</span><span class="s3">.</span><span class="s1">globalObject</span><span class="s3">]</span>
+			<span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">prefix</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssignLibraryPluginParsed} options the library options</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} chunk the chunk</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Array&lt;string&gt;} the resolved full name</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_getResolvedFullName</span><span class="s3">(</span><span class="s1">options</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">compilation</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">prefix </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getPrefix</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">fullName </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">name </span><span class="s3">? </span><span class="s1">prefix</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) : </span><span class="s1">prefix</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">fullName</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">n </span><span class="s3">=&gt;</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span><span class="s1">n</span><span class="s3">, {</span>
+				<span class="s1">chunk</span>
+			<span class="s3">})</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Source} source source</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RenderContext} renderContext render context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryContext&lt;T&gt;} libraryContext context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Source} source with library export</span>
+	 <span class="s5">*/</span>
+	<span class="s1">render</span><span class="s3">(</span><span class="s1">source</span><span class="s3">, { </span><span class="s1">chunk </span><span class="s3">}, { </span><span class="s1">options</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">}) {</span>
+		<span class="s4">const </span><span class="s1">fullNameResolved </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getResolvedFullName</span><span class="s3">(</span>
+			<span class="s1">options</span><span class="s3">,</span>
+			<span class="s1">chunk</span><span class="s3">,</span>
+			<span class="s1">compilation</span>
+		<span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">declare</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">base </span><span class="s3">= </span><span class="s1">fullNameResolved</span><span class="s3">[</span><span class="s8">0</span><span class="s3">];</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">isNameValid</span><span class="s3">(</span><span class="s1">base</span><span class="s3">)) {</span>
+				<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+					<span class="s2">`Library name base (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">}</span><span class="s2">) must be a valid identifier when using a var declaring library type. Either use a valid identifier (e. g. </span><span class="s1">$</span><span class="s3">{</span><span class="s1">Template</span><span class="s3">.</span><span class="s1">toIdentifier</span><span class="s3">(</span>
+						<span class="s1">base</span>
+					<span class="s3">)}</span><span class="s2">) or use a different library type (e. g. 'type: &quot;global&quot;', which assign a property on the global scope instead of declaring a variable). </span><span class="s1">$</span><span class="s3">{</span>
+						<span class="s1">AbstractLibraryPlugin</span><span class="s3">.</span><span class="s1">COMMON_LIBRARY_NAME_MESSAGE</span>
+					<span class="s3">}</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s1">source </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConcatSource</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">declare</span><span class="s3">} </span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">}</span><span class="s2">;</span><span class="s4">\n</span><span class="s2">`</span><span class="s3">, </span><span class="s1">source</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">source</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the exporting entry module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RenderContext} renderContext render context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryContext&lt;T&gt;} libraryContext context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | undefined} bailout reason</span>
+	 <span class="s5">*/</span>
+	<span class="s1">embedInRuntimeBailout</span><span class="s3">(</span>
+		<span class="s1">module</span><span class="s3">,</span>
+		<span class="s3">{ </span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">codeGenerationResults </span><span class="s3">},</span>
+		<span class="s3">{ </span><span class="s1">options</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">}</span>
+	<span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">data </span><span class="s3">} = </span><span class="s1">codeGenerationResults</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">topLevelDeclarations </span><span class="s3">=</span>
+			<span class="s3">(</span><span class="s1">data </span><span class="s3">&amp;&amp; </span><span class="s1">data</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">&quot;topLevelDeclarations&quot;</span><span class="s3">)) ||</span>
+			<span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo </span><span class="s3">&amp;&amp; </span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">topLevelDeclarations</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">topLevelDeclarations</span><span class="s3">)</span>
+			<span class="s4">return </span><span class="s2">&quot;it doesn't tell about top level declarations.&quot;</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">fullNameResolved </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getResolvedFullName</span><span class="s3">(</span>
+			<span class="s1">options</span><span class="s3">,</span>
+			<span class="s1">chunk</span><span class="s3">,</span>
+			<span class="s1">compilation</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">base </span><span class="s3">= </span><span class="s1">fullNameResolved</span><span class="s3">[</span><span class="s8">0</span><span class="s3">];</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">topLevelDeclarations</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">base</span><span class="s3">))</span>
+			<span class="s4">return </span><span class="s2">`it declares '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">}</span><span class="s2">' on top-level, which conflicts with the current library output.`</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RenderContext} renderContext render context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryContext&lt;T&gt;} libraryContext context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | undefined} bailout reason</span>
+	 <span class="s5">*/</span>
+	<span class="s1">strictRuntimeBailout</span><span class="s3">({ </span><span class="s1">chunk </span><span class="s3">}, { </span><span class="s1">options</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">}) {</span>
+		<span class="s4">if </span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">declare </span><span class="s3">||</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">prefix </span><span class="s3">=== </span><span class="s2">&quot;global&quot; </span><span class="s3">||</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">prefix</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0 </span><span class="s3">||</span>
+			<span class="s3">!</span><span class="s1">options</span><span class="s3">.</span><span class="s1">name</span>
+		<span class="s3">) {</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s2">&quot;a global variable is assign and maybe created&quot;</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Source} source source</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{StartupRenderContext} renderContext render context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryContext&lt;T&gt;} libraryContext context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Source} source with library export</span>
+	 <span class="s5">*/</span>
+	<span class="s1">renderStartup</span><span class="s3">(</span>
+		<span class="s1">source</span><span class="s3">,</span>
+		<span class="s1">module</span><span class="s3">,</span>
+		<span class="s3">{ </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">chunk </span><span class="s3">},</span>
+		<span class="s3">{ </span><span class="s1">options</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">}</span>
+	<span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">fullNameResolved </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getResolvedFullName</span><span class="s3">(</span>
+			<span class="s1">options</span><span class="s3">,</span>
+			<span class="s1">chunk</span><span class="s3">,</span>
+			<span class="s1">compilation</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">staticExports </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">unnamed </span><span class="s3">=== </span><span class="s2">&quot;static&quot;</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">exportAccess </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span>
+			<span class="s3">? </span><span class="s1">propertyAccess</span><span class="s3">(</span>
+					<span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span><span class="s3">) ? </span><span class="s1">options</span><span class="s3">.</span><span class="s1">export </span><span class="s3">: [</span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span><span class="s3">]</span>
+				<span class="s3">)</span>
+			<span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConcatSource</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">staticExports</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">exportTarget </span><span class="s3">= </span><span class="s1">accessWithInit</span><span class="s3">(</span>
+				<span class="s1">fullNameResolved</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_getPrefix</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">).</span><span class="s1">length</span><span class="s3">,</span>
+				<span class="s4">true</span>
+			<span class="s3">);</span>
+
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */</span>
+			<span class="s4">const </span><span class="s1">provided </span><span class="s3">= [];</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">exportInfo of exportsInfo</span><span class="s3">.</span><span class="s1">orderedExports</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">provided</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">nameAccess </span><span class="s3">= </span><span class="s1">propertyAccess</span><span class="s3">([</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">name</span><span class="s3">]);</span>
+				<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+					<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportTarget</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">nameAccess</span><span class="s3">} </span><span class="s2">= </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportAccess</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">nameAccess</span><span class="s3">}</span><span class="s2">;</span><span class="s4">\n</span><span class="s2">`</span>
+				<span class="s3">);</span>
+				<span class="s1">provided</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">name</span><span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s4">const </span><span class="s1">webpackExportTarget </span><span class="s3">= </span><span class="s1">accessWithInit</span><span class="s3">(</span>
+				<span class="s1">fullNameResolved</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_getPrefix</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">).</span><span class="s1">length</span><span class="s3">,</span>
+				<span class="s4">true</span>
+			<span class="s3">);</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+			<span class="s4">let </span><span class="s1">exports </span><span class="s3">= </span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">exportAccess</span><span class="s3">) {</span>
+				<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+					<span class="s2">`var __webpack_exports_export__ = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportAccess</span><span class="s3">}</span><span class="s2">;</span><span class="s4">\n</span><span class="s2">`</span>
+				<span class="s3">);</span>
+				<span class="s1">exports </span><span class="s3">= </span><span class="s2">&quot;__webpack_exports_export__&quot;</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s2">`for(var __webpack_i__ in </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exports</span><span class="s3">}</span><span class="s2">) {</span><span class="s4">\n</span><span class="s2">`</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">hasProvided </span><span class="s3">= </span><span class="s1">provided</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s8">0</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">hasProvided</span><span class="s3">) {</span>
+				<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+					<span class="s2">`  if (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">provided</span><span class="s3">)}</span><span class="s2">.indexOf(__webpack_i__) === -1) {</span><span class="s4">\n</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+				<span class="s2">`  </span><span class="s1">$</span><span class="s3">{</span><span class="s1">hasProvided </span><span class="s3">? </span><span class="s2">&quot;  &quot; </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">webpackExportTarget</span><span class="s3">}</span><span class="s2">[__webpack_i__] = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exports</span><span class="s3">}</span><span class="s2">[__webpack_i__];</span><span class="s4">\n</span><span class="s2">`</span>
+			<span class="s3">);</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">hasProvided </span><span class="s3">? </span><span class="s2">&quot;  }</span><span class="s4">\n</span><span class="s2">}</span><span class="s4">\n</span><span class="s2">&quot; </span><span class="s3">: </span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">&quot;</span><span class="s3">);</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+				<span class="s2">`Object.defineProperty(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportTarget</span><span class="s3">}</span><span class="s2">, &quot;__esModule&quot;, { value: true });</span><span class="s4">\n</span><span class="s2">`</span>
+			<span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">name </span><span class="s3">? </span><span class="s4">this</span><span class="s3">.</span><span class="s1">named </span><span class="s3">=== </span><span class="s2">&quot;copy&quot; </span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">unnamed </span><span class="s3">=== </span><span class="s2">&quot;copy&quot;</span><span class="s3">) {</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+				<span class="s2">`var __webpack_export_target__ = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">accessWithInit</span><span class="s3">(</span>
+					<span class="s1">fullNameResolved</span><span class="s3">,</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">_getPrefix</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">).</span><span class="s1">length</span><span class="s3">,</span>
+					<span class="s4">true</span>
+				<span class="s3">)}</span><span class="s2">;</span><span class="s4">\n</span><span class="s2">`</span>
+			<span class="s3">);</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+			<span class="s4">let </span><span class="s1">exports </span><span class="s3">= </span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">exportAccess</span><span class="s3">) {</span>
+				<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+					<span class="s2">`var __webpack_exports_export__ = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportAccess</span><span class="s3">}</span><span class="s2">;</span><span class="s4">\n</span><span class="s2">`</span>
+				<span class="s3">);</span>
+				<span class="s1">exports </span><span class="s3">= </span><span class="s2">&quot;__webpack_exports_export__&quot;</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+				<span class="s2">`for(var __webpack_i__ in </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exports</span><span class="s3">}</span><span class="s2">) __webpack_export_target__[__webpack_i__] = </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exports</span><span class="s3">}</span><span class="s2">[__webpack_i__];</span><span class="s4">\n</span><span class="s2">`</span>
+			<span class="s3">);</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+				<span class="s2">`if(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exports</span><span class="s3">}</span><span class="s2">.__esModule) Object.defineProperty(__webpack_export_target__, &quot;__esModule&quot;, { value: true });</span><span class="s4">\n</span><span class="s2">`</span>
+			<span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">result</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span>
+				<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">accessWithInit</span><span class="s3">(</span>
+					<span class="s1">fullNameResolved</span><span class="s3">,</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">_getPrefix</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">).</span><span class="s1">length</span><span class="s3">,</span>
+					<span class="s4">false</span>
+				<span class="s3">)} </span><span class="s2">= </span><span class="s1">$</span><span class="s3">{</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportAccess</span><span class="s3">}</span><span class="s2">;</span><span class="s4">\n</span><span class="s2">`</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} chunk the chunk</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;string&gt;} set runtime requirements</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryContext&lt;T&gt;} libraryContext context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">runtimeRequirements</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">set</span><span class="s3">, </span><span class="s1">libraryContext</span><span class="s3">) {</span>
+		<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} chunk the chunk</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Hash} hash hash</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkHashContext} chunkHashContext chunk hash context</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LibraryContext&lt;T&gt;} libraryContext context</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">chunkHash</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">hash</span><span class="s3">, </span><span class="s1">chunkHashContext</span><span class="s3">, { </span><span class="s1">options</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">}) {</span>
+		<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s2">&quot;AssignLibraryPlugin&quot;</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">fullNameResolved </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getResolvedFullName</span><span class="s3">(</span>
+			<span class="s1">options</span><span class="s3">,</span>
+			<span class="s1">chunk</span><span class="s3">,</span>
+			<span class="s1">compilation</span>
+		<span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">name </span><span class="s3">? </span><span class="s4">this</span><span class="s3">.</span><span class="s1">named </span><span class="s3">=== </span><span class="s2">&quot;copy&quot; </span><span class="s3">: </span><span class="s4">this</span><span class="s3">.</span><span class="s1">unnamed </span><span class="s3">=== </span><span class="s2">&quot;copy&quot;</span><span class="s3">) {</span>
+			<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s2">&quot;copy&quot;</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">declare</span><span class="s3">) {</span>
+			<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">declare</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">fullNameResolved</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">));</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span><span class="s3">) {</span>
+			<span class="s1">hash</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">options</span><span class="s3">.</span><span class="s1">export</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">AssignLibraryPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

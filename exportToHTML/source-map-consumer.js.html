@@ -1,0 +1,1170 @@
+<html>
+<head>
+<title>source-map-consumer.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #cf8e6d;}
+.s3 { color: #bcbec4;}
+.s4 { color: #6aab73;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #2aacb8;}
+.s7 { color: #67a37c; font-style: italic;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+source-map-consumer.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* -*- Mode: js; js-indent-level: 2; -*- */</span>
+<span class="s0">/* 
+ * Copyright 2011 Mozilla Foundation and contributors 
+ * Licensed under the New BSD license. See LICENSE or: 
+ * http://opensource.org/licenses/BSD-3-Clause 
+ */</span>
+
+<span class="s2">var </span><span class="s1">util </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s4">'./util'</span><span class="s3">);</span>
+<span class="s2">var </span><span class="s1">binarySearch </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s4">'./binary-search'</span><span class="s3">);</span>
+<span class="s2">var </span><span class="s1">ArraySet </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s4">'./array-set'</span><span class="s3">).</span><span class="s1">ArraySet</span><span class="s3">;</span>
+<span class="s2">var </span><span class="s1">base64VLQ </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s4">'./base64-vlq'</span><span class="s3">);</span>
+<span class="s2">var </span><span class="s1">quickSort </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s4">'./quick-sort'</span><span class="s3">).</span><span class="s1">quickSort</span><span class="s3">;</span>
+
+<span class="s2">function </span><span class="s1">SourceMapConsumer</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">) {</span>
+  <span class="s2">var </span><span class="s1">sourceMap </span><span class="s3">= </span><span class="s1">aSourceMap</span><span class="s3">;</span>
+  <span class="s2">if </span><span class="s3">(</span><span class="s2">typeof </span><span class="s1">aSourceMap </span><span class="s3">=== </span><span class="s4">'string'</span><span class="s3">) {</span>
+    <span class="s1">sourceMap </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">parseSourceMapInput</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s2">return </span><span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sections </span><span class="s3">!= </span><span class="s2">null</span>
+    <span class="s3">? </span><span class="s2">new </span><span class="s1">IndexedSourceMapConsumer</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">)</span>
+    <span class="s3">: </span><span class="s2">new </span><span class="s1">BasicSourceMapConsumer</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">);</span>
+<span class="s3">}</span>
+
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">fromSourceMap </span><span class="s3">= </span><span class="s2">function</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">) {</span>
+  <span class="s2">return </span><span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">fromSourceMap</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">);</span>
+<span class="s3">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The version of the source mapping spec that we are consuming.</span>
+ <span class="s5">*/</span>
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_version </span><span class="s3">= </span><span class="s6">3</span><span class="s3">;</span>
+
+<span class="s0">// `__generatedMappings` and `__originalMappings` are arrays that hold the</span>
+<span class="s0">// parsed mapping coordinates from the source map's &quot;mappings&quot; attribute. They</span>
+<span class="s0">// are lazily instantiated, accessed via the `_generatedMappings` and</span>
+<span class="s0">// `_originalMappings` getters respectively, and we only parse the mappings</span>
+<span class="s0">// and create these arrays once queried for a source location. We jump through</span>
+<span class="s0">// these hoops because there can be many thousands of mappings, and parsing</span>
+<span class="s0">// them is expensive, so we only want to do it if we must.</span>
+<span class="s0">//</span>
+<span class="s0">// Each object in the arrays is of the form:</span>
+<span class="s0">//</span>
+<span class="s0">//     {</span>
+<span class="s0">//       generatedLine: The line number in the generated code,</span>
+<span class="s0">//       generatedColumn: The column number in the generated code,</span>
+<span class="s0">//       source: The path to the original source file that generated this</span>
+<span class="s0">//               chunk of code,</span>
+<span class="s0">//       originalLine: The line number in the original source that</span>
+<span class="s0">//                     corresponds to this chunk of generated code,</span>
+<span class="s0">//       originalColumn: The column number in the original source that</span>
+<span class="s0">//                       corresponds to this chunk of generated code,</span>
+<span class="s0">//       name: The name of the original symbol which generated this chunk of</span>
+<span class="s0">//             code.</span>
+<span class="s0">//     }</span>
+<span class="s0">//</span>
+<span class="s0">// All properties except for `generatedLine` and `generatedColumn` can be</span>
+<span class="s0">// `null`.</span>
+<span class="s0">//</span>
+<span class="s0">// `_generatedMappings` is ordered by the generated positions.</span>
+<span class="s0">//</span>
+<span class="s0">// `_originalMappings` is ordered by the original positions.</span>
+
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">__generatedMappings </span><span class="s3">= </span><span class="s2">null</span><span class="s3">;</span>
+<span class="s1">Object</span><span class="s3">.</span><span class="s1">defineProperty</span><span class="s3">(</span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">, </span><span class="s4">'_generatedMappings'</span><span class="s3">, {</span>
+  <span class="s1">configurable</span><span class="s3">: </span><span class="s2">true</span><span class="s3">,</span>
+  <span class="s1">enumerable</span><span class="s3">: </span><span class="s2">true</span><span class="s3">,</span>
+  <span class="s1">get</span><span class="s3">: </span><span class="s2">function </span><span class="s3">() {</span>
+    <span class="s2">if </span><span class="s3">(!</span><span class="s2">this</span><span class="s3">.</span><span class="s1">__generatedMappings</span><span class="s3">) {</span>
+      <span class="s2">this</span><span class="s3">.</span><span class="s1">_parseMappings</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_mappings</span><span class="s3">, </span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return this</span><span class="s3">.</span><span class="s1">__generatedMappings</span><span class="s3">;</span>
+  <span class="s3">}</span>
+<span class="s3">});</span>
+
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">__originalMappings </span><span class="s3">= </span><span class="s2">null</span><span class="s3">;</span>
+<span class="s1">Object</span><span class="s3">.</span><span class="s1">defineProperty</span><span class="s3">(</span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">, </span><span class="s4">'_originalMappings'</span><span class="s3">, {</span>
+  <span class="s1">configurable</span><span class="s3">: </span><span class="s2">true</span><span class="s3">,</span>
+  <span class="s1">enumerable</span><span class="s3">: </span><span class="s2">true</span><span class="s3">,</span>
+  <span class="s1">get</span><span class="s3">: </span><span class="s2">function </span><span class="s3">() {</span>
+    <span class="s2">if </span><span class="s3">(!</span><span class="s2">this</span><span class="s3">.</span><span class="s1">__originalMappings</span><span class="s3">) {</span>
+      <span class="s2">this</span><span class="s3">.</span><span class="s1">_parseMappings</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_mappings</span><span class="s3">, </span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return this</span><span class="s3">.</span><span class="s1">__originalMappings</span><span class="s3">;</span>
+  <span class="s3">}</span>
+<span class="s3">});</span>
+
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_charIsMappingSeparator </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_charIsMappingSeparator</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">, </span><span class="s1">index</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">c </span><span class="s3">= </span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">charAt</span><span class="s3">(</span><span class="s1">index</span><span class="s3">);</span>
+    <span class="s2">return </span><span class="s1">c </span><span class="s3">=== </span><span class="s4">&quot;;&quot; </span><span class="s3">|| </span><span class="s1">c </span><span class="s3">=== </span><span class="s4">&quot;,&quot;</span><span class="s3">;</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Parse the mappings in a string in to a data structure which we can easily</span>
+ <span class="s5">* query (the ordered arrays in the `this.__generatedMappings` and</span>
+ <span class="s5">* `this.__originalMappings` properties).</span>
+ <span class="s5">*/</span>
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_parseMappings </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_parseMappings</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">, </span><span class="s1">aSourceRoot</span><span class="s3">) {</span>
+    <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">&quot;Subclasses must implement _parseMappings&quot;</span><span class="s3">);</span>
+  <span class="s3">};</span>
+
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">GENERATED_ORDER </span><span class="s3">= </span><span class="s6">1</span><span class="s3">;</span>
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">ORIGINAL_ORDER </span><span class="s3">= </span><span class="s6">2</span><span class="s3">;</span>
+
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">GREATEST_LOWER_BOUND </span><span class="s3">= </span><span class="s6">1</span><span class="s3">;</span>
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">LEAST_UPPER_BOUND </span><span class="s3">= </span><span class="s6">2</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Iterate over each mapping between an original source/line/column and a</span>
+ <span class="s5">* generated line/column in this source map.</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s7">@param </span><span class="s5">Function aCallback</span>
+ <span class="s5">*        The function that is called with each mapping.</span>
+ <span class="s5">* </span><span class="s7">@param </span><span class="s5">Object aContext</span>
+ <span class="s5">*        Optional. If specified, this object will be the value of `this` every</span>
+ <span class="s5">*        time that `aCallback` is called.</span>
+ <span class="s5">* </span><span class="s7">@param </span><span class="s5">aOrder</span>
+ <span class="s5">*        Either `SourceMapConsumer.GENERATED_ORDER` or</span>
+ <span class="s5">*        `SourceMapConsumer.ORIGINAL_ORDER`. Specifies whether you want to</span>
+ <span class="s5">*        iterate over the mappings sorted by the generated file's line/column</span>
+ <span class="s5">*        order or the original's source/line/column order, respectively. Defaults to</span>
+ <span class="s5">*        `SourceMapConsumer.GENERATED_ORDER`.</span>
+ <span class="s5">*/</span>
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">eachMapping </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_eachMapping</span><span class="s3">(</span><span class="s1">aCallback</span><span class="s3">, </span><span class="s1">aContext</span><span class="s3">, </span><span class="s1">aOrder</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">context </span><span class="s3">= </span><span class="s1">aContext </span><span class="s3">|| </span><span class="s2">null</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">order </span><span class="s3">= </span><span class="s1">aOrder </span><span class="s3">|| </span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">GENERATED_ORDER</span><span class="s3">;</span>
+
+    <span class="s2">var </span><span class="s1">mappings</span><span class="s3">;</span>
+    <span class="s2">switch </span><span class="s3">(</span><span class="s1">order</span><span class="s3">) {</span>
+    <span class="s2">case </span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">GENERATED_ORDER</span><span class="s3">:</span>
+      <span class="s1">mappings </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">;</span>
+      <span class="s2">break</span><span class="s3">;</span>
+    <span class="s2">case </span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">ORIGINAL_ORDER</span><span class="s3">:</span>
+      <span class="s1">mappings </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_originalMappings</span><span class="s3">;</span>
+      <span class="s2">break</span><span class="s3">;</span>
+    <span class="s2">default</span><span class="s3">:</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">&quot;Unknown order of iteration.&quot;</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s2">var </span><span class="s1">sourceRoot </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">;</span>
+    <span class="s1">mappings</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s2">function </span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">) {</span>
+      <span class="s2">var </span><span class="s1">source </span><span class="s3">= </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">source </span><span class="s3">=== </span><span class="s2">null </span><span class="s3">? </span><span class="s2">null </span><span class="s3">: </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">at</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">source</span><span class="s3">);</span>
+      <span class="s1">source </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">computeSourceURL</span><span class="s3">(</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sourceMapURL</span><span class="s3">);</span>
+      <span class="s2">return </span><span class="s3">{</span>
+        <span class="s1">source</span><span class="s3">: </span><span class="s1">source</span><span class="s3">,</span>
+        <span class="s1">generatedLine</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedLine</span><span class="s3">,</span>
+        <span class="s1">generatedColumn</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedColumn</span><span class="s3">,</span>
+        <span class="s1">originalLine</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine</span><span class="s3">,</span>
+        <span class="s1">originalColumn</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalColumn</span><span class="s3">,</span>
+        <span class="s1">name</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">name </span><span class="s3">=== </span><span class="s2">null </span><span class="s3">? </span><span class="s2">null </span><span class="s3">: </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_names</span><span class="s3">.</span><span class="s1">at</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">name</span><span class="s3">)</span>
+      <span class="s3">};</span>
+    <span class="s3">}, </span><span class="s2">this</span><span class="s3">).</span><span class="s1">forEach</span><span class="s3">(</span><span class="s1">aCallback</span><span class="s3">, </span><span class="s1">context</span><span class="s3">);</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Returns all generated line and column information for the original source,</span>
+ <span class="s5">* line, and column provided. If no column is provided, returns all mappings</span>
+ <span class="s5">* corresponding to a either the line we are searching for or the next</span>
+ <span class="s5">* closest line that has any mappings. Otherwise, returns all mappings</span>
+ <span class="s5">* corresponding to the given line and either the column we are searching for</span>
+ <span class="s5">* or the next closest column that has any offsets.</span>
+ <span class="s5">*</span>
+ <span class="s5">* The only argument is an object with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - source: The filename of the original source.</span>
+ <span class="s5">*   - line: The line number in the original source.  The line number is 1-based.</span>
+ <span class="s5">*   - column: Optional. the column number in the original source.</span>
+ <span class="s5">*    The column number is 0-based.</span>
+ <span class="s5">*</span>
+ <span class="s5">* and an array of objects is returned, each with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - line: The line number in the generated source, or null.  The</span>
+ <span class="s5">*    line number is 1-based.</span>
+ <span class="s5">*   - column: The column number in the generated source, or null.</span>
+ <span class="s5">*    The column number is 0-based.</span>
+ <span class="s5">*/</span>
+<span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">allGeneratedPositionsFor </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_allGeneratedPositionsFor</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">line </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'line'</span><span class="s3">);</span>
+
+    <span class="s0">// When there is no exact match, BasicSourceMapConsumer.prototype._findMapping</span>
+    <span class="s0">// returns the index of the closest mapping less than the needle. By</span>
+    <span class="s0">// setting needle.originalColumn to 0, we thus find the last mapping for</span>
+    <span class="s0">// the given line, provided such a mapping exists.</span>
+    <span class="s2">var </span><span class="s1">needle </span><span class="s3">= {</span>
+      <span class="s1">source</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'source'</span><span class="s3">),</span>
+      <span class="s1">originalLine</span><span class="s3">: </span><span class="s1">line</span><span class="s3">,</span>
+      <span class="s1">originalColumn</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'column'</span><span class="s3">, </span><span class="s6">0</span><span class="s3">)</span>
+    <span class="s3">};</span>
+
+    <span class="s1">needle</span><span class="s3">.</span><span class="s1">source </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_findSourceIndex</span><span class="s3">(</span><span class="s1">needle</span><span class="s3">.</span><span class="s1">source</span><span class="s3">);</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">needle</span><span class="s3">.</span><span class="s1">source </span><span class="s3">&lt; </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">return </span><span class="s3">[];</span>
+    <span class="s3">}</span>
+
+    <span class="s2">var </span><span class="s1">mappings </span><span class="s3">= [];</span>
+
+    <span class="s2">var </span><span class="s1">index </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_findMapping</span><span class="s3">(</span><span class="s1">needle</span><span class="s3">,</span>
+                                  <span class="s2">this</span><span class="s3">.</span><span class="s1">_originalMappings</span><span class="s3">,</span>
+                                  <span class="s4">&quot;originalLine&quot;</span><span class="s3">,</span>
+                                  <span class="s4">&quot;originalColumn&quot;</span><span class="s3">,</span>
+                                  <span class="s1">util</span><span class="s3">.</span><span class="s1">compareByOriginalPositions</span><span class="s3">,</span>
+                                  <span class="s1">binarySearch</span><span class="s3">.</span><span class="s1">LEAST_UPPER_BOUND</span><span class="s3">);</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">&gt;= </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">var </span><span class="s1">mapping </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_originalMappings</span><span class="s3">[</span><span class="s1">index</span><span class="s3">];</span>
+
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">.</span><span class="s1">column </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+        <span class="s2">var </span><span class="s1">originalLine </span><span class="s3">= </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine</span><span class="s3">;</span>
+
+        <span class="s0">// Iterate until either we run out of mappings, or we run into</span>
+        <span class="s0">// a mapping for a different line than the one we found. Since</span>
+        <span class="s0">// mappings are sorted, this is guaranteed to find all mappings for</span>
+        <span class="s0">// the line we found.</span>
+        <span class="s2">while </span><span class="s3">(</span><span class="s1">mapping </span><span class="s3">&amp;&amp; </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">=== </span><span class="s1">originalLine</span><span class="s3">) {</span>
+          <span class="s1">mappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+            <span class="s1">line</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'generatedLine'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+            <span class="s1">column</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'generatedColumn'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+            <span class="s1">lastColumn</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'lastGeneratedColumn'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">)</span>
+          <span class="s3">});</span>
+
+          <span class="s1">mapping </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_originalMappings</span><span class="s3">[++</span><span class="s1">index</span><span class="s3">];</span>
+        <span class="s3">}</span>
+      <span class="s3">} </span><span class="s2">else </span><span class="s3">{</span>
+        <span class="s2">var </span><span class="s1">originalColumn </span><span class="s3">= </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalColumn</span><span class="s3">;</span>
+
+        <span class="s0">// Iterate until either we run out of mappings, or we run into</span>
+        <span class="s0">// a mapping for a different line than the one we were searching for.</span>
+        <span class="s0">// Since mappings are sorted, this is guaranteed to find all mappings for</span>
+        <span class="s0">// the line we are searching for.</span>
+        <span class="s2">while </span><span class="s3">(</span><span class="s1">mapping </span><span class="s3">&amp;&amp;</span>
+               <span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">=== </span><span class="s1">line </span><span class="s3">&amp;&amp;</span>
+               <span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalColumn </span><span class="s3">== </span><span class="s1">originalColumn</span><span class="s3">) {</span>
+          <span class="s1">mappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+            <span class="s1">line</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'generatedLine'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+            <span class="s1">column</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'generatedColumn'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+            <span class="s1">lastColumn</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'lastGeneratedColumn'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">)</span>
+          <span class="s3">});</span>
+
+          <span class="s1">mapping </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_originalMappings</span><span class="s3">[++</span><span class="s1">index</span><span class="s3">];</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return </span><span class="s1">mappings</span><span class="s3">;</span>
+  <span class="s3">};</span>
+
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">SourceMapConsumer </span><span class="s3">= </span><span class="s1">SourceMapConsumer</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* A BasicSourceMapConsumer instance represents a parsed source map which we can</span>
+ <span class="s5">* query for information about the original file positions by giving it a file</span>
+ <span class="s5">* position in the generated source.</span>
+ <span class="s5">*</span>
+ <span class="s5">* The first parameter is the raw source map (either as a JSON string, or</span>
+ <span class="s5">* already parsed to an object). According to the spec, source maps have the</span>
+ <span class="s5">* following attributes:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - version: Which version of the source map spec this map is following.</span>
+ <span class="s5">*   - sources: An array of URLs to the original source files.</span>
+ <span class="s5">*   - names: An array of identifiers which can be referrenced by individual mappings.</span>
+ <span class="s5">*   - sourceRoot: Optional. The URL root from which all sources are relative.</span>
+ <span class="s5">*   - sourcesContent: Optional. An array of contents of the original source files.</span>
+ <span class="s5">*   - mappings: A string of base64 VLQs which contain the actual mappings.</span>
+ <span class="s5">*   - file: Optional. The generated file this source map is associated with.</span>
+ <span class="s5">*</span>
+ <span class="s5">* Here is an example source map, taken from the source map spec[0]:</span>
+ <span class="s5">*</span>
+ <span class="s5">*     {</span>
+ <span class="s5">*       version : 3,</span>
+ <span class="s5">*       file: &quot;out.js&quot;,</span>
+ <span class="s5">*       sourceRoot : &quot;&quot;,</span>
+ <span class="s5">*       sources: [&quot;foo.js&quot;, &quot;bar.js&quot;],</span>
+ <span class="s5">*       names: [&quot;src&quot;, &quot;maps&quot;, &quot;are&quot;, &quot;fun&quot;],</span>
+ <span class="s5">*       mappings: &quot;AA,AB;;ABCDE;&quot;</span>
+ <span class="s5">*     }</span>
+ <span class="s5">*</span>
+ <span class="s5">* The second parameter, if given, is a string whose value is the URL</span>
+ <span class="s5">* at which the source map was found.  This URL is used to compute the</span>
+ <span class="s5">* sources array.</span>
+ <span class="s5">*</span>
+ <span class="s5">* [0]: https://docs.google.com/document/d/1U1RGAehQwRypUTovF1KRlpiOFze0b-_2gc6fAH0KY0k/edit?pli=1#</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">BasicSourceMapConsumer</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">) {</span>
+  <span class="s2">var </span><span class="s1">sourceMap </span><span class="s3">= </span><span class="s1">aSourceMap</span><span class="s3">;</span>
+  <span class="s2">if </span><span class="s3">(</span><span class="s2">typeof </span><span class="s1">aSourceMap </span><span class="s3">=== </span><span class="s4">'string'</span><span class="s3">) {</span>
+    <span class="s1">sourceMap </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">parseSourceMapInput</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s2">var </span><span class="s1">version </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'version'</span><span class="s3">);</span>
+  <span class="s2">var </span><span class="s1">sources </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'sources'</span><span class="s3">);</span>
+  <span class="s0">// Sass 3.3 leaves out the 'names' array, so we deviate from the spec (which</span>
+  <span class="s0">// requires the array) to play nice here.</span>
+  <span class="s2">var </span><span class="s1">names </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'names'</span><span class="s3">, []);</span>
+  <span class="s2">var </span><span class="s1">sourceRoot </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'sourceRoot'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">);</span>
+  <span class="s2">var </span><span class="s1">sourcesContent </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'sourcesContent'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">);</span>
+  <span class="s2">var </span><span class="s1">mappings </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'mappings'</span><span class="s3">);</span>
+  <span class="s2">var </span><span class="s1">file </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'file'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">);</span>
+
+  <span class="s0">// Once again, Sass deviates from the spec and supplies the version as a</span>
+  <span class="s0">// string rather than a number, so we use loose equality checking here.</span>
+  <span class="s2">if </span><span class="s3">(</span><span class="s1">version </span><span class="s3">!= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_version</span><span class="s3">) {</span>
+    <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'Unsupported version: ' </span><span class="s3">+ </span><span class="s1">version</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s2">if </span><span class="s3">(</span><span class="s1">sourceRoot</span><span class="s3">) {</span>
+    <span class="s1">sourceRoot </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">normalize</span><span class="s3">(</span><span class="s1">sourceRoot</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s1">sources </span><span class="s3">= </span><span class="s1">sources</span>
+    <span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">String</span><span class="s3">)</span>
+    <span class="s0">// Some source maps produce relative source paths like &quot;./foo.js&quot; instead of</span>
+    <span class="s0">// &quot;foo.js&quot;.  Normalize these first so that future comparisons will succeed.</span>
+    <span class="s0">// See bugzil.la/1090768.</span>
+    <span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">util</span><span class="s3">.</span><span class="s1">normalize</span><span class="s3">)</span>
+    <span class="s0">// Always ensure that absolute sources are internally stored relative to</span>
+    <span class="s0">// the source root, if the source root is absolute. Not doing this would</span>
+    <span class="s0">// be particularly problematic when the source root is a prefix of the</span>
+    <span class="s0">// source (valid, but why??). See github issue #199 and bugzil.la/1188982.</span>
+    <span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s2">function </span><span class="s3">(</span><span class="s1">source</span><span class="s3">) {</span>
+      <span class="s2">return </span><span class="s1">sourceRoot </span><span class="s3">&amp;&amp; </span><span class="s1">util</span><span class="s3">.</span><span class="s1">isAbsolute</span><span class="s3">(</span><span class="s1">sourceRoot</span><span class="s3">) &amp;&amp; </span><span class="s1">util</span><span class="s3">.</span><span class="s1">isAbsolute</span><span class="s3">(</span><span class="s1">source</span><span class="s3">)</span>
+        <span class="s3">? </span><span class="s1">util</span><span class="s3">.</span><span class="s1">relative</span><span class="s3">(</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">source</span><span class="s3">)</span>
+        <span class="s3">: </span><span class="s1">source</span><span class="s3">;</span>
+    <span class="s3">});</span>
+
+  <span class="s0">// Pass `true` below to allow duplicate names and sources. While source maps</span>
+  <span class="s0">// are intended to be compressed and deduplicated, the TypeScript compiler</span>
+  <span class="s0">// sometimes generates source maps with duplicates in them. See Github issue</span>
+  <span class="s0">// #72 and bugzil.la/889492.</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_names </span><span class="s3">= </span><span class="s1">ArraySet</span><span class="s3">.</span><span class="s1">fromArray</span><span class="s3">(</span><span class="s1">names</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">String</span><span class="s3">), </span><span class="s2">true</span><span class="s3">);</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_sources </span><span class="s3">= </span><span class="s1">ArraySet</span><span class="s3">.</span><span class="s1">fromArray</span><span class="s3">(</span><span class="s1">sources</span><span class="s3">, </span><span class="s2">true</span><span class="s3">);</span>
+
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_absoluteSources </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">toArray</span><span class="s3">().</span><span class="s1">map</span><span class="s3">(</span><span class="s2">function </span><span class="s3">(</span><span class="s1">s</span><span class="s3">) {</span>
+    <span class="s2">return </span><span class="s1">util</span><span class="s3">.</span><span class="s1">computeSourceURL</span><span class="s3">(</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">s</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">);</span>
+  <span class="s3">});</span>
+
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">= </span><span class="s1">sourceRoot</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">sourcesContent </span><span class="s3">= </span><span class="s1">sourcesContent</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_mappings </span><span class="s3">= </span><span class="s1">mappings</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_sourceMapURL </span><span class="s3">= </span><span class="s1">aSourceMapURL</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">file </span><span class="s3">= </span><span class="s1">file</span><span class="s3">;</span>
+<span class="s3">}</span>
+
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">);</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">consumer </span><span class="s3">= </span><span class="s1">SourceMapConsumer</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Utility function to find the index of a source.  Returns -1 if not</span>
+ <span class="s5">* found.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_findSourceIndex </span><span class="s3">= </span><span class="s2">function</span><span class="s3">(</span><span class="s1">aSource</span><span class="s3">) {</span>
+  <span class="s2">var </span><span class="s1">relativeSource </span><span class="s3">= </span><span class="s1">aSource</span><span class="s3">;</span>
+  <span class="s2">if </span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">!= </span><span class="s2">null</span><span class="s3">) {</span>
+    <span class="s1">relativeSource </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">relative</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">relativeSource</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s2">if </span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">relativeSource</span><span class="s3">)) {</span>
+    <span class="s2">return this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">relativeSource</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s0">// Maybe aSource is an absolute URL as returned by |sources|.  In</span>
+  <span class="s0">// this case we can't simply undo the transform.</span>
+  <span class="s2">var </span><span class="s1">i</span><span class="s3">;</span>
+  <span class="s2">for </span><span class="s3">(</span><span class="s1">i </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_absoluteSources</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; ++</span><span class="s1">i</span><span class="s3">) {</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_absoluteSources</span><span class="s3">[</span><span class="s1">i</span><span class="s3">] == </span><span class="s1">aSource</span><span class="s3">) {</span>
+      <span class="s2">return </span><span class="s1">i</span><span class="s3">;</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s2">return </span><span class="s3">-</span><span class="s6">1</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Create a BasicSourceMapConsumer from a SourceMapGenerator.</span>
+ <span class="s5">*</span>
+ <span class="s5">* </span><span class="s7">@param </span><span class="s5">SourceMapGenerator aSourceMap</span>
+ <span class="s5">*        The source map that will be consumed.</span>
+ <span class="s5">* </span><span class="s7">@param </span><span class="s5">String aSourceMapURL</span>
+ <span class="s5">*        The URL at which the source map can be found (optional)</span>
+ <span class="s5">* </span><span class="s7">@returns </span><span class="s5">BasicSourceMapConsumer</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">fromSourceMap </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_fromSourceMap</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">smc </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">);</span>
+
+    <span class="s2">var </span><span class="s1">names </span><span class="s3">= </span><span class="s1">smc</span><span class="s3">.</span><span class="s1">_names </span><span class="s3">= </span><span class="s1">ArraySet</span><span class="s3">.</span><span class="s1">fromArray</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">.</span><span class="s1">_names</span><span class="s3">.</span><span class="s1">toArray</span><span class="s3">(), </span><span class="s2">true</span><span class="s3">);</span>
+    <span class="s2">var </span><span class="s1">sources </span><span class="s3">= </span><span class="s1">smc</span><span class="s3">.</span><span class="s1">_sources </span><span class="s3">= </span><span class="s1">ArraySet</span><span class="s3">.</span><span class="s1">fromArray</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">toArray</span><span class="s3">(), </span><span class="s2">true</span><span class="s3">);</span>
+    <span class="s1">smc</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">= </span><span class="s1">aSourceMap</span><span class="s3">.</span><span class="s1">_sourceRoot</span><span class="s3">;</span>
+    <span class="s1">smc</span><span class="s3">.</span><span class="s1">sourcesContent </span><span class="s3">= </span><span class="s1">aSourceMap</span><span class="s3">.</span><span class="s1">_generateSourcesContent</span><span class="s3">(</span><span class="s1">smc</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">toArray</span><span class="s3">(),</span>
+                                                            <span class="s1">smc</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">);</span>
+    <span class="s1">smc</span><span class="s3">.</span><span class="s1">file </span><span class="s3">= </span><span class="s1">aSourceMap</span><span class="s3">.</span><span class="s1">_file</span><span class="s3">;</span>
+    <span class="s1">smc</span><span class="s3">.</span><span class="s1">_sourceMapURL </span><span class="s3">= </span><span class="s1">aSourceMapURL</span><span class="s3">;</span>
+    <span class="s1">smc</span><span class="s3">.</span><span class="s1">_absoluteSources </span><span class="s3">= </span><span class="s1">smc</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">toArray</span><span class="s3">().</span><span class="s1">map</span><span class="s3">(</span><span class="s2">function </span><span class="s3">(</span><span class="s1">s</span><span class="s3">) {</span>
+      <span class="s2">return </span><span class="s1">util</span><span class="s3">.</span><span class="s1">computeSourceURL</span><span class="s3">(</span><span class="s1">smc</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">s</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">);</span>
+    <span class="s3">});</span>
+
+    <span class="s0">// Because we are modifying the entries (by converting string sources and</span>
+    <span class="s0">// names to indices into the sources and names ArraySets), we have to make</span>
+    <span class="s0">// a copy of the entry or else bad things happen. Shared mutable state</span>
+    <span class="s0">// strikes again! See github issue #191.</span>
+
+    <span class="s2">var </span><span class="s1">generatedMappings </span><span class="s3">= </span><span class="s1">aSourceMap</span><span class="s3">.</span><span class="s1">_mappings</span><span class="s3">.</span><span class="s1">toArray</span><span class="s3">().</span><span class="s1">slice</span><span class="s3">();</span>
+    <span class="s2">var </span><span class="s1">destGeneratedMappings </span><span class="s3">= </span><span class="s1">smc</span><span class="s3">.</span><span class="s1">__generatedMappings </span><span class="s3">= [];</span>
+    <span class="s2">var </span><span class="s1">destOriginalMappings </span><span class="s3">= </span><span class="s1">smc</span><span class="s3">.</span><span class="s1">__originalMappings </span><span class="s3">= [];</span>
+
+    <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">i </span><span class="s3">= </span><span class="s6">0</span><span class="s3">, </span><span class="s1">length </span><span class="s3">= </span><span class="s1">generatedMappings</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+      <span class="s2">var </span><span class="s1">srcMapping </span><span class="s3">= </span><span class="s1">generatedMappings</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+      <span class="s2">var </span><span class="s1">destMapping </span><span class="s3">= </span><span class="s2">new </span><span class="s1">Mapping</span><span class="s3">;</span>
+      <span class="s1">destMapping</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">= </span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">generatedLine</span><span class="s3">;</span>
+      <span class="s1">destMapping</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">= </span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">generatedColumn</span><span class="s3">;</span>
+
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">source</span><span class="s3">) {</span>
+        <span class="s1">destMapping</span><span class="s3">.</span><span class="s1">source </span><span class="s3">= </span><span class="s1">sources</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">source</span><span class="s3">);</span>
+        <span class="s1">destMapping</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">= </span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">originalLine</span><span class="s3">;</span>
+        <span class="s1">destMapping</span><span class="s3">.</span><span class="s1">originalColumn </span><span class="s3">= </span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">originalColumn</span><span class="s3">;</span>
+
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) {</span>
+          <span class="s1">destMapping</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s1">names</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">srcMapping</span><span class="s3">.</span><span class="s1">name</span><span class="s3">);</span>
+        <span class="s3">}</span>
+
+        <span class="s1">destOriginalMappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">destMapping</span><span class="s3">);</span>
+      <span class="s3">}</span>
+
+      <span class="s1">destGeneratedMappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">destMapping</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s1">quickSort</span><span class="s3">(</span><span class="s1">smc</span><span class="s3">.</span><span class="s1">__originalMappings</span><span class="s3">, </span><span class="s1">util</span><span class="s3">.</span><span class="s1">compareByOriginalPositions</span><span class="s3">);</span>
+
+    <span class="s2">return </span><span class="s1">smc</span><span class="s3">;</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The version of the source mapping spec that we are consuming.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_version </span><span class="s3">= </span><span class="s6">3</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The list of original sources.</span>
+ <span class="s5">*/</span>
+<span class="s1">Object</span><span class="s3">.</span><span class="s1">defineProperty</span><span class="s3">(</span><span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">, </span><span class="s4">'sources'</span><span class="s3">, {</span>
+  <span class="s1">get</span><span class="s3">: </span><span class="s2">function </span><span class="s3">() {</span>
+    <span class="s2">return this</span><span class="s3">.</span><span class="s1">_absoluteSources</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">();</span>
+  <span class="s3">}</span>
+<span class="s3">});</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Provide the JIT with a nice shape / hidden class.</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">Mapping</span><span class="s3">() {</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">source </span><span class="s3">= </span><span class="s2">null</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">= </span><span class="s2">null</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">originalColumn </span><span class="s3">= </span><span class="s2">null</span><span class="s3">;</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s2">null</span><span class="s3">;</span>
+<span class="s3">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Parse the mappings in a string in to a data structure which we can easily</span>
+ <span class="s5">* query (the ordered arrays in the `this.__generatedMappings` and</span>
+ <span class="s5">* `this.__originalMappings` properties).</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_parseMappings </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_parseMappings</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">, </span><span class="s1">aSourceRoot</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">generatedLine </span><span class="s3">= </span><span class="s6">1</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">previousGeneratedColumn </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">previousOriginalLine </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">previousOriginalColumn </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">previousSource </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">previousName </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">length </span><span class="s3">= </span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">index </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+    <span class="s2">var </span><span class="s1">cachedSegments </span><span class="s3">= {};</span>
+    <span class="s2">var </span><span class="s1">temp </span><span class="s3">= {};</span>
+    <span class="s2">var </span><span class="s1">originalMappings </span><span class="s3">= [];</span>
+    <span class="s2">var </span><span class="s1">generatedMappings </span><span class="s3">= [];</span>
+    <span class="s2">var </span><span class="s1">mapping</span><span class="s3">, </span><span class="s1">str</span><span class="s3">, </span><span class="s1">segment</span><span class="s3">, </span><span class="s1">end</span><span class="s3">, </span><span class="s1">value</span><span class="s3">;</span>
+
+    <span class="s2">while </span><span class="s3">(</span><span class="s1">index </span><span class="s3">&lt; </span><span class="s1">length</span><span class="s3">) {</span>
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">charAt</span><span class="s3">(</span><span class="s1">index</span><span class="s3">) === </span><span class="s4">';'</span><span class="s3">) {</span>
+        <span class="s1">generatedLine</span><span class="s3">++;</span>
+        <span class="s1">index</span><span class="s3">++;</span>
+        <span class="s1">previousGeneratedColumn </span><span class="s3">= </span><span class="s6">0</span><span class="s3">;</span>
+      <span class="s3">}</span>
+      <span class="s2">else if </span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">charAt</span><span class="s3">(</span><span class="s1">index</span><span class="s3">) === </span><span class="s4">','</span><span class="s3">) {</span>
+        <span class="s1">index</span><span class="s3">++;</span>
+      <span class="s3">}</span>
+      <span class="s2">else </span><span class="s3">{</span>
+        <span class="s1">mapping </span><span class="s3">= </span><span class="s2">new </span><span class="s1">Mapping</span><span class="s3">();</span>
+        <span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">= </span><span class="s1">generatedLine</span><span class="s3">;</span>
+
+        <span class="s0">// Because each offset is encoded relative to the previous one,</span>
+        <span class="s0">// many segments often have the same encoding. We can exploit this</span>
+        <span class="s0">// fact by caching the parsed variable length fields of each segment,</span>
+        <span class="s0">// allowing us to avoid a second parse if we encounter the same</span>
+        <span class="s0">// segment again.</span>
+        <span class="s2">for </span><span class="s3">(</span><span class="s1">end </span><span class="s3">= </span><span class="s1">index</span><span class="s3">; </span><span class="s1">end </span><span class="s3">&lt; </span><span class="s1">length</span><span class="s3">; </span><span class="s1">end</span><span class="s3">++) {</span>
+          <span class="s2">if </span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_charIsMappingSeparator</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">, </span><span class="s1">end</span><span class="s3">)) {</span>
+            <span class="s2">break</span><span class="s3">;</span>
+          <span class="s3">}</span>
+        <span class="s3">}</span>
+        <span class="s1">str </span><span class="s3">= </span><span class="s1">aStr</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">index</span><span class="s3">, </span><span class="s1">end</span><span class="s3">);</span>
+
+        <span class="s1">segment </span><span class="s3">= </span><span class="s1">cachedSegments</span><span class="s3">[</span><span class="s1">str</span><span class="s3">];</span>
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">segment</span><span class="s3">) {</span>
+          <span class="s1">index </span><span class="s3">+= </span><span class="s1">str</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+        <span class="s3">} </span><span class="s2">else </span><span class="s3">{</span>
+          <span class="s1">segment </span><span class="s3">= [];</span>
+          <span class="s2">while </span><span class="s3">(</span><span class="s1">index </span><span class="s3">&lt; </span><span class="s1">end</span><span class="s3">) {</span>
+            <span class="s1">base64VLQ</span><span class="s3">.</span><span class="s1">decode</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">, </span><span class="s1">index</span><span class="s3">, </span><span class="s1">temp</span><span class="s3">);</span>
+            <span class="s1">value </span><span class="s3">= </span><span class="s1">temp</span><span class="s3">.</span><span class="s1">value</span><span class="s3">;</span>
+            <span class="s1">index </span><span class="s3">= </span><span class="s1">temp</span><span class="s3">.</span><span class="s1">rest</span><span class="s3">;</span>
+            <span class="s1">segment</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">value</span><span class="s3">);</span>
+          <span class="s3">}</span>
+
+          <span class="s2">if </span><span class="s3">(</span><span class="s1">segment</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s6">2</span><span class="s3">) {</span>
+            <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'Found a source, but no line and column'</span><span class="s3">);</span>
+          <span class="s3">}</span>
+
+          <span class="s2">if </span><span class="s3">(</span><span class="s1">segment</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s6">3</span><span class="s3">) {</span>
+            <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'Found a source and line, but no column'</span><span class="s3">);</span>
+          <span class="s3">}</span>
+
+          <span class="s1">cachedSegments</span><span class="s3">[</span><span class="s1">str</span><span class="s3">] = </span><span class="s1">segment</span><span class="s3">;</span>
+        <span class="s3">}</span>
+
+        <span class="s0">// Generated column.</span>
+        <span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">= </span><span class="s1">previousGeneratedColumn </span><span class="s3">+ </span><span class="s1">segment</span><span class="s3">[</span><span class="s6">0</span><span class="s3">];</span>
+        <span class="s1">previousGeneratedColumn </span><span class="s3">= </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedColumn</span><span class="s3">;</span>
+
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">segment</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s6">1</span><span class="s3">) {</span>
+          <span class="s0">// Original source.</span>
+          <span class="s1">mapping</span><span class="s3">.</span><span class="s1">source </span><span class="s3">= </span><span class="s1">previousSource </span><span class="s3">+ </span><span class="s1">segment</span><span class="s3">[</span><span class="s6">1</span><span class="s3">];</span>
+          <span class="s1">previousSource </span><span class="s3">+= </span><span class="s1">segment</span><span class="s3">[</span><span class="s6">1</span><span class="s3">];</span>
+
+          <span class="s0">// Original line.</span>
+          <span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">= </span><span class="s1">previousOriginalLine </span><span class="s3">+ </span><span class="s1">segment</span><span class="s3">[</span><span class="s6">2</span><span class="s3">];</span>
+          <span class="s1">previousOriginalLine </span><span class="s3">= </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine</span><span class="s3">;</span>
+          <span class="s0">// Lines are stored 0-based</span>
+          <span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">+= </span><span class="s6">1</span><span class="s3">;</span>
+
+          <span class="s0">// Original column.</span>
+          <span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalColumn </span><span class="s3">= </span><span class="s1">previousOriginalColumn </span><span class="s3">+ </span><span class="s1">segment</span><span class="s3">[</span><span class="s6">3</span><span class="s3">];</span>
+          <span class="s1">previousOriginalColumn </span><span class="s3">= </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalColumn</span><span class="s3">;</span>
+
+          <span class="s2">if </span><span class="s3">(</span><span class="s1">segment</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s6">4</span><span class="s3">) {</span>
+            <span class="s0">// Original name.</span>
+            <span class="s1">mapping</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s1">previousName </span><span class="s3">+ </span><span class="s1">segment</span><span class="s3">[</span><span class="s6">4</span><span class="s3">];</span>
+            <span class="s1">previousName </span><span class="s3">+= </span><span class="s1">segment</span><span class="s3">[</span><span class="s6">4</span><span class="s3">];</span>
+          <span class="s3">}</span>
+        <span class="s3">}</span>
+
+        <span class="s1">generatedMappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">);</span>
+        <span class="s2">if </span><span class="s3">(</span><span class="s2">typeof </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">=== </span><span class="s4">'number'</span><span class="s3">) {</span>
+          <span class="s1">originalMappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">);</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s1">quickSort</span><span class="s3">(</span><span class="s1">generatedMappings</span><span class="s3">, </span><span class="s1">util</span><span class="s3">.</span><span class="s1">compareByGeneratedPositionsDeflated</span><span class="s3">);</span>
+    <span class="s2">this</span><span class="s3">.</span><span class="s1">__generatedMappings </span><span class="s3">= </span><span class="s1">generatedMappings</span><span class="s3">;</span>
+
+    <span class="s1">quickSort</span><span class="s3">(</span><span class="s1">originalMappings</span><span class="s3">, </span><span class="s1">util</span><span class="s3">.</span><span class="s1">compareByOriginalPositions</span><span class="s3">);</span>
+    <span class="s2">this</span><span class="s3">.</span><span class="s1">__originalMappings </span><span class="s3">= </span><span class="s1">originalMappings</span><span class="s3">;</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Find the mapping that best matches the hypothetical &quot;needle&quot; mapping that</span>
+ <span class="s5">* we are searching for in the given &quot;haystack&quot; of mappings.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_findMapping </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_findMapping</span><span class="s3">(</span><span class="s1">aNeedle</span><span class="s3">, </span><span class="s1">aMappings</span><span class="s3">, </span><span class="s1">aLineName</span><span class="s3">,</span>
+                                         <span class="s1">aColumnName</span><span class="s3">, </span><span class="s1">aComparator</span><span class="s3">, </span><span class="s1">aBias</span><span class="s3">) {</span>
+    <span class="s0">// To return the position we are searching for, we must first find the</span>
+    <span class="s0">// mapping for the given position and then return the opposite position it</span>
+    <span class="s0">// points to. Because the mappings are sorted, we can use binary search to</span>
+    <span class="s0">// find the best mapping.</span>
+
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">aNeedle</span><span class="s3">[</span><span class="s1">aLineName</span><span class="s3">] &lt;= </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">throw new </span><span class="s1">TypeError</span><span class="s3">(</span><span class="s4">'Line must be greater than or equal to 1, got '</span>
+                          <span class="s3">+ </span><span class="s1">aNeedle</span><span class="s3">[</span><span class="s1">aLineName</span><span class="s3">]);</span>
+    <span class="s3">}</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">aNeedle</span><span class="s3">[</span><span class="s1">aColumnName</span><span class="s3">] &lt; </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">throw new </span><span class="s1">TypeError</span><span class="s3">(</span><span class="s4">'Column must be greater than or equal to 0, got '</span>
+                          <span class="s3">+ </span><span class="s1">aNeedle</span><span class="s3">[</span><span class="s1">aColumnName</span><span class="s3">]);</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return </span><span class="s1">binarySearch</span><span class="s3">.</span><span class="s1">search</span><span class="s3">(</span><span class="s1">aNeedle</span><span class="s3">, </span><span class="s1">aMappings</span><span class="s3">, </span><span class="s1">aComparator</span><span class="s3">, </span><span class="s1">aBias</span><span class="s3">);</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Compute the last column for each generated mapping. The last column is</span>
+ <span class="s5">* inclusive.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">computeColumnSpans </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_computeColumnSpans</span><span class="s3">() {</span>
+    <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">index </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">index </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; ++</span><span class="s1">index</span><span class="s3">) {</span>
+      <span class="s2">var </span><span class="s1">mapping </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">[</span><span class="s1">index</span><span class="s3">];</span>
+
+      <span class="s0">// Mappings do not contain a field for the last generated columnt. We</span>
+      <span class="s0">// can come up with an optimistic estimate, however, by assuming that</span>
+      <span class="s0">// mappings are contiguous (i.e. given two consecutive mappings, the</span>
+      <span class="s0">// first mapping ends where the second one starts).</span>
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">+ </span><span class="s6">1 </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) {</span>
+        <span class="s2">var </span><span class="s1">nextMapping </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">[</span><span class="s1">index </span><span class="s3">+ </span><span class="s6">1</span><span class="s3">];</span>
+
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">=== </span><span class="s1">nextMapping</span><span class="s3">.</span><span class="s1">generatedLine</span><span class="s3">) {</span>
+          <span class="s1">mapping</span><span class="s3">.</span><span class="s1">lastGeneratedColumn </span><span class="s3">= </span><span class="s1">nextMapping</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">- </span><span class="s6">1</span><span class="s3">;</span>
+          <span class="s2">continue</span><span class="s3">;</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+
+      <span class="s0">// The last mapping for each line spans the entire line.</span>
+      <span class="s1">mapping</span><span class="s3">.</span><span class="s1">lastGeneratedColumn </span><span class="s3">= </span><span class="s1">Infinity</span><span class="s3">;</span>
+    <span class="s3">}</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Returns the original source, line, and column information for the generated</span>
+ <span class="s5">* source's line and column positions provided. The only argument is an object</span>
+ <span class="s5">* with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - line: The line number in the generated source.  The line number</span>
+ <span class="s5">*     is 1-based.</span>
+ <span class="s5">*   - column: The column number in the generated source.  The column</span>
+ <span class="s5">*     number is 0-based.</span>
+ <span class="s5">*   - bias: Either 'SourceMapConsumer.GREATEST_LOWER_BOUND' or</span>
+ <span class="s5">*     'SourceMapConsumer.LEAST_UPPER_BOUND'. Specifies whether to return the</span>
+ <span class="s5">*     closest element that is smaller than or greater than the one we are</span>
+ <span class="s5">*     searching for, respectively, if the exact element cannot be found.</span>
+ <span class="s5">*     Defaults to 'SourceMapConsumer.GREATEST_LOWER_BOUND'.</span>
+ <span class="s5">*</span>
+ <span class="s5">* and an object is returned with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - source: The original source file, or null.</span>
+ <span class="s5">*   - line: The line number in the original source, or null.  The</span>
+ <span class="s5">*     line number is 1-based.</span>
+ <span class="s5">*   - column: The column number in the original source, or null.  The</span>
+ <span class="s5">*     column number is 0-based.</span>
+ <span class="s5">*   - name: The original identifier, or null.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">originalPositionFor </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_originalPositionFor</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">needle </span><span class="s3">= {</span>
+      <span class="s1">generatedLine</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'line'</span><span class="s3">),</span>
+      <span class="s1">generatedColumn</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'column'</span><span class="s3">)</span>
+    <span class="s3">};</span>
+
+    <span class="s2">var </span><span class="s1">index </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_findMapping</span><span class="s3">(</span>
+      <span class="s1">needle</span><span class="s3">,</span>
+      <span class="s2">this</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">,</span>
+      <span class="s4">&quot;generatedLine&quot;</span><span class="s3">,</span>
+      <span class="s4">&quot;generatedColumn&quot;</span><span class="s3">,</span>
+      <span class="s1">util</span><span class="s3">.</span><span class="s1">compareByGeneratedPositionsDeflated</span><span class="s3">,</span>
+      <span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'bias'</span><span class="s3">, </span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">GREATEST_LOWER_BOUND</span><span class="s3">)</span>
+    <span class="s3">);</span>
+
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">&gt;= </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">var </span><span class="s1">mapping </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">[</span><span class="s1">index</span><span class="s3">];</span>
+
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">=== </span><span class="s1">needle</span><span class="s3">.</span><span class="s1">generatedLine</span><span class="s3">) {</span>
+        <span class="s2">var </span><span class="s1">source </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'source'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">);</span>
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">source </span><span class="s3">!== </span><span class="s2">null</span><span class="s3">) {</span>
+          <span class="s1">source </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">at</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+          <span class="s1">source </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">computeSourceURL</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sourceMapURL</span><span class="s3">);</span>
+        <span class="s3">}</span>
+        <span class="s2">var </span><span class="s1">name </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'name'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">);</span>
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">name </span><span class="s3">!== </span><span class="s2">null</span><span class="s3">) {</span>
+          <span class="s1">name </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_names</span><span class="s3">.</span><span class="s1">at</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+        <span class="s3">}</span>
+        <span class="s2">return </span><span class="s3">{</span>
+          <span class="s1">source</span><span class="s3">: </span><span class="s1">source</span><span class="s3">,</span>
+          <span class="s1">line</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'originalLine'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+          <span class="s1">column</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'originalColumn'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+          <span class="s1">name</span><span class="s3">: </span><span class="s1">name</span>
+        <span class="s3">};</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return </span><span class="s3">{</span>
+      <span class="s1">source</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+      <span class="s1">line</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+      <span class="s1">column</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+      <span class="s1">name</span><span class="s3">: </span><span class="s2">null</span>
+    <span class="s3">};</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Return true if we have the source content for every source in the source</span>
+ <span class="s5">* map, false otherwise.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">hasContentsOfAllSources </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">BasicSourceMapConsumer_hasContentsOfAllSources</span><span class="s3">() {</span>
+    <span class="s2">if </span><span class="s3">(!</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourcesContent</span><span class="s3">) {</span>
+      <span class="s2">return false</span><span class="s3">;</span>
+    <span class="s3">}</span>
+    <span class="s2">return this</span><span class="s3">.</span><span class="s1">sourcesContent</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt;= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">size</span><span class="s3">() &amp;&amp;</span>
+      <span class="s3">!</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourcesContent</span><span class="s3">.</span><span class="s1">some</span><span class="s3">(</span><span class="s2">function </span><span class="s3">(</span><span class="s1">sc</span><span class="s3">) { </span><span class="s2">return </span><span class="s1">sc </span><span class="s3">== </span><span class="s2">null</span><span class="s3">; });</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Returns the original source content. The only argument is the url of the</span>
+ <span class="s5">* original source file. Returns null if no original source content is</span>
+ <span class="s5">* available.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">sourceContentFor </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_sourceContentFor</span><span class="s3">(</span><span class="s1">aSource</span><span class="s3">, </span><span class="s1">nullOnMissing</span><span class="s3">) {</span>
+    <span class="s2">if </span><span class="s3">(!</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourcesContent</span><span class="s3">) {</span>
+      <span class="s2">return null</span><span class="s3">;</span>
+    <span class="s3">}</span>
+
+    <span class="s2">var </span><span class="s1">index </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_findSourceIndex</span><span class="s3">(</span><span class="s1">aSource</span><span class="s3">);</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">&gt;= </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">return this</span><span class="s3">.</span><span class="s1">sourcesContent</span><span class="s3">[</span><span class="s1">index</span><span class="s3">];</span>
+    <span class="s3">}</span>
+
+    <span class="s2">var </span><span class="s1">relativeSource </span><span class="s3">= </span><span class="s1">aSource</span><span class="s3">;</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">!= </span><span class="s2">null</span><span class="s3">) {</span>
+      <span class="s1">relativeSource </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">relative</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">relativeSource</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s2">var </span><span class="s1">url</span><span class="s3">;</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">!= </span><span class="s2">null</span>
+        <span class="s3">&amp;&amp; (</span><span class="s1">url </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">urlParse</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">))) {</span>
+      <span class="s0">// XXX: file:// URIs and absolute paths lead to unexpected behavior for</span>
+      <span class="s0">// many users. We can help them out when they expect file:// URIs to</span>
+      <span class="s0">// behave like it would if they were running a local HTTP server. See</span>
+      <span class="s0">// https://bugzilla.mozilla.org/show_bug.cgi?id=885597.</span>
+      <span class="s2">var </span><span class="s1">fileUriAbsPath </span><span class="s3">= </span><span class="s1">relativeSource</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s8">/^file:\/\//</span><span class="s3">, </span><span class="s4">&quot;&quot;</span><span class="s3">);</span>
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">url</span><span class="s3">.</span><span class="s1">scheme </span><span class="s3">== </span><span class="s4">&quot;file&quot;</span>
+          <span class="s3">&amp;&amp; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">fileUriAbsPath</span><span class="s3">)) {</span>
+        <span class="s2">return this</span><span class="s3">.</span><span class="s1">sourcesContent</span><span class="s3">[</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">fileUriAbsPath</span><span class="s3">)]</span>
+      <span class="s3">}</span>
+
+      <span class="s2">if </span><span class="s3">((!</span><span class="s1">url</span><span class="s3">.</span><span class="s1">path </span><span class="s3">|| </span><span class="s1">url</span><span class="s3">.</span><span class="s1">path </span><span class="s3">== </span><span class="s4">&quot;/&quot;</span><span class="s3">)</span>
+          <span class="s3">&amp;&amp; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s4">&quot;/&quot; </span><span class="s3">+ </span><span class="s1">relativeSource</span><span class="s3">)) {</span>
+        <span class="s2">return this</span><span class="s3">.</span><span class="s1">sourcesContent</span><span class="s3">[</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s4">&quot;/&quot; </span><span class="s3">+ </span><span class="s1">relativeSource</span><span class="s3">)];</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s0">// This function is used recursively from</span>
+    <span class="s0">// IndexedSourceMapConsumer.prototype.sourceContentFor. In that case, we</span>
+    <span class="s0">// don't want to throw if we can't find the source - we just want to</span>
+    <span class="s0">// return null, so we provide a flag to exit gracefully.</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">nullOnMissing</span><span class="s3">) {</span>
+      <span class="s2">return null</span><span class="s3">;</span>
+    <span class="s3">}</span>
+    <span class="s2">else </span><span class="s3">{</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'&quot;' </span><span class="s3">+ </span><span class="s1">relativeSource </span><span class="s3">+ </span><span class="s4">'&quot; is not in the SourceMap.'</span><span class="s3">);</span>
+    <span class="s3">}</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Returns the generated line and column information for the original source,</span>
+ <span class="s5">* line, and column positions provided. The only argument is an object with</span>
+ <span class="s5">* the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - source: The filename of the original source.</span>
+ <span class="s5">*   - line: The line number in the original source.  The line number</span>
+ <span class="s5">*     is 1-based.</span>
+ <span class="s5">*   - column: The column number in the original source.  The column</span>
+ <span class="s5">*     number is 0-based.</span>
+ <span class="s5">*   - bias: Either 'SourceMapConsumer.GREATEST_LOWER_BOUND' or</span>
+ <span class="s5">*     'SourceMapConsumer.LEAST_UPPER_BOUND'. Specifies whether to return the</span>
+ <span class="s5">*     closest element that is smaller than or greater than the one we are</span>
+ <span class="s5">*     searching for, respectively, if the exact element cannot be found.</span>
+ <span class="s5">*     Defaults to 'SourceMapConsumer.GREATEST_LOWER_BOUND'.</span>
+ <span class="s5">*</span>
+ <span class="s5">* and an object is returned with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - line: The line number in the generated source, or null.  The</span>
+ <span class="s5">*     line number is 1-based.</span>
+ <span class="s5">*   - column: The column number in the generated source, or null.</span>
+ <span class="s5">*     The column number is 0-based.</span>
+ <span class="s5">*/</span>
+<span class="s1">BasicSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">generatedPositionFor </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">SourceMapConsumer_generatedPositionFor</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">source </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'source'</span><span class="s3">);</span>
+    <span class="s1">source </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_findSourceIndex</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">source </span><span class="s3">&lt; </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">return </span><span class="s3">{</span>
+        <span class="s1">line</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+        <span class="s1">column</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+        <span class="s1">lastColumn</span><span class="s3">: </span><span class="s2">null</span>
+      <span class="s3">};</span>
+    <span class="s3">}</span>
+
+    <span class="s2">var </span><span class="s1">needle </span><span class="s3">= {</span>
+      <span class="s1">source</span><span class="s3">: </span><span class="s1">source</span><span class="s3">,</span>
+      <span class="s1">originalLine</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'line'</span><span class="s3">),</span>
+      <span class="s1">originalColumn</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'column'</span><span class="s3">)</span>
+    <span class="s3">};</span>
+
+    <span class="s2">var </span><span class="s1">index </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_findMapping</span><span class="s3">(</span>
+      <span class="s1">needle</span><span class="s3">,</span>
+      <span class="s2">this</span><span class="s3">.</span><span class="s1">_originalMappings</span><span class="s3">,</span>
+      <span class="s4">&quot;originalLine&quot;</span><span class="s3">,</span>
+      <span class="s4">&quot;originalColumn&quot;</span><span class="s3">,</span>
+      <span class="s1">util</span><span class="s3">.</span><span class="s1">compareByOriginalPositions</span><span class="s3">,</span>
+      <span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'bias'</span><span class="s3">, </span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">GREATEST_LOWER_BOUND</span><span class="s3">)</span>
+    <span class="s3">);</span>
+
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">&gt;= </span><span class="s6">0</span><span class="s3">) {</span>
+      <span class="s2">var </span><span class="s1">mapping </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_originalMappings</span><span class="s3">[</span><span class="s1">index</span><span class="s3">];</span>
+
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">source </span><span class="s3">=== </span><span class="s1">needle</span><span class="s3">.</span><span class="s1">source</span><span class="s3">) {</span>
+        <span class="s2">return </span><span class="s3">{</span>
+          <span class="s1">line</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'generatedLine'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+          <span class="s1">column</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'generatedColumn'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">),</span>
+          <span class="s1">lastColumn</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">, </span><span class="s4">'lastGeneratedColumn'</span><span class="s3">, </span><span class="s2">null</span><span class="s3">)</span>
+        <span class="s3">};</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return </span><span class="s3">{</span>
+      <span class="s1">line</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+      <span class="s1">column</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+      <span class="s1">lastColumn</span><span class="s3">: </span><span class="s2">null</span>
+    <span class="s3">};</span>
+  <span class="s3">};</span>
+
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">BasicSourceMapConsumer </span><span class="s3">= </span><span class="s1">BasicSourceMapConsumer</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* An IndexedSourceMapConsumer instance represents a parsed source map which</span>
+ <span class="s5">* we can query for information. It differs from BasicSourceMapConsumer in</span>
+ <span class="s5">* that it takes &quot;indexed&quot; source maps (i.e. ones with a &quot;sections&quot; field) as</span>
+ <span class="s5">* input.</span>
+ <span class="s5">*</span>
+ <span class="s5">* The first parameter is a raw source map (either as a JSON string, or already</span>
+ <span class="s5">* parsed to an object). According to the spec for indexed source maps, they</span>
+ <span class="s5">* have the following attributes:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - version: Which version of the source map spec this map is following.</span>
+ <span class="s5">*   - file: Optional. The generated file this source map is associated with.</span>
+ <span class="s5">*   - sections: A list of section definitions.</span>
+ <span class="s5">*</span>
+ <span class="s5">* Each value under the &quot;sections&quot; field has two fields:</span>
+ <span class="s5">*   - offset: The offset into the original specified at which this section</span>
+ <span class="s5">*       begins to apply, defined as an object with a &quot;line&quot; and &quot;column&quot;</span>
+ <span class="s5">*       field.</span>
+ <span class="s5">*   - map: A source map definition. This source map could also be indexed,</span>
+ <span class="s5">*       but doesn't have to be.</span>
+ <span class="s5">*</span>
+ <span class="s5">* Instead of the &quot;map&quot; field, it's also possible to have a &quot;url&quot; field</span>
+ <span class="s5">* specifying a URL to retrieve a source map from, but that's currently</span>
+ <span class="s5">* unsupported.</span>
+ <span class="s5">*</span>
+ <span class="s5">* Here's an example source map, taken from the source map spec[0], but</span>
+ <span class="s5">* modified to omit a section which uses the &quot;url&quot; field.</span>
+ <span class="s5">*</span>
+ <span class="s5">*  {</span>
+ <span class="s5">*    version : 3,</span>
+ <span class="s5">*    file: &quot;app.js&quot;,</span>
+ <span class="s5">*    sections: [{</span>
+ <span class="s5">*      offset: {line:100, column:10},</span>
+ <span class="s5">*      map: {</span>
+ <span class="s5">*        version : 3,</span>
+ <span class="s5">*        file: &quot;section.js&quot;,</span>
+ <span class="s5">*        sources: [&quot;foo.js&quot;, &quot;bar.js&quot;],</span>
+ <span class="s5">*        names: [&quot;src&quot;, &quot;maps&quot;, &quot;are&quot;, &quot;fun&quot;],</span>
+ <span class="s5">*        mappings: &quot;AAAA,E;;ABCDE;&quot;</span>
+ <span class="s5">*      }</span>
+ <span class="s5">*    }],</span>
+ <span class="s5">*  }</span>
+ <span class="s5">*</span>
+ <span class="s5">* The second parameter, if given, is a string whose value is the URL</span>
+ <span class="s5">* at which the source map was found.  This URL is used to compute the</span>
+ <span class="s5">* sources array.</span>
+ <span class="s5">*</span>
+ <span class="s5">* [0]: https://docs.google.com/document/d/1U1RGAehQwRypUTovF1KRlpiOFze0b-_2gc6fAH0KY0k/edit#heading=h.535es3xeprgt</span>
+ <span class="s5">*/</span>
+<span class="s2">function </span><span class="s1">IndexedSourceMapConsumer</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">, </span><span class="s1">aSourceMapURL</span><span class="s3">) {</span>
+  <span class="s2">var </span><span class="s1">sourceMap </span><span class="s3">= </span><span class="s1">aSourceMap</span><span class="s3">;</span>
+  <span class="s2">if </span><span class="s3">(</span><span class="s2">typeof </span><span class="s1">aSourceMap </span><span class="s3">=== </span><span class="s4">'string'</span><span class="s3">) {</span>
+    <span class="s1">sourceMap </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">parseSourceMapInput</span><span class="s3">(</span><span class="s1">aSourceMap</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s2">var </span><span class="s1">version </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'version'</span><span class="s3">);</span>
+  <span class="s2">var </span><span class="s1">sections </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">, </span><span class="s4">'sections'</span><span class="s3">);</span>
+
+  <span class="s2">if </span><span class="s3">(</span><span class="s1">version </span><span class="s3">!= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_version</span><span class="s3">) {</span>
+    <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'Unsupported version: ' </span><span class="s3">+ </span><span class="s1">version</span><span class="s3">);</span>
+  <span class="s3">}</span>
+
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_sources </span><span class="s3">= </span><span class="s2">new </span><span class="s1">ArraySet</span><span class="s3">();</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_names </span><span class="s3">= </span><span class="s2">new </span><span class="s1">ArraySet</span><span class="s3">();</span>
+
+  <span class="s2">var </span><span class="s1">lastOffset </span><span class="s3">= {</span>
+    <span class="s1">line</span><span class="s3">: -</span><span class="s6">1</span><span class="s3">,</span>
+    <span class="s1">column</span><span class="s3">: </span><span class="s6">0</span>
+  <span class="s3">};</span>
+  <span class="s2">this</span><span class="s3">.</span><span class="s1">_sections </span><span class="s3">= </span><span class="s1">sections</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s2">function </span><span class="s3">(</span><span class="s1">s</span><span class="s3">) {</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">s</span><span class="s3">.</span><span class="s1">url</span><span class="s3">) {</span>
+      <span class="s0">// The url field will require support for asynchronicity.</span>
+      <span class="s0">// See https://github.com/mozilla/source-map/issues/16</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'Support for url field in sections not implemented.'</span><span class="s3">);</span>
+    <span class="s3">}</span>
+    <span class="s2">var </span><span class="s1">offset </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">s</span><span class="s3">, </span><span class="s4">'offset'</span><span class="s3">);</span>
+    <span class="s2">var </span><span class="s1">offsetLine </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">offset</span><span class="s3">, </span><span class="s4">'line'</span><span class="s3">);</span>
+    <span class="s2">var </span><span class="s1">offsetColumn </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">offset</span><span class="s3">, </span><span class="s4">'column'</span><span class="s3">);</span>
+
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">offsetLine </span><span class="s3">&lt; </span><span class="s1">lastOffset</span><span class="s3">.</span><span class="s1">line </span><span class="s3">||</span>
+        <span class="s3">(</span><span class="s1">offsetLine </span><span class="s3">=== </span><span class="s1">lastOffset</span><span class="s3">.</span><span class="s1">line </span><span class="s3">&amp;&amp; </span><span class="s1">offsetColumn </span><span class="s3">&lt; </span><span class="s1">lastOffset</span><span class="s3">.</span><span class="s1">column</span><span class="s3">)) {</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'Section offsets must be ordered and non-overlapping.'</span><span class="s3">);</span>
+    <span class="s3">}</span>
+    <span class="s1">lastOffset </span><span class="s3">= </span><span class="s1">offset</span><span class="s3">;</span>
+
+    <span class="s2">return </span><span class="s3">{</span>
+      <span class="s1">generatedOffset</span><span class="s3">: {</span>
+        <span class="s0">// The offset fields are 0-based, but we use 1-based indices when</span>
+        <span class="s0">// encoding/decoding from VLQ.</span>
+        <span class="s1">generatedLine</span><span class="s3">: </span><span class="s1">offsetLine </span><span class="s3">+ </span><span class="s6">1</span><span class="s3">,</span>
+        <span class="s1">generatedColumn</span><span class="s3">: </span><span class="s1">offsetColumn </span><span class="s3">+ </span><span class="s6">1</span>
+      <span class="s3">},</span>
+      <span class="s1">consumer</span><span class="s3">: </span><span class="s2">new </span><span class="s1">SourceMapConsumer</span><span class="s3">(</span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">s</span><span class="s3">, </span><span class="s4">'map'</span><span class="s3">), </span><span class="s1">aSourceMapURL</span><span class="s3">)</span>
+    <span class="s3">}</span>
+  <span class="s3">});</span>
+<span class="s3">}</span>
+
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s1">SourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">);</span>
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">constructor </span><span class="s3">= </span><span class="s1">SourceMapConsumer</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The version of the source mapping spec that we are consuming.</span>
+ <span class="s5">*/</span>
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_version </span><span class="s3">= </span><span class="s6">3</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The list of original sources.</span>
+ <span class="s5">*/</span>
+<span class="s1">Object</span><span class="s3">.</span><span class="s1">defineProperty</span><span class="s3">(</span><span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">, </span><span class="s4">'sources'</span><span class="s3">, {</span>
+  <span class="s1">get</span><span class="s3">: </span><span class="s2">function </span><span class="s3">() {</span>
+    <span class="s2">var </span><span class="s1">sources </span><span class="s3">= [];</span>
+    <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">i </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+      <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">j </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">j </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">[</span><span class="s1">i</span><span class="s3">].</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">sources</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">j</span><span class="s3">++) {</span>
+        <span class="s1">sources</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">[</span><span class="s1">i</span><span class="s3">].</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">sources</span><span class="s3">[</span><span class="s1">j</span><span class="s3">]);</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+    <span class="s2">return </span><span class="s1">sources</span><span class="s3">;</span>
+  <span class="s3">}</span>
+<span class="s3">});</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Returns the original source, line, and column information for the generated</span>
+ <span class="s5">* source's line and column positions provided. The only argument is an object</span>
+ <span class="s5">* with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - line: The line number in the generated source.  The line number</span>
+ <span class="s5">*     is 1-based.</span>
+ <span class="s5">*   - column: The column number in the generated source.  The column</span>
+ <span class="s5">*     number is 0-based.</span>
+ <span class="s5">*</span>
+ <span class="s5">* and an object is returned with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - source: The original source file, or null.</span>
+ <span class="s5">*   - line: The line number in the original source, or null.  The</span>
+ <span class="s5">*     line number is 1-based.</span>
+ <span class="s5">*   - column: The column number in the original source, or null.  The</span>
+ <span class="s5">*     column number is 0-based.</span>
+ <span class="s5">*   - name: The original identifier, or null.</span>
+ <span class="s5">*/</span>
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">originalPositionFor </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">IndexedSourceMapConsumer_originalPositionFor</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">) {</span>
+    <span class="s2">var </span><span class="s1">needle </span><span class="s3">= {</span>
+      <span class="s1">generatedLine</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'line'</span><span class="s3">),</span>
+      <span class="s1">generatedColumn</span><span class="s3">: </span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'column'</span><span class="s3">)</span>
+    <span class="s3">};</span>
+
+    <span class="s0">// Find the section containing the generated position we're trying to map</span>
+    <span class="s0">// to an original position.</span>
+    <span class="s2">var </span><span class="s1">sectionIndex </span><span class="s3">= </span><span class="s1">binarySearch</span><span class="s3">.</span><span class="s1">search</span><span class="s3">(</span><span class="s1">needle</span><span class="s3">, </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">,</span>
+      <span class="s2">function</span><span class="s3">(</span><span class="s1">needle</span><span class="s3">, </span><span class="s1">section</span><span class="s3">) {</span>
+        <span class="s2">var </span><span class="s1">cmp </span><span class="s3">= </span><span class="s1">needle</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">- </span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedLine</span><span class="s3">;</span>
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">cmp</span><span class="s3">) {</span>
+          <span class="s2">return </span><span class="s1">cmp</span><span class="s3">;</span>
+        <span class="s3">}</span>
+
+        <span class="s2">return </span><span class="s3">(</span><span class="s1">needle</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">-</span>
+                <span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedColumn</span><span class="s3">);</span>
+      <span class="s3">});</span>
+    <span class="s2">var </span><span class="s1">section </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">[</span><span class="s1">sectionIndex</span><span class="s3">];</span>
+
+    <span class="s2">if </span><span class="s3">(!</span><span class="s1">section</span><span class="s3">) {</span>
+      <span class="s2">return </span><span class="s3">{</span>
+        <span class="s1">source</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+        <span class="s1">line</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+        <span class="s1">column</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+        <span class="s1">name</span><span class="s3">: </span><span class="s2">null</span>
+      <span class="s3">};</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return </span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">originalPositionFor</span><span class="s3">({</span>
+      <span class="s1">line</span><span class="s3">: </span><span class="s1">needle</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">-</span>
+        <span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">- </span><span class="s6">1</span><span class="s3">),</span>
+      <span class="s1">column</span><span class="s3">: </span><span class="s1">needle</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">-</span>
+        <span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">=== </span><span class="s1">needle</span><span class="s3">.</span><span class="s1">generatedLine</span>
+         <span class="s3">? </span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">- </span><span class="s6">1</span>
+         <span class="s3">: </span><span class="s6">0</span><span class="s3">),</span>
+      <span class="s1">bias</span><span class="s3">: </span><span class="s1">aArgs</span><span class="s3">.</span><span class="s1">bias</span>
+    <span class="s3">});</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Return true if we have the source content for every source in the source</span>
+ <span class="s5">* map, false otherwise.</span>
+ <span class="s5">*/</span>
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">hasContentsOfAllSources </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">IndexedSourceMapConsumer_hasContentsOfAllSources</span><span class="s3">() {</span>
+    <span class="s2">return this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(</span><span class="s2">function </span><span class="s3">(</span><span class="s1">s</span><span class="s3">) {</span>
+      <span class="s2">return </span><span class="s1">s</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">hasContentsOfAllSources</span><span class="s3">();</span>
+    <span class="s3">});</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Returns the original source content. The only argument is the url of the</span>
+ <span class="s5">* original source file. Returns null if no original source content is</span>
+ <span class="s5">* available.</span>
+ <span class="s5">*/</span>
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">sourceContentFor </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">IndexedSourceMapConsumer_sourceContentFor</span><span class="s3">(</span><span class="s1">aSource</span><span class="s3">, </span><span class="s1">nullOnMissing</span><span class="s3">) {</span>
+    <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">i </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+      <span class="s2">var </span><span class="s1">section </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+
+      <span class="s2">var </span><span class="s1">content </span><span class="s3">= </span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">sourceContentFor</span><span class="s3">(</span><span class="s1">aSource</span><span class="s3">, </span><span class="s2">true</span><span class="s3">);</span>
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">content</span><span class="s3">) {</span>
+        <span class="s2">return </span><span class="s1">content</span><span class="s3">;</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+    <span class="s2">if </span><span class="s3">(</span><span class="s1">nullOnMissing</span><span class="s3">) {</span>
+      <span class="s2">return null</span><span class="s3">;</span>
+    <span class="s3">}</span>
+    <span class="s2">else </span><span class="s3">{</span>
+      <span class="s2">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s4">'&quot;' </span><span class="s3">+ </span><span class="s1">aSource </span><span class="s3">+ </span><span class="s4">'&quot; is not in the SourceMap.'</span><span class="s3">);</span>
+    <span class="s3">}</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Returns the generated line and column information for the original source,</span>
+ <span class="s5">* line, and column positions provided. The only argument is an object with</span>
+ <span class="s5">* the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - source: The filename of the original source.</span>
+ <span class="s5">*   - line: The line number in the original source.  The line number</span>
+ <span class="s5">*     is 1-based.</span>
+ <span class="s5">*   - column: The column number in the original source.  The column</span>
+ <span class="s5">*     number is 0-based.</span>
+ <span class="s5">*</span>
+ <span class="s5">* and an object is returned with the following properties:</span>
+ <span class="s5">*</span>
+ <span class="s5">*   - line: The line number in the generated source, or null.  The</span>
+ <span class="s5">*     line number is 1-based. </span>
+ <span class="s5">*   - column: The column number in the generated source, or null.</span>
+ <span class="s5">*     The column number is 0-based.</span>
+ <span class="s5">*/</span>
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">generatedPositionFor </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">IndexedSourceMapConsumer_generatedPositionFor</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">) {</span>
+    <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">i </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+      <span class="s2">var </span><span class="s1">section </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+
+      <span class="s0">// Only consider this section if the requested source is in the list of</span>
+      <span class="s0">// sources of the consumer.</span>
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">_findSourceIndex</span><span class="s3">(</span><span class="s1">util</span><span class="s3">.</span><span class="s1">getArg</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">, </span><span class="s4">'source'</span><span class="s3">)) === -</span><span class="s6">1</span><span class="s3">) {</span>
+        <span class="s2">continue</span><span class="s3">;</span>
+      <span class="s3">}</span>
+      <span class="s2">var </span><span class="s1">generatedPosition </span><span class="s3">= </span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">generatedPositionFor</span><span class="s3">(</span><span class="s1">aArgs</span><span class="s3">);</span>
+      <span class="s2">if </span><span class="s3">(</span><span class="s1">generatedPosition</span><span class="s3">) {</span>
+        <span class="s2">var </span><span class="s1">ret </span><span class="s3">= {</span>
+          <span class="s1">line</span><span class="s3">: </span><span class="s1">generatedPosition</span><span class="s3">.</span><span class="s1">line </span><span class="s3">+</span>
+            <span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">- </span><span class="s6">1</span><span class="s3">),</span>
+          <span class="s1">column</span><span class="s3">: </span><span class="s1">generatedPosition</span><span class="s3">.</span><span class="s1">column </span><span class="s3">+</span>
+            <span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">=== </span><span class="s1">generatedPosition</span><span class="s3">.</span><span class="s1">line</span>
+             <span class="s3">? </span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">- </span><span class="s6">1</span>
+             <span class="s3">: </span><span class="s6">0</span><span class="s3">)</span>
+        <span class="s3">};</span>
+        <span class="s2">return </span><span class="s1">ret</span><span class="s3">;</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s2">return </span><span class="s3">{</span>
+      <span class="s1">line</span><span class="s3">: </span><span class="s2">null</span><span class="s3">,</span>
+      <span class="s1">column</span><span class="s3">: </span><span class="s2">null</span>
+    <span class="s3">};</span>
+  <span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Parse the mappings in a string in to a data structure which we can easily</span>
+ <span class="s5">* query (the ordered arrays in the `this.__generatedMappings` and</span>
+ <span class="s5">* `this.__originalMappings` properties).</span>
+ <span class="s5">*/</span>
+<span class="s1">IndexedSourceMapConsumer</span><span class="s3">.</span><span class="s1">prototype</span><span class="s3">.</span><span class="s1">_parseMappings </span><span class="s3">=</span>
+  <span class="s2">function </span><span class="s1">IndexedSourceMapConsumer_parseMappings</span><span class="s3">(</span><span class="s1">aStr</span><span class="s3">, </span><span class="s1">aSourceRoot</span><span class="s3">) {</span>
+    <span class="s2">this</span><span class="s3">.</span><span class="s1">__generatedMappings </span><span class="s3">= [];</span>
+    <span class="s2">this</span><span class="s3">.</span><span class="s1">__originalMappings </span><span class="s3">= [];</span>
+    <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">i </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+      <span class="s2">var </span><span class="s1">section </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sections</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+      <span class="s2">var </span><span class="s1">sectionMappings </span><span class="s3">= </span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">_generatedMappings</span><span class="s3">;</span>
+      <span class="s2">for </span><span class="s3">(</span><span class="s2">var </span><span class="s1">j </span><span class="s3">= </span><span class="s6">0</span><span class="s3">; </span><span class="s1">j </span><span class="s3">&lt; </span><span class="s1">sectionMappings</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">j</span><span class="s3">++) {</span>
+        <span class="s2">var </span><span class="s1">mapping </span><span class="s3">= </span><span class="s1">sectionMappings</span><span class="s3">[</span><span class="s1">j</span><span class="s3">];</span>
+
+        <span class="s2">var </span><span class="s1">source </span><span class="s3">= </span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">at</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">source</span><span class="s3">);</span>
+        <span class="s1">source </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">computeSourceURL</span><span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">sourceRoot</span><span class="s3">, </span><span class="s1">source</span><span class="s3">, </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sourceMapURL</span><span class="s3">);</span>
+        <span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+        <span class="s1">source </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_sources</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+
+        <span class="s2">var </span><span class="s1">name </span><span class="s3">= </span><span class="s2">null</span><span class="s3">;</span>
+        <span class="s2">if </span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) {</span>
+          <span class="s1">name </span><span class="s3">= </span><span class="s1">section</span><span class="s3">.</span><span class="s1">consumer</span><span class="s3">.</span><span class="s1">_names</span><span class="s3">.</span><span class="s1">at</span><span class="s3">(</span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">name</span><span class="s3">);</span>
+          <span class="s2">this</span><span class="s3">.</span><span class="s1">_names</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+          <span class="s1">name </span><span class="s3">= </span><span class="s2">this</span><span class="s3">.</span><span class="s1">_names</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+        <span class="s3">}</span>
+
+        <span class="s0">// The mappings coming from the consumer for the section have</span>
+        <span class="s0">// generated positions relative to the start of the section, so we</span>
+        <span class="s0">// need to offset them to be relative to the start of the concatenated</span>
+        <span class="s0">// generated file.</span>
+        <span class="s2">var </span><span class="s1">adjustedMapping </span><span class="s3">= {</span>
+          <span class="s1">source</span><span class="s3">: </span><span class="s1">source</span><span class="s3">,</span>
+          <span class="s1">generatedLine</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">+</span>
+            <span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">- </span><span class="s6">1</span><span class="s3">),</span>
+          <span class="s1">generatedColumn</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">+</span>
+            <span class="s3">(</span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedLine </span><span class="s3">=== </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">generatedLine</span>
+            <span class="s3">? </span><span class="s1">section</span><span class="s3">.</span><span class="s1">generatedOffset</span><span class="s3">.</span><span class="s1">generatedColumn </span><span class="s3">- </span><span class="s6">1</span>
+            <span class="s3">: </span><span class="s6">0</span><span class="s3">),</span>
+          <span class="s1">originalLine</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalLine</span><span class="s3">,</span>
+          <span class="s1">originalColumn</span><span class="s3">: </span><span class="s1">mapping</span><span class="s3">.</span><span class="s1">originalColumn</span><span class="s3">,</span>
+          <span class="s1">name</span><span class="s3">: </span><span class="s1">name</span>
+        <span class="s3">};</span>
+
+        <span class="s2">this</span><span class="s3">.</span><span class="s1">__generatedMappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">adjustedMapping</span><span class="s3">);</span>
+        <span class="s2">if </span><span class="s3">(</span><span class="s2">typeof </span><span class="s1">adjustedMapping</span><span class="s3">.</span><span class="s1">originalLine </span><span class="s3">=== </span><span class="s4">'number'</span><span class="s3">) {</span>
+          <span class="s2">this</span><span class="s3">.</span><span class="s1">__originalMappings</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">adjustedMapping</span><span class="s3">);</span>
+        <span class="s3">}</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+
+    <span class="s1">quickSort</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">__generatedMappings</span><span class="s3">, </span><span class="s1">util</span><span class="s3">.</span><span class="s1">compareByGeneratedPositionsDeflated</span><span class="s3">);</span>
+    <span class="s1">quickSort</span><span class="s3">(</span><span class="s2">this</span><span class="s3">.</span><span class="s1">__originalMappings</span><span class="s3">, </span><span class="s1">util</span><span class="s3">.</span><span class="s1">compareByOriginalPositions</span><span class="s3">);</span>
+  <span class="s3">};</span>
+
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">IndexedSourceMapConsumer </span><span class="s3">= </span><span class="s1">IndexedSourceMapConsumer</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

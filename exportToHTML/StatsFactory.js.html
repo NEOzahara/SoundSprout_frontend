@@ -1,0 +1,387 @@
+<html>
+<head>
+<title>StatsFactory.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+StatsFactory.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">HookMap</span><span class="s3">, </span><span class="s1">SyncBailHook</span><span class="s3">, </span><span class="s1">SyncWaterfallHook </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;tapable&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">concatComparators</span><span class="s3">, </span><span class="s1">keepOriginalOrder </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">smartGrouping </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/smartGrouping&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compilation&quot;)} Compilation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compilation&quot;).NormalizedStatsOptions} NormalizedStatsOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../WebpackError&quot;)} WebpackError */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/comparators&quot;).Comparator&lt;TODO&gt;} Comparator */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/smartGrouping&quot;).GroupConfig&lt;TODO, EXPECTED_OBJECT&gt;} GroupConfig */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} KnownStatsFactoryContext</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} type</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(path: string) =&gt; string} makePathsRelative</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Compilation} compilation</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Set&lt;Module&gt;} rootModules</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Map&lt;string, Chunk[]&gt;} compilationFileToChunks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Map&lt;string, Chunk[]&gt;} compilationAuxiliaryFileToChunks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RuntimeSpec} runtime</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(compilation: Compilation) =&gt; WebpackError[]} cachedGetErrors</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(compilation: Compilation) =&gt; WebpackError[]} cachedGetWarnings</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{KnownStatsFactoryContext &amp; Record&lt;string, EXPECTED_ANY&gt;} StatsFactoryContext */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{any} CreatedObject */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{any} FactoryData */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{any} FactoryDataItem */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{any} Result */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Record&lt;string, any&gt;} ObjectForExtract */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} StatsFactoryHooks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[ObjectForExtract, FactoryData, StatsFactoryContext], void&gt;&gt;} extract</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[FactoryDataItem, StatsFactoryContext, number, number], boolean | void&gt;&gt;} filter</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[Comparator[], StatsFactoryContext], void&gt;&gt;} sort</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[FactoryDataItem, StatsFactoryContext, number, number], boolean | void&gt;&gt;} filterSorted</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[GroupConfig[], StatsFactoryContext], void&gt;&gt;} groupResults</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[Comparator[], StatsFactoryContext], void&gt;&gt;} sortResults</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[FactoryDataItem, StatsFactoryContext, number, number], boolean | void&gt;&gt;} filterResults</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[FactoryDataItem[], StatsFactoryContext], Result | void&gt;&gt;} merge</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[Result, StatsFactoryContext], Result&gt;&gt;} result</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[FactoryDataItem, StatsFactoryContext], string | void&gt;&gt;} getItemName</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{HookMap&lt;SyncBailHook&lt;[FactoryDataItem, StatsFactoryContext], StatsFactory | void&gt;&gt;} getItemFactory</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{Map&lt;string, T[]&gt;} Caches</span>
+ <span class="s5">*/</span>
+
+<span class="s4">class </span><span class="s1">StatsFactory </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">() {</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{StatsFactoryHooks} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">freeze</span><span class="s3">({</span>
+			<span class="s1">extract</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(</span>
+				<span class="s3">() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;object&quot;</span><span class="s3">, </span><span class="s2">&quot;data&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">])</span>
+			<span class="s3">),</span>
+			<span class="s1">filter</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(</span>
+				<span class="s3">() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;item&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">, </span><span class="s2">&quot;index&quot;</span><span class="s3">, </span><span class="s2">&quot;unfilteredIndex&quot;</span><span class="s3">])</span>
+			<span class="s3">),</span>
+			<span class="s1">sort</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;comparators&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">])),</span>
+			<span class="s1">filterSorted</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(</span>
+				<span class="s3">() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;item&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">, </span><span class="s2">&quot;index&quot;</span><span class="s3">, </span><span class="s2">&quot;unfilteredIndex&quot;</span><span class="s3">])</span>
+			<span class="s3">),</span>
+			<span class="s1">groupResults</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(</span>
+				<span class="s3">() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;groupConfigs&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">])</span>
+			<span class="s3">),</span>
+			<span class="s1">sortResults</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(</span>
+				<span class="s3">() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;comparators&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">])</span>
+			<span class="s3">),</span>
+			<span class="s1">filterResults</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(</span>
+				<span class="s3">() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;item&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">, </span><span class="s2">&quot;index&quot;</span><span class="s3">, </span><span class="s2">&quot;unfilteredIndex&quot;</span><span class="s3">])</span>
+			<span class="s3">),</span>
+			<span class="s1">merge</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;items&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">])),</span>
+			<span class="s1">result</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(() =&gt; </span><span class="s4">new </span><span class="s1">SyncWaterfallHook</span><span class="s3">([</span><span class="s2">&quot;result&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">])),</span>
+			<span class="s1">getItemName</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;item&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">])),</span>
+			<span class="s1">getItemFactory</span><span class="s3">: </span><span class="s4">new </span><span class="s1">HookMap</span><span class="s3">(() =&gt; </span><span class="s4">new </span><span class="s1">SyncBailHook</span><span class="s3">([</span><span class="s2">&quot;item&quot;</span><span class="s3">, </span><span class="s2">&quot;context&quot;</span><span class="s3">]))</span>
+		<span class="s3">});</span>
+		<span class="s4">const </span><span class="s1">hooks </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */ </span><span class="s3">({});</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">hooks</span><span class="s3">)) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">[</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{keyof StatsFactoryHooks} */ </span><span class="s3">(</span><span class="s1">key</span><span class="s3">)] = </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s3">}</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_inCreate </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{StatsFactoryHooks[keyof StatsFactoryHooks]} HM</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{HM extends HookMap&lt;infer H&gt; ? H : never} H</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{HM} hookMap hook map</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Caches&lt;H&gt;} cache cache</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} type type</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{H[]} hooks</span>
+	 <span class="s5">* </span><span class="s6">@private</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_getAllLevelHooks</span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">type</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">type</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">hooks </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{H[]} */ </span><span class="s3">([]);</span>
+		<span class="s4">const </span><span class="s1">typeParts </span><span class="s3">= </span><span class="s1">type</span><span class="s3">.</span><span class="s1">split</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">typeParts</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+			<span class="s4">const </span><span class="s1">hook </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{H} */ </span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">typeParts</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">i</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;.&quot;</span><span class="s3">)));</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">hook</span><span class="s3">) {</span>
+				<span class="s1">hooks</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">hook</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s1">cache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">type</span><span class="s3">, </span><span class="s1">hooks</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">hooks</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{StatsFactoryHooks[keyof StatsFactoryHooks]} HM</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{HM extends HookMap&lt;infer H&gt; ? H : never} H</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{H extends import(&quot;tapable&quot;).Hook&lt;any, infer R&gt; ? R : never} R</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{HM} hookMap hook map</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Caches&lt;H&gt;} cache cache</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} type type</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(hook: H) =&gt; R | void} fn fn</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{R | void} hook</span>
+	 <span class="s5">* </span><span class="s6">@private</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_forEachLevel</span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">type</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hook of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getAllLevelHooks</span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">type</span><span class="s3">)) {</span>
+			<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">fn</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{H} */ </span><span class="s3">(</span><span class="s1">hook</span><span class="s3">));</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">result </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{StatsFactoryHooks[keyof StatsFactoryHooks]} HM</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{HM extends HookMap&lt;infer H&gt; ? H : never} H</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{HM} hookMap hook map</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Caches&lt;H&gt;} cache cache</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} type type</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FactoryData} data data</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(hook: H, factoryData: FactoryData) =&gt; FactoryData} fn fn</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{FactoryData} data</span>
+	 <span class="s5">* </span><span class="s6">@private</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_forEachLevelWaterfall</span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">type</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hook of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getAllLevelHooks</span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">type</span><span class="s3">)) {</span>
+			<span class="s1">data </span><span class="s3">= </span><span class="s1">fn</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{H} */ </span><span class="s3">(</span><span class="s1">hook</span><span class="s3">), </span><span class="s1">data</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">data</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{StatsFactoryHooks[keyof StatsFactoryHooks]} T</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{T extends HookMap&lt;infer H&gt; ? H : never} H</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">{H extends import(&quot;tapable&quot;).Hook&lt;any, infer R&gt; ? R : never} R</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} hookMap hook map</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Caches&lt;H&gt;} cache cache</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} type type</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Array&lt;FactoryData&gt;} items items</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(hook: H, item: R, idx: number, i: number) =&gt; R | undefined} fn fn</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} forceClone force clone</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{R[]} result for each level</span>
+	 <span class="s5">* </span><span class="s6">@private</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_forEachLevelFilter</span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">type</span><span class="s3">, </span><span class="s1">items</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">, </span><span class="s1">forceClone</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">hooks </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getAllLevelHooks</span><span class="s3">(</span><span class="s1">hookMap</span><span class="s3">, </span><span class="s1">cache</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return </span><span class="s1">forceClone </span><span class="s3">? </span><span class="s1">items</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">() : </span><span class="s1">items</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">items</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">((</span><span class="s1">item</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">) =&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">hook of hooks</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">r </span><span class="s3">= </span><span class="s1">fn</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{H} */ </span><span class="s3">(</span><span class="s1">hook</span><span class="s3">), </span><span class="s1">item</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">i</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">r </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">r</span><span class="s3">) </span><span class="s1">i</span><span class="s3">++;</span>
+					<span class="s4">return </span><span class="s1">r</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s1">i</span><span class="s3">++;</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} type type</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FactoryData} data factory data</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Omit&lt;StatsFactoryContext, &quot;type&quot;&gt;} baseContext context used as base</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CreatedObject} created object</span>
+	 <span class="s5">*/</span>
+	<span class="s1">create</span><span class="s3">(</span><span class="s1">type</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">baseContext</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_inCreate</span><span class="s3">) {</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">_create</span><span class="s3">(</span><span class="s1">type</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">baseContext</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">try </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_inCreate </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">_create</span><span class="s3">(</span><span class="s1">type</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">baseContext</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">finally </span><span class="s3">{</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">))</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">[</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{keyof StatsFactoryHooks} */ </span><span class="s3">(</span><span class="s1">key</span><span class="s3">)].</span><span class="s1">clear</span><span class="s3">();</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_inCreate </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} type type</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FactoryData} data factory data</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Omit&lt;StatsFactoryContext, &quot;type&quot;&gt;} baseContext context used as base</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CreatedObject} created object</span>
+	 <span class="s5">* </span><span class="s6">@private</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_create</span><span class="s3">(</span><span class="s1">type</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">baseContext</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">context </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{StatsFactoryContext} */ </span><span class="s3">({</span>
+			<span class="s1">...baseContext</span><span class="s3">,</span>
+			<span class="s1">type</span><span class="s3">,</span>
+			<span class="s3">[</span><span class="s1">type</span><span class="s3">]: </span><span class="s1">data</span>
+		<span class="s3">});</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">data</span><span class="s3">)) {</span>
+			<span class="s0">// run filter on unsorted items</span>
+			<span class="s4">const </span><span class="s1">items </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevelFilter</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">,</span>
+				<span class="s1">type</span><span class="s3">,</span>
+				<span class="s1">data</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">h</span><span class="s3">, </span><span class="s1">r</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">i</span><span class="s3">) =&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">r</span><span class="s3">, </span><span class="s1">context</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">i</span><span class="s3">),</span>
+				<span class="s4">true</span>
+			<span class="s3">);</span>
+
+			<span class="s0">// sort items</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Comparator[]} */</span>
+			<span class="s4">const </span><span class="s1">comparators </span><span class="s3">= [];</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevel</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">, </span><span class="s1">type</span><span class="s3">, </span><span class="s1">h </span><span class="s3">=&gt;</span>
+				<span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">comparators</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">comparators</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s1">items</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span>
+					<span class="s0">// @ts-expect-error number of arguments is correct</span>
+					<span class="s1">concatComparators</span><span class="s3">(</span><span class="s1">...comparators</span><span class="s3">, </span><span class="s1">keepOriginalOrder</span><span class="s3">(</span><span class="s1">items</span><span class="s3">))</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// run filter on sorted items</span>
+			<span class="s4">const </span><span class="s1">items2 </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevelFilter</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">filterSorted</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">filterSorted</span><span class="s3">,</span>
+				<span class="s1">type</span><span class="s3">,</span>
+				<span class="s1">items</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">h</span><span class="s3">, </span><span class="s1">r</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">i</span><span class="s3">) =&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">r</span><span class="s3">, </span><span class="s1">context</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">i</span><span class="s3">),</span>
+				<span class="s4">false</span>
+			<span class="s3">);</span>
+
+			<span class="s0">// for each item</span>
+			<span class="s4">let </span><span class="s1">resultItems </span><span class="s3">= </span><span class="s1">items2</span><span class="s3">.</span><span class="s1">map</span><span class="s3">((</span><span class="s1">item</span><span class="s3">, </span><span class="s1">i</span><span class="s3">) =&gt; {</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{StatsFactoryContext} */</span>
+				<span class="s4">const </span><span class="s1">itemContext </span><span class="s3">= {</span>
+					<span class="s1">...context</span><span class="s3">,</span>
+					<span class="s1">_index</span><span class="s3">: </span><span class="s1">i</span>
+				<span class="s3">};</span>
+
+				<span class="s0">// run getItemName</span>
+				<span class="s4">const </span><span class="s1">itemName </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevel</span><span class="s3">(</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">getItemName</span><span class="s3">,</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">getItemName</span><span class="s3">,</span>
+					<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">}</span><span class="s2">[]`</span><span class="s3">,</span>
+					<span class="s1">h </span><span class="s3">=&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">itemContext</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">itemName</span><span class="s3">) </span><span class="s1">itemContext</span><span class="s3">[</span><span class="s1">itemName</span><span class="s3">] = </span><span class="s1">item</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">innerType </span><span class="s3">= </span><span class="s1">itemName </span><span class="s3">? </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">}</span><span class="s2">[].</span><span class="s1">$</span><span class="s3">{</span><span class="s1">itemName</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">}</span><span class="s2">[]`</span><span class="s3">;</span>
+
+				<span class="s0">// run getItemFactory</span>
+				<span class="s4">const </span><span class="s1">itemFactory </span><span class="s3">=</span>
+					<span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevel</span><span class="s3">(</span>
+						<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">getItemFactory</span><span class="s3">,</span>
+						<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">getItemFactory</span><span class="s3">,</span>
+						<span class="s1">innerType</span><span class="s3">,</span>
+						<span class="s1">h </span><span class="s3">=&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">itemContext</span><span class="s3">)</span>
+					<span class="s3">) || </span><span class="s4">this</span><span class="s3">;</span>
+
+				<span class="s0">// run item factory</span>
+				<span class="s4">return </span><span class="s1">itemFactory</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s1">innerType</span><span class="s3">, </span><span class="s1">item</span><span class="s3">, </span><span class="s1">itemContext</span><span class="s3">);</span>
+			<span class="s3">});</span>
+
+			<span class="s0">// sort result items</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Comparator[]} */</span>
+			<span class="s4">const </span><span class="s1">comparators2 </span><span class="s3">= [];</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevel</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">sortResults</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">sortResults</span><span class="s3">,</span>
+				<span class="s1">type</span><span class="s3">,</span>
+				<span class="s1">h </span><span class="s3">=&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">comparators2</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">comparators2</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s1">resultItems</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span>
+					<span class="s0">// @ts-expect-error number of arguments is correct</span>
+					<span class="s1">concatComparators</span><span class="s3">(</span><span class="s1">...comparators2</span><span class="s3">, </span><span class="s1">keepOriginalOrder</span><span class="s3">(</span><span class="s1">resultItems</span><span class="s3">))</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// group result items</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{GroupConfig[]} */</span>
+			<span class="s4">const </span><span class="s1">groupConfigs </span><span class="s3">= [];</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevel</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">groupResults</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">groupResults</span><span class="s3">,</span>
+				<span class="s1">type</span><span class="s3">,</span>
+				<span class="s1">h </span><span class="s3">=&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">groupConfigs</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">groupConfigs</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s1">resultItems </span><span class="s3">= </span><span class="s1">smartGrouping</span><span class="s3">(</span><span class="s1">resultItems</span><span class="s3">, </span><span class="s1">groupConfigs</span><span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// run filter on sorted result items</span>
+			<span class="s4">const </span><span class="s1">finalResultItems </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevelFilter</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">filterResults</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">filterResults</span><span class="s3">,</span>
+				<span class="s1">type</span><span class="s3">,</span>
+				<span class="s1">resultItems</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">h</span><span class="s3">, </span><span class="s1">r</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">i</span><span class="s3">) =&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">r</span><span class="s3">, </span><span class="s1">context</span><span class="s3">, </span><span class="s1">idx</span><span class="s3">, </span><span class="s1">i</span><span class="s3">),</span>
+				<span class="s4">false</span>
+			<span class="s3">);</span>
+
+			<span class="s0">// run merge on mapped items</span>
+			<span class="s4">let </span><span class="s1">result </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevel</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">merge</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">merge</span><span class="s3">,</span>
+				<span class="s1">type</span><span class="s3">,</span>
+				<span class="s1">h </span><span class="s3">=&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">finalResultItems</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">result </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">result </span><span class="s3">= </span><span class="s1">finalResultItems</span><span class="s3">;</span>
+
+			<span class="s0">// run result on merged items</span>
+			<span class="s4">return this</span><span class="s3">.</span><span class="s1">_forEachLevelWaterfall</span><span class="s3">(</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">result</span><span class="s3">,</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">result</span><span class="s3">,</span>
+				<span class="s1">type</span><span class="s3">,</span>
+				<span class="s1">result</span><span class="s3">,</span>
+				<span class="s3">(</span><span class="s1">h</span><span class="s3">, </span><span class="s1">r</span><span class="s3">) =&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">r</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ObjectForExtract} */</span>
+		<span class="s4">const </span><span class="s1">object </span><span class="s3">= {};</span>
+
+		<span class="s0">// run extract on value</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_forEachLevel</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">extract</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">extract</span><span class="s3">, </span><span class="s1">type</span><span class="s3">, </span><span class="s1">h </span><span class="s3">=&gt;</span>
+			<span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">object</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+		<span class="s3">);</span>
+
+		<span class="s0">// run result on extracted object</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">_forEachLevelWaterfall</span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">result</span><span class="s3">,</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_caches</span><span class="s3">.</span><span class="s1">result</span><span class="s3">,</span>
+			<span class="s1">type</span><span class="s3">,</span>
+			<span class="s1">object</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">h</span><span class="s3">, </span><span class="s1">r</span><span class="s3">) =&gt; </span><span class="s1">h</span><span class="s3">.</span><span class="s1">call</span><span class="s3">(</span><span class="s1">r</span><span class="s3">, </span><span class="s1">context</span><span class="s3">)</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">StatsFactory</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

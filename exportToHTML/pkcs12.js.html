@@ -1,0 +1,1098 @@
+<html>
+<head>
+<title>pkcs12.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #bcbec4;}
+.s5 { color: #6aab73;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+pkcs12.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* Javascript implementation of PKCS#12.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Dave Longley</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Stefan Siegl &lt;stesie@brokenpipe.de&gt;</span>
+ <span class="s0">*</span>
+ <span class="s0">* Copyright (c) 2010-2014 Digital Bazaar, Inc.</span>
+ <span class="s0">* Copyright (c) 2012 Stefan Siegl &lt;stesie@brokenpipe.de&gt;</span>
+ <span class="s0">*</span>
+ <span class="s0">* The ASN.1 representation of PKCS#12 is as follows</span>
+ <span class="s0">* (see ftp://ftp.rsasecurity.com/pub/pkcs/pkcs-12/pkcs-12-tc1.pdf for details)</span>
+ <span class="s0">*</span>
+ <span class="s0">* PFX ::= SEQUENCE {</span>
+ <span class="s0">*   version  INTEGER {v3(3)}(v3,...),</span>
+ <span class="s0">*   authSafe ContentInfo,</span>
+ <span class="s0">*   macData  MacData OPTIONAL</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* MacData ::= SEQUENCE {</span>
+ <span class="s0">*   mac DigestInfo,</span>
+ <span class="s0">*   macSalt OCTET STRING,</span>
+ <span class="s0">*   iterations INTEGER DEFAULT 1</span>
+ <span class="s0">* }</span>
+ <span class="s0">* Note: The iterations default is for historical reasons and its use is</span>
+ <span class="s0">* deprecated. A higher value, like 1024, is recommended.</span>
+ <span class="s0">*</span>
+ <span class="s0">* DigestInfo is defined in PKCS#7 as follows:</span>
+ <span class="s0">*</span>
+ <span class="s0">* DigestInfo ::= SEQUENCE {</span>
+ <span class="s0">*   digestAlgorithm DigestAlgorithmIdentifier,</span>
+ <span class="s0">*   digest Digest</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* DigestAlgorithmIdentifier ::= AlgorithmIdentifier</span>
+ <span class="s0">*</span>
+ <span class="s0">* The AlgorithmIdentifier contains an Object Identifier (OID) and parameters</span>
+ <span class="s0">* for the algorithm, if any. In the case of SHA1 there is none.</span>
+ <span class="s0">*</span>
+ <span class="s0">* AlgorithmIdentifer ::= SEQUENCE {</span>
+ <span class="s0">*    algorithm OBJECT IDENTIFIER,</span>
+ <span class="s0">*    parameters ANY DEFINED BY algorithm OPTIONAL</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* Digest ::= OCTET STRING</span>
+ <span class="s0">*</span>
+ <span class="s0">*</span>
+ <span class="s0">* ContentInfo ::= SEQUENCE {</span>
+ <span class="s0">*   contentType ContentType,</span>
+ <span class="s0">*   content     [0] EXPLICIT ANY DEFINED BY contentType OPTIONAL</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* ContentType ::= OBJECT IDENTIFIER</span>
+ <span class="s0">*</span>
+ <span class="s0">* AuthenticatedSafe ::= SEQUENCE OF ContentInfo</span>
+ <span class="s0">* -- Data if unencrypted</span>
+ <span class="s0">* -- EncryptedData if password-encrypted</span>
+ <span class="s0">* -- EnvelopedData if public key-encrypted</span>
+ <span class="s0">*</span>
+ <span class="s0">*</span>
+ <span class="s0">* SafeContents ::= SEQUENCE OF SafeBag</span>
+ <span class="s0">*</span>
+ <span class="s0">* SafeBag ::= SEQUENCE {</span>
+ <span class="s0">*   bagId     BAG-TYPE.&amp;id ({PKCS12BagSet})</span>
+ <span class="s0">*   bagValue  [0] EXPLICIT BAG-TYPE.&amp;Type({PKCS12BagSet}{</span><span class="s1">@bagId</span><span class="s0">}),</span>
+ <span class="s0">*   bagAttributes SET OF PKCS12Attribute OPTIONAL</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* PKCS12Attribute ::= SEQUENCE {</span>
+ <span class="s0">*   attrId ATTRIBUTE.&amp;id ({PKCS12AttrSet}),</span>
+ <span class="s0">*   attrValues SET OF ATTRIBUTE.&amp;Type ({PKCS12AttrSet}{</span><span class="s1">@attrId</span><span class="s0">})</span>
+ <span class="s0">* } -- This type is compatible with the X.500 type 'Attribute'</span>
+ <span class="s0">*</span>
+ <span class="s0">* PKCS12AttrSet ATTRIBUTE ::= {</span>
+ <span class="s0">*   friendlyName | -- from PKCS #9</span>
+ <span class="s0">*   localKeyId, -- from PKCS #9</span>
+ <span class="s0">*   ... -- Other attributes are allowed</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* CertBag ::= SEQUENCE {</span>
+ <span class="s0">*   certId    BAG-TYPE.&amp;id   ({CertTypes}),</span>
+ <span class="s0">*   certValue [0] EXPLICIT BAG-TYPE.&amp;Type ({CertTypes}{</span><span class="s1">@certId</span><span class="s0">})</span>
+ <span class="s0">* }</span>
+ <span class="s0">*</span>
+ <span class="s0">* x509Certificate BAG-TYPE ::= {OCTET STRING IDENTIFIED BY {certTypes 1}}</span>
+ <span class="s0">*   -- DER-encoded X.509 certificate stored in OCTET STRING</span>
+ <span class="s0">*</span>
+ <span class="s0">* sdsiCertificate BAG-TYPE ::= {IA5String IDENTIFIED BY {certTypes 2}}</span>
+ <span class="s0">* -- Base64-encoded SDSI certificate stored in IA5String</span>
+ <span class="s0">*</span>
+ <span class="s0">* CertTypes BAG-TYPE ::= {</span>
+ <span class="s0">*   x509Certificate |</span>
+ <span class="s0">*   sdsiCertificate,</span>
+ <span class="s0">*   ... -- For future extensions</span>
+ <span class="s0">* }</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">forge </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s5">'./forge'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./asn1'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./hmac'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./oids'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./pkcs7asn1'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./pbe'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./random'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./rsa'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./sha1'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./util'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./x509'</span><span class="s4">);</span>
+
+<span class="s6">// shortcut for asn.1 &amp; PKI API</span>
+<span class="s3">var </span><span class="s2">asn1 </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">;</span>
+<span class="s3">var </span><span class="s2">pki </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pki</span><span class="s4">;</span>
+
+<span class="s6">// shortcut for PKCS#12 API</span>
+<span class="s3">var </span><span class="s2">p12 </span><span class="s4">= </span><span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pkcs12 </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pkcs12 </span><span class="s4">|| {};</span>
+
+<span class="s3">var </span><span class="s2">contentInfoValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'ContentInfo'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,  </span><span class="s6">// a ContentInfo</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'ContentInfo.contentType'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'contentType'</span>
+  <span class="s4">}, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'ContentInfo.content'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">captureAsn1</span><span class="s4">: </span><span class="s5">'content'</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s3">var </span><span class="s2">pfxValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.version'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'version'</span>
+  <span class="s4">},</span>
+  <span class="s2">contentInfoValidator</span><span class="s4">, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">optional</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">captureAsn1</span><span class="s4">: </span><span class="s5">'mac'</span><span class="s4">,</span>
+    <span class="s2">value</span><span class="s4">: [{</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData.mac'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,  </span><span class="s6">// DigestInfo</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+      <span class="s2">value</span><span class="s4">: [{</span>
+        <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData.mac.digestAlgorithm'</span><span class="s4">,</span>
+        <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,  </span><span class="s6">// DigestAlgorithmIdentifier</span>
+        <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+        <span class="s2">value</span><span class="s4">: [{</span>
+          <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData.mac.digestAlgorithm.algorithm'</span><span class="s4">,</span>
+          <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+          <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+          <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">capture</span><span class="s4">: </span><span class="s5">'macAlgorithm'</span>
+        <span class="s4">}, {</span>
+          <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData.mac.digestAlgorithm.parameters'</span><span class="s4">,</span>
+          <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+          <span class="s2">captureAsn1</span><span class="s4">: </span><span class="s5">'macAlgorithmParameters'</span>
+        <span class="s4">}]</span>
+      <span class="s4">}, {</span>
+        <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData.mac.digest'</span><span class="s4">,</span>
+        <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+        <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">capture</span><span class="s4">: </span><span class="s5">'macDigest'</span>
+      <span class="s4">}]</span>
+    <span class="s4">}, {</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData.macSalt'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">capture</span><span class="s4">: </span><span class="s5">'macSalt'</span>
+    <span class="s4">}, {</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'PFX.macData.iterations'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">optional</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+      <span class="s2">capture</span><span class="s4">: </span><span class="s5">'macIterations'</span>
+    <span class="s4">}]</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s3">var </span><span class="s2">safeBagValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'SafeBag'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'SafeBag.bagId'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'bagId'</span>
+  <span class="s4">}, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'SafeBag.bagValue'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">captureAsn1</span><span class="s4">: </span><span class="s5">'bagValue'</span>
+  <span class="s4">}, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'SafeBag.bagAttributes'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">optional</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'bagAttributes'</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s3">var </span><span class="s2">attributeValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'Attribute'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'Attribute.attrId'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'oid'</span>
+  <span class="s4">}, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'Attribute.attrValues'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'values'</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s3">var </span><span class="s2">certBagValidator </span><span class="s4">= {</span>
+  <span class="s2">name</span><span class="s4">: </span><span class="s5">'CertBag'</span><span class="s4">,</span>
+  <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+  <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">,</span>
+  <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+  <span class="s2">value</span><span class="s4">: [{</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'CertBag.certId'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+    <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+    <span class="s2">capture</span><span class="s4">: </span><span class="s5">'certId'</span>
+  <span class="s4">}, {</span>
+    <span class="s2">name</span><span class="s4">: </span><span class="s5">'CertBag.certValue'</span><span class="s4">,</span>
+    <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">,</span>
+    <span class="s2">constructed</span><span class="s4">: </span><span class="s3">true</span><span class="s4">,</span>
+    <span class="s6">/* So far we only support X.509 certificates (which are wrapped in 
+       an OCTET STRING, hence hard code that here). */</span>
+    <span class="s2">value</span><span class="s4">: [{</span>
+      <span class="s2">name</span><span class="s4">: </span><span class="s5">'CertBag.certValue[0]'</span><span class="s4">,</span>
+      <span class="s2">tagClass</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">,</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+      <span class="s2">constructed</span><span class="s4">: </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">capture</span><span class="s4">: </span><span class="s5">'cert'</span>
+    <span class="s4">}]</span>
+  <span class="s4">}]</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Search SafeContents structure for bags with matching attributes.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The search can optionally be narrowed by a certain bag type.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">safeContents the SafeContents structure to search in.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">attrName the name of the attribute to compare against.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">attrValue the attribute value to search for.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">[bagType] bag type to narrow search by.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">an array of matching bags.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_getBagsByAttribute</span><span class="s4">(</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s2">attrName</span><span class="s4">, </span><span class="s2">attrValue</span><span class="s4">, </span><span class="s2">bagType</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">result </span><span class="s4">= [];</span>
+
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">safeContents</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; </span><span class="s2">i</span><span class="s4">++) {</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">j </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">j </span><span class="s4">&lt; </span><span class="s2">safeContents</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">safeBags</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; </span><span class="s2">j</span><span class="s4">++) {</span>
+      <span class="s3">var </span><span class="s2">bag </span><span class="s4">= </span><span class="s2">safeContents</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">safeBags</span><span class="s4">[</span><span class="s2">j</span><span class="s4">];</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">bagType </span><span class="s4">!== </span><span class="s2">undefined </span><span class="s4">&amp;&amp; </span><span class="s2">bag</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">bagType</span><span class="s4">) {</span>
+        <span class="s3">continue</span><span class="s4">;</span>
+      <span class="s4">}</span>
+      <span class="s6">// only filter by bag type, no attribute specified</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">attrName </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+        <span class="s2">result</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">bag</span><span class="s4">);</span>
+        <span class="s3">continue</span><span class="s4">;</span>
+      <span class="s4">}</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">bag</span><span class="s4">.</span><span class="s2">attributes</span><span class="s4">[</span><span class="s2">attrName</span><span class="s4">] !== </span><span class="s2">undefined </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">bag</span><span class="s4">.</span><span class="s2">attributes</span><span class="s4">[</span><span class="s2">attrName</span><span class="s4">].</span><span class="s2">indexOf</span><span class="s4">(</span><span class="s2">attrValue</span><span class="s4">) &gt;= </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s2">result</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">bag</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">result</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Converts a PKCS#12 PFX in ASN.1 notation into a PFX object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">obj The PKCS#12 PFX in ASN.1 notation.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">strict true to use strict DER decoding, false not to (default: true).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{String} password Password to decrypt with (optional).</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">PKCS#12 PFX object.</span>
+ <span class="s0">*/</span>
+<span class="s2">p12</span><span class="s4">.</span><span class="s2">pkcs12FromAsn1 </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s6">// handle args</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">strict </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+    <span class="s2">password </span><span class="s4">= </span><span class="s2">strict</span><span class="s4">;</span>
+    <span class="s2">strict </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+  <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">strict </span><span class="s4">=== </span><span class="s2">undefined</span><span class="s4">) {</span>
+    <span class="s2">strict </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// validate PFX and capture data</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">, </span><span class="s2">pfxValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#12 PFX. ' </span><span class="s4">+</span>
+      <span class="s5">'ASN.1 object is not an PKCS#12 PFX.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">pfx </span><span class="s4">= {</span>
+    <span class="s2">version</span><span class="s4">: </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">version</span><span class="s4">.</span><span class="s2">charCodeAt</span><span class="s4">(</span><span class="s7">0</span><span class="s4">),</span>
+    <span class="s2">safeContents</span><span class="s4">: [],</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Gets bags with matching attributes.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">filter the attributes to filter by:</span>
+     <span class="s0">*          [localKeyId] the localKeyId to search for.</span>
+     <span class="s0">*          [localKeyIdHex] the localKeyId in hex to search for.</span>
+     <span class="s0">*          [friendlyName] the friendly name to search for.</span>
+     <span class="s0">*          [bagType] bag type to narrow each attribute search by.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@return </span><span class="s0">a map of attribute type to an array of matching bags or, if no</span>
+     <span class="s0">*           attribute was given but a bag type, the map key will be the</span>
+     <span class="s0">*           bag type.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getBags</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">filter</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">rval </span><span class="s4">= {};</span>
+
+      <span class="s3">var </span><span class="s2">localKeyId</span><span class="s4">;</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s5">'localKeyId' </span><span class="s3">in </span><span class="s2">filter</span><span class="s4">) {</span>
+        <span class="s2">localKeyId </span><span class="s4">= </span><span class="s2">filter</span><span class="s4">.</span><span class="s2">localKeyId</span><span class="s4">;</span>
+      <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s5">'localKeyIdHex' </span><span class="s3">in </span><span class="s2">filter</span><span class="s4">) {</span>
+        <span class="s2">localKeyId </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">hexToBytes</span><span class="s4">(</span><span class="s2">filter</span><span class="s4">.</span><span class="s2">localKeyIdHex</span><span class="s4">);</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// filter on bagType only</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">localKeyId </span><span class="s4">=== </span><span class="s2">undefined </span><span class="s4">&amp;&amp; !(</span><span class="s5">'friendlyName' </span><span class="s3">in </span><span class="s2">filter</span><span class="s4">) &amp;&amp;</span>
+        <span class="s5">'bagType' </span><span class="s3">in </span><span class="s2">filter</span><span class="s4">) {</span>
+        <span class="s2">rval</span><span class="s4">[</span><span class="s2">filter</span><span class="s4">.</span><span class="s2">bagType</span><span class="s4">] = </span><span class="s2">_getBagsByAttribute</span><span class="s4">(</span>
+          <span class="s2">pfx</span><span class="s4">.</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s3">null</span><span class="s4">, </span><span class="s3">null</span><span class="s4">, </span><span class="s2">filter</span><span class="s4">.</span><span class="s2">bagType</span><span class="s4">);</span>
+      <span class="s4">}</span>
+
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">localKeyId </span><span class="s4">!== </span><span class="s2">undefined</span><span class="s4">) {</span>
+        <span class="s2">rval</span><span class="s4">.</span><span class="s2">localKeyId </span><span class="s4">= </span><span class="s2">_getBagsByAttribute</span><span class="s4">(</span>
+          <span class="s2">pfx</span><span class="s4">.</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s5">'localKeyId'</span><span class="s4">,</span>
+          <span class="s2">localKeyId</span><span class="s4">, </span><span class="s2">filter</span><span class="s4">.</span><span class="s2">bagType</span><span class="s4">);</span>
+      <span class="s4">}</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s5">'friendlyName' </span><span class="s3">in </span><span class="s2">filter</span><span class="s4">) {</span>
+        <span class="s2">rval</span><span class="s4">.</span><span class="s2">friendlyName </span><span class="s4">= </span><span class="s2">_getBagsByAttribute</span><span class="s4">(</span>
+          <span class="s2">pfx</span><span class="s4">.</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s5">'friendlyName'</span><span class="s4">,</span>
+          <span class="s2">filter</span><span class="s4">.</span><span class="s2">friendlyName</span><span class="s4">, </span><span class="s2">filter</span><span class="s4">.</span><span class="s2">bagType</span><span class="s4">);</span>
+      <span class="s4">}</span>
+
+      <span class="s3">return </span><span class="s2">rval</span><span class="s4">;</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* DEPRECATED: use getBags() instead.</span>
+     <span class="s0">*</span>
+     <span class="s0">* Get bags with matching friendlyName attribute.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">friendlyName the friendly name to search for.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">[bagType] bag type to narrow search by.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@return </span><span class="s0">an array of bags with matching friendlyName attribute.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getBagsByFriendlyName</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">friendlyName</span><span class="s4">, </span><span class="s2">bagType</span><span class="s4">) {</span>
+      <span class="s3">return </span><span class="s2">_getBagsByAttribute</span><span class="s4">(</span>
+        <span class="s2">pfx</span><span class="s4">.</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s5">'friendlyName'</span><span class="s4">, </span><span class="s2">friendlyName</span><span class="s4">, </span><span class="s2">bagType</span><span class="s4">);</span>
+    <span class="s4">},</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* DEPRECATED: use getBags() instead.</span>
+     <span class="s0">*</span>
+     <span class="s0">* Get bags with matching localKeyId attribute.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">localKeyId the localKeyId to search for.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">[bagType] bag type to narrow search by.</span>
+     <span class="s0">*</span>
+     <span class="s0">* </span><span class="s1">@return </span><span class="s0">an array of bags with matching localKeyId attribute.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getBagsByLocalKeyId</span><span class="s4">: </span><span class="s3">function</span><span class="s4">(</span><span class="s2">localKeyId</span><span class="s4">, </span><span class="s2">bagType</span><span class="s4">) {</span>
+      <span class="s3">return </span><span class="s2">_getBagsByAttribute</span><span class="s4">(</span>
+        <span class="s2">pfx</span><span class="s4">.</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s5">'localKeyId'</span><span class="s4">, </span><span class="s2">localKeyId</span><span class="s4">, </span><span class="s2">bagType</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">version</span><span class="s4">.</span><span class="s2">charCodeAt</span><span class="s4">(</span><span class="s7">0</span><span class="s4">) !== </span><span class="s7">3</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#12 PFX of version other than 3 not supported.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">version </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">version</span><span class="s4">.</span><span class="s2">charCodeAt</span><span class="s4">(</span><span class="s7">0</span><span class="s4">);</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">) !== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Only PKCS#12 PFX in password integrity mode supported.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">);</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">data </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">];</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">tagClass </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL </span><span class="s4">||</span>
+     <span class="s2">data</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#12 authSafe content data is not an OCTET STRING.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+  <span class="s2">data </span><span class="s4">= </span><span class="s2">_decodePkcs7Data</span><span class="s4">(</span><span class="s2">data</span><span class="s4">);</span>
+
+  <span class="s6">// check for MAC</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">mac</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">md </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">macKeyBytes </span><span class="s4">= </span><span class="s7">0</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">macAlgorithm </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">macAlgorithm</span><span class="s4">);</span>
+    <span class="s3">switch</span><span class="s4">(</span><span class="s2">macAlgorithm</span><span class="s4">) {</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">:</span>
+      <span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s2">macKeyBytes </span><span class="s4">= </span><span class="s7">20</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha256</span><span class="s4">:</span>
+      <span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha256</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s2">macKeyBytes </span><span class="s4">= </span><span class="s7">32</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha384</span><span class="s4">:</span>
+      <span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha384</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s2">macKeyBytes </span><span class="s4">= </span><span class="s7">48</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha512</span><span class="s4">:</span>
+      <span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha512</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s2">macKeyBytes </span><span class="s4">= </span><span class="s7">64</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">md5</span><span class="s4">:</span>
+      <span class="s2">md </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">md5</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s2">macKeyBytes </span><span class="s4">= </span><span class="s7">16</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">md </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#12 uses unsupported MAC algorithm: ' </span><span class="s4">+ </span><span class="s2">macAlgorithm</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// verify MAC (iterations default to 1)</span>
+    <span class="s3">var </span><span class="s2">macSalt </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">macSalt</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">macIterations </span><span class="s4">= ((</span><span class="s5">'macIterations' </span><span class="s3">in </span><span class="s2">capture</span><span class="s4">) ?</span>
+      <span class="s2">parseInt</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">bytesToHex</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">macIterations</span><span class="s4">), </span><span class="s7">16</span><span class="s4">) : </span><span class="s7">1</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">macKey </span><span class="s4">= </span><span class="s2">p12</span><span class="s4">.</span><span class="s2">generateKey</span><span class="s4">(</span>
+      <span class="s2">password</span><span class="s4">, </span><span class="s2">macSalt</span><span class="s4">, </span><span class="s7">3</span><span class="s4">, </span><span class="s2">macIterations</span><span class="s4">, </span><span class="s2">macKeyBytes</span><span class="s4">, </span><span class="s2">md</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">mac </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">hmac</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+    <span class="s2">mac</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">md</span><span class="s4">, </span><span class="s2">macKey</span><span class="s4">);</span>
+    <span class="s2">mac</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">value</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">macValue </span><span class="s4">= </span><span class="s2">mac</span><span class="s4">.</span><span class="s2">getMac</span><span class="s4">();</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">macValue</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">() !== </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">macDigest</span><span class="s4">) {</span>
+      <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#12 MAC could not be verified. Invalid password?'</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s2">_decodeAuthenticatedSafe</span><span class="s4">(</span><span class="s2">pfx</span><span class="s4">, </span><span class="s2">data</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+  <span class="s3">return </span><span class="s2">pfx</span><span class="s4">;</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decodes PKCS#7 Data. PKCS#7 (RFC 2315) defines &quot;Data&quot; as an OCTET STRING,</span>
+ <span class="s0">* but it is sometimes an OCTET STRING that is composed/constructed of chunks,</span>
+ <span class="s0">* each its own OCTET STRING. This is BER-encoding vs. DER-encoding. This</span>
+ <span class="s0">* function transforms this corner-case into the usual simple,</span>
+ <span class="s0">* non-composed/constructed OCTET STRING.</span>
+ <span class="s0">*</span>
+ <span class="s0">* This function may be moved to ASN.1 at some point to better deal with</span>
+ <span class="s0">* more BER-encoding issues, should they arise.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">data the ASN.1 Data object to transform.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_decodePkcs7Data</span><span class="s4">(</span><span class="s2">data</span><span class="s4">) {</span>
+  <span class="s6">// handle special case of &quot;chunked&quot; data content: an octet string composed</span>
+  <span class="s6">// of other octet strings</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">composed </span><span class="s4">|| </span><span class="s2">data</span><span class="s4">.</span><span class="s2">constructed</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">value </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">();</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">data</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+      <span class="s2">value</span><span class="s4">.</span><span class="s2">putBytes</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s2">i</span><span class="s4">].</span><span class="s2">value</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s2">data</span><span class="s4">.</span><span class="s2">composed </span><span class="s4">= </span><span class="s2">data</span><span class="s4">.</span><span class="s2">constructed </span><span class="s4">= </span><span class="s3">false</span><span class="s4">;</span>
+    <span class="s2">data</span><span class="s4">.</span><span class="s2">value </span><span class="s4">= </span><span class="s2">value</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">();</span>
+  <span class="s4">}</span>
+  <span class="s3">return </span><span class="s2">data</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decode PKCS#12 AuthenticatedSafe (BER encoded) into PFX object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The AuthenticatedSafe is a BER-encoded SEQUENCE OF ContentInfo.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">pfx The PKCS#12 PFX object to fill.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{String} authSafe BER-encoded AuthenticatedSafe.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">strict true to use strict DER decoding, false not to.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{String} password Password to decrypt with (optional).</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_decodeAuthenticatedSafe</span><span class="s4">(</span><span class="s2">pfx</span><span class="s4">, </span><span class="s2">authSafe</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s2">authSafe </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">authSafe</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">);  </span><span class="s6">/* actually it's BER encoded */</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">authSafe</span><span class="s4">.</span><span class="s2">tagClass </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL </span><span class="s4">||</span>
+     <span class="s2">authSafe</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE </span><span class="s4">||</span>
+     <span class="s2">authSafe</span><span class="s4">.</span><span class="s2">constructed </span><span class="s4">!== </span><span class="s3">true</span><span class="s4">) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#12 AuthenticatedSafe expected to be a ' </span><span class="s4">+</span>
+      <span class="s5">'SEQUENCE OF ContentInfo'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">authSafe</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; </span><span class="s2">i</span><span class="s4">++) {</span>
+    <span class="s3">var </span><span class="s2">contentInfo </span><span class="s4">= </span><span class="s2">authSafe</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+    <span class="s6">// validate contentInfo and capture data</span>
+    <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+    <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+    <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">contentInfo</span><span class="s4">, </span><span class="s2">contentInfoValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read ContentInfo.'</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s3">var </span><span class="s2">obj </span><span class="s4">= {</span>
+      <span class="s2">encrypted</span><span class="s4">: </span><span class="s3">false</span>
+    <span class="s4">};</span>
+    <span class="s3">var </span><span class="s2">safeContents </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">data </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">content</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">];</span>
+    <span class="s3">switch</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">)) {</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">:</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">tagClass </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL </span><span class="s4">||</span>
+         <span class="s2">data</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">) {</span>
+        <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'PKCS#12 SafeContents Data is not an OCTET STRING.'</span><span class="s4">);</span>
+      <span class="s4">}</span>
+      <span class="s2">safeContents </span><span class="s4">= </span><span class="s2">_decodePkcs7Data</span><span class="s4">(</span><span class="s2">data</span><span class="s4">).</span><span class="s2">value</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">encryptedData</span><span class="s4">:</span>
+      <span class="s2">safeContents </span><span class="s4">= </span><span class="s2">_decryptSafeContents</span><span class="s4">(</span><span class="s2">data</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+      <span class="s2">obj</span><span class="s4">.</span><span class="s2">encrypted </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+      <span class="s3">break</span><span class="s4">;</span>
+    <span class="s3">default</span><span class="s4">:</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported PKCS#12 contentType.'</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">contentType </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">);</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s2">obj</span><span class="s4">.</span><span class="s2">safeBags </span><span class="s4">= </span><span class="s2">_decodeSafeContents</span><span class="s4">(</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+    <span class="s2">pfx</span><span class="s4">.</span><span class="s2">safeContents</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">);</span>
+  <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decrypt PKCS#7 EncryptedData structure.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">data ASN.1 encoded EncryptedContentInfo object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password The user-provided password.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">The decrypted SafeContents (ASN.1 object).</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_decryptSafeContents</span><span class="s4">(</span><span class="s2">data</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+  <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span>
+    <span class="s2">data</span><span class="s4">, </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pkcs7</span><span class="s4">.</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">encryptedDataValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read EncryptedContentInfo.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">contentType</span><span class="s4">);</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">oid </span><span class="s4">!== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span>
+      <span class="s5">'PKCS#12 EncryptedContentInfo ContentType is not Data.'</span><span class="s4">);</span>
+    <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">oid</span><span class="s4">;</span>
+    <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// get cipher</span>
+  <span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encAlgorithm</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">getCipher</span><span class="s4">(</span><span class="s2">oid</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encParameter</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+
+  <span class="s6">// get encrypted data</span>
+  <span class="s3">var </span><span class="s2">encryptedContentAsn1 </span><span class="s4">= </span><span class="s2">_decodePkcs7Data</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">encryptedContentAsn1</span><span class="s4">);</span>
+  <span class="s3">var </span><span class="s2">encrypted </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">(</span><span class="s2">encryptedContentAsn1</span><span class="s4">.</span><span class="s2">value</span><span class="s4">);</span>
+
+  <span class="s2">cipher</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">encrypted</span><span class="s4">);</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">finish</span><span class="s4">()) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Failed to decrypt PKCS#12 SafeContents.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">cipher</span><span class="s4">.</span><span class="s2">output</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">();</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decode PKCS#12 SafeContents (BER-encoded) into array of Bag objects.</span>
+ <span class="s0">*</span>
+ <span class="s0">* The safeContents is a BER-encoded SEQUENCE OF SafeBag.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{String} safeContents BER-encoded safeContents.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">strict true to use strict DER decoding, false not to.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{String} password Password to decrypt with (optional).</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">{Array} Array of Bag objects.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_decodeSafeContents</span><span class="s4">(</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">, </span><span class="s2">password</span><span class="s4">) {</span>
+  <span class="s6">// if strict and no safe contents, return empty safes</span>
+  <span class="s3">if</span><span class="s4">(!</span><span class="s2">strict </span><span class="s4">&amp;&amp; </span><span class="s2">safeContents</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+    <span class="s3">return </span><span class="s4">[];</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// actually it's BER-encoded</span>
+  <span class="s2">safeContents </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">safeContents</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">);</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">safeContents</span><span class="s4">.</span><span class="s2">tagClass </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL </span><span class="s4">||</span>
+    <span class="s2">safeContents</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE </span><span class="s4">||</span>
+    <span class="s2">safeContents</span><span class="s4">.</span><span class="s2">constructed </span><span class="s4">!== </span><span class="s3">true</span><span class="s4">) {</span>
+    <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span>
+      <span class="s5">'PKCS#12 SafeContents expected to be a SEQUENCE OF SafeBag.'</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">res </span><span class="s4">= [];</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">safeContents</span><span class="s4">.</span><span class="s2">value</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; </span><span class="s2">i</span><span class="s4">++) {</span>
+    <span class="s3">var </span><span class="s2">safeBag </span><span class="s4">= </span><span class="s2">safeContents</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+    <span class="s6">// validate SafeBag and capture data</span>
+    <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+    <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+    <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">safeBag</span><span class="s4">, </span><span class="s2">safeBagValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read SafeBag.'</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">/* Create bag object and push to result array. */</span>
+    <span class="s3">var </span><span class="s2">bag </span><span class="s4">= {</span>
+      <span class="s2">type</span><span class="s4">: </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">bagId</span><span class="s4">),</span>
+      <span class="s2">attributes</span><span class="s4">: </span><span class="s2">_decodeBagAttributes</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">bagAttributes</span><span class="s4">)</span>
+    <span class="s4">};</span>
+    <span class="s2">res</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">bag</span><span class="s4">);</span>
+
+    <span class="s3">var </span><span class="s2">validator</span><span class="s4">, </span><span class="s2">decoder</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">bagAsn1 </span><span class="s4">= </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">bagValue</span><span class="s4">.</span><span class="s2">value</span><span class="s4">[</span><span class="s7">0</span><span class="s4">];</span>
+    <span class="s3">switch</span><span class="s4">(</span><span class="s2">bag</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+      <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">pkcs8ShroudedKeyBag</span><span class="s4">:</span>
+        <span class="s6">/* bagAsn1 has a EncryptedPrivateKeyInfo, which we need to decrypt. 
+           Afterwards we can handle it like a keyBag, 
+           which is a PrivateKeyInfo. */</span>
+        <span class="s2">bagAsn1 </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">decryptPrivateKeyInfo</span><span class="s4">(</span><span class="s2">bagAsn1</span><span class="s4">, </span><span class="s2">password</span><span class="s4">);</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">bagAsn1 </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+          <span class="s3">throw new </span><span class="s2">Error</span><span class="s4">(</span>
+            <span class="s5">'Unable to decrypt PKCS#8 ShroudedKeyBag, wrong password?'</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">/* fall through */</span>
+      <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">keyBag</span><span class="s4">:</span>
+        <span class="s6">/* A PKCS#12 keyBag is a simple PrivateKeyInfo as understood by our 
+           PKI module, hence we don't have to do validation/capturing here, 
+           just pass what we already got. */</span>
+        <span class="s3">try </span><span class="s4">{</span>
+          <span class="s2">bag</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">privateKeyFromAsn1</span><span class="s4">(</span><span class="s2">bagAsn1</span><span class="s4">);</span>
+        <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+          <span class="s6">// ignore unknown key type, pass asn1 value</span>
+          <span class="s2">bag</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+          <span class="s2">bag</span><span class="s4">.</span><span class="s2">asn1 </span><span class="s4">= </span><span class="s2">bagAsn1</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s3">continue</span><span class="s4">;  </span><span class="s6">/* Nothing more to do. */</span>
+
+      <span class="s3">case </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">certBag</span><span class="s4">:</span>
+        <span class="s6">/* A PKCS#12 certBag can wrap both X.509 and sdsi certificates. 
+           Therefore put the SafeBag content through another validator to 
+           capture the fields.  Afterwards check &amp; store the results. */</span>
+        <span class="s2">validator </span><span class="s4">= </span><span class="s2">certBagValidator</span><span class="s4">;</span>
+        <span class="s2">decoder </span><span class="s4">= </span><span class="s3">function</span><span class="s4">() {</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">certId</span><span class="s4">) !== </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">x509Certificate</span><span class="s4">) {</span>
+            <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span>
+              <span class="s5">'Unsupported certificate type, only X.509 supported.'</span><span class="s4">);</span>
+            <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">certId</span><span class="s4">);</span>
+            <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+          <span class="s4">}</span>
+
+          <span class="s6">// true=produce cert hash</span>
+          <span class="s3">var </span><span class="s2">certAsn1 </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">fromDer</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">cert</span><span class="s4">, </span><span class="s2">strict</span><span class="s4">);</span>
+          <span class="s3">try </span><span class="s4">{</span>
+            <span class="s2">bag</span><span class="s4">.</span><span class="s2">cert </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateFromAsn1</span><span class="s4">(</span><span class="s2">certAsn1</span><span class="s4">, </span><span class="s3">true</span><span class="s4">);</span>
+          <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+            <span class="s6">// ignore unknown cert type, pass asn1 value</span>
+            <span class="s2">bag</span><span class="s4">.</span><span class="s2">cert </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+            <span class="s2">bag</span><span class="s4">.</span><span class="s2">asn1 </span><span class="s4">= </span><span class="s2">certAsn1</span><span class="s4">;</span>
+          <span class="s4">}</span>
+        <span class="s4">};</span>
+        <span class="s3">break</span><span class="s4">;</span>
+
+      <span class="s3">default</span><span class="s4">:</span>
+        <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Unsupported PKCS#12 SafeBag type.'</span><span class="s4">);</span>
+        <span class="s2">error</span><span class="s4">.</span><span class="s2">oid </span><span class="s4">= </span><span class="s2">bag</span><span class="s4">.</span><span class="s2">type</span><span class="s4">;</span>
+        <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">/* Validate SafeBag value (i.e. CertBag, etc.) and capture data if needed. */</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">validator </span><span class="s4">!== </span><span class="s2">undefined </span><span class="s4">&amp;&amp;</span>
+       <span class="s4">!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">bagAsn1</span><span class="s4">, </span><span class="s2">validator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+      <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#12 ' </span><span class="s4">+ </span><span class="s2">validator</span><span class="s4">.</span><span class="s2">name</span><span class="s4">);</span>
+      <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+      <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">/* Call decoder function from above to store the results. */</span>
+    <span class="s2">decoder</span><span class="s4">();</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">res</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Decode PKCS#12 SET OF PKCS12Attribute into JavaScript object.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">attributes SET OF PKCS12Attribute (ASN.1 object).</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the decoded attributes.</span>
+ <span class="s0">*/</span>
+<span class="s3">function </span><span class="s2">_decodeBagAttributes</span><span class="s4">(</span><span class="s2">attributes</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">decodedAttrs </span><span class="s4">= {};</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">attributes </span><span class="s4">!== </span><span class="s2">undefined</span><span class="s4">) {</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">attributes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">capture </span><span class="s4">= {};</span>
+      <span class="s3">var </span><span class="s2">errors </span><span class="s4">= [];</span>
+      <span class="s3">if</span><span class="s4">(!</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">validate</span><span class="s4">(</span><span class="s2">attributes</span><span class="s4">[</span><span class="s2">i</span><span class="s4">], </span><span class="s2">attributeValidator</span><span class="s4">, </span><span class="s2">capture</span><span class="s4">, </span><span class="s2">errors</span><span class="s4">)) {</span>
+        <span class="s3">var </span><span class="s2">error </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s5">'Cannot read PKCS#12 BagAttribute.'</span><span class="s4">);</span>
+        <span class="s2">error</span><span class="s4">.</span><span class="s2">errors </span><span class="s4">= </span><span class="s2">errors</span><span class="s4">;</span>
+        <span class="s3">throw </span><span class="s2">error</span><span class="s4">;</span>
+      <span class="s4">}</span>
+
+      <span class="s3">var </span><span class="s2">oid </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">derToOid</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">oid</span><span class="s4">);</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">] === </span><span class="s2">undefined</span><span class="s4">) {</span>
+        <span class="s6">// unsupported attribute type, ignore.</span>
+        <span class="s3">continue</span><span class="s4">;</span>
+      <span class="s4">}</span>
+
+      <span class="s2">decodedAttrs</span><span class="s4">[</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">]] = [];</span>
+      <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">j </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">j </span><span class="s4">&lt; </span><span class="s2">capture</span><span class="s4">.</span><span class="s2">values</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">j</span><span class="s4">) {</span>
+        <span class="s2">decodedAttrs</span><span class="s4">[</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">[</span><span class="s2">oid</span><span class="s4">]].</span><span class="s2">push</span><span class="s4">(</span><span class="s2">capture</span><span class="s4">.</span><span class="s2">values</span><span class="s4">[</span><span class="s2">j</span><span class="s4">].</span><span class="s2">value</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s3">return </span><span class="s2">decodedAttrs</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Wraps a private key and certificate in a PKCS#12 PFX wrapper. If a</span>
+ <span class="s0">* password is provided then the private key will be encrypted.</span>
+ <span class="s0">*</span>
+ <span class="s0">* An entire certificate chain may also be included. To do this, pass</span>
+ <span class="s0">* an array for the &quot;cert&quot; parameter where the first certificate is</span>
+ <span class="s0">* the one that is paired with the private key and each subsequent one</span>
+ <span class="s0">* verifies the previous one. The certificates may be in PEM format or</span>
+ <span class="s0">* have been already parsed by Forge.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@todo </span><span class="s0">implement password-based-encryption for the whole package</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">key the private key.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">cert the certificate (may be an array of certificates in order</span>
+ <span class="s0">*          to specify a certificate chain).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to use, null for none.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">options:</span>
+ <span class="s0">*          algorithm the encryption algorithm to use</span>
+ <span class="s0">*            ('aes128', 'aes192', 'aes256', '3des'), defaults to 'aes128'.</span>
+ <span class="s0">*          count the iteration count to use.</span>
+ <span class="s0">*          saltSize the salt size to use.</span>
+ <span class="s0">*          useMac true to include a MAC, false not to, defaults to true.</span>
+ <span class="s0">*          localKeyId the local key ID to use, in hex.</span>
+ <span class="s0">*          friendlyName the friendly name to use.</span>
+ <span class="s0">*          generateLocalKeyId true to generate a random local key ID,</span>
+ <span class="s0">*            false not to, defaults to true.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">the PKCS#12 PFX ASN.1 object.</span>
+ <span class="s0">*/</span>
+<span class="s2">p12</span><span class="s4">.</span><span class="s2">toPkcs12Asn1 </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">key</span><span class="s4">, </span><span class="s2">cert</span><span class="s4">, </span><span class="s2">password</span><span class="s4">, </span><span class="s2">options</span><span class="s4">) {</span>
+  <span class="s6">// set default options</span>
+  <span class="s2">options </span><span class="s4">= </span><span class="s2">options </span><span class="s4">|| {};</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">saltSize </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">saltSize </span><span class="s4">|| </span><span class="s7">8</span><span class="s4">;</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">count </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">count </span><span class="s4">|| </span><span class="s7">2048</span><span class="s4">;</span>
+  <span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">algorithm </span><span class="s4">|| </span><span class="s2">options</span><span class="s4">.</span><span class="s2">encAlgorithm </span><span class="s4">|| </span><span class="s5">'aes128'</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(!(</span><span class="s5">'useMac' </span><span class="s3">in </span><span class="s2">options</span><span class="s4">)) {</span>
+    <span class="s2">options</span><span class="s4">.</span><span class="s2">useMac </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+  <span class="s4">}</span>
+  <span class="s3">if</span><span class="s4">(!(</span><span class="s5">'localKeyId' </span><span class="s3">in </span><span class="s2">options</span><span class="s4">)) {</span>
+    <span class="s2">options</span><span class="s4">.</span><span class="s2">localKeyId </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s4">}</span>
+  <span class="s3">if</span><span class="s4">(!(</span><span class="s5">'generateLocalKeyId' </span><span class="s3">in </span><span class="s2">options</span><span class="s4">)) {</span>
+    <span class="s2">options</span><span class="s4">.</span><span class="s2">generateLocalKeyId </span><span class="s4">= </span><span class="s3">true</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">localKeyId </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">localKeyId</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">bagAttrs</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">localKeyId </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s2">localKeyId </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">hexToBytes</span><span class="s4">(</span><span class="s2">localKeyId</span><span class="s4">);</span>
+  <span class="s4">} </span><span class="s3">else if</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">generateLocalKeyId</span><span class="s4">) {</span>
+    <span class="s6">// use SHA-1 of paired cert, if available</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">) {</span>
+      <span class="s3">var </span><span class="s2">pairedCert </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">) ? </span><span class="s2">cert</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] : </span><span class="s2">cert</span><span class="s4">;</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">pairedCert </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+        <span class="s2">pairedCert </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateFromPem</span><span class="s4">(</span><span class="s2">pairedCert</span><span class="s4">);</span>
+      <span class="s4">}</span>
+      <span class="s3">var </span><span class="s2">sha1 </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+      <span class="s2">sha1</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateToAsn1</span><span class="s4">(</span><span class="s2">pairedCert</span><span class="s4">)).</span><span class="s2">getBytes</span><span class="s4">());</span>
+      <span class="s2">localKeyId </span><span class="s4">= </span><span class="s2">sha1</span><span class="s4">.</span><span class="s2">digest</span><span class="s4">().</span><span class="s2">getBytes</span><span class="s4">();</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// FIXME: consider using SHA-1 of public key (which can be generated</span>
+      <span class="s6">// from private key components), see: cert.generateSubjectKeyIdentifier</span>
+      <span class="s6">// generate random bytes</span>
+      <span class="s2">localKeyId </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s7">20</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">attrs </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">localKeyId </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s2">attrs</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+      <span class="s6">// localKeyID</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// attrId</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">localKeyId</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// attrValues</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">localKeyId</span><span class="s4">)</span>
+        <span class="s4">])</span>
+      <span class="s4">]));</span>
+  <span class="s4">}</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s5">'friendlyName' </span><span class="s3">in </span><span class="s2">options</span><span class="s4">) {</span>
+    <span class="s2">attrs</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span>
+      <span class="s6">// friendlyName</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// attrId</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">friendlyName</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// attrValues</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">BMPSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">options</span><span class="s4">.</span><span class="s2">friendlyName</span><span class="s4">)</span>
+        <span class="s4">])</span>
+      <span class="s4">]));</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">attrs</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+    <span class="s2">bagAttrs </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SET</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, </span><span class="s2">attrs</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// collect contents for AuthenticatedSafe</span>
+  <span class="s3">var </span><span class="s2">contents </span><span class="s4">= [];</span>
+
+  <span class="s6">// create safe bag(s) for certificate chain</span>
+  <span class="s3">var </span><span class="s2">chain </span><span class="s4">= [];</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">cert </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">)) {</span>
+      <span class="s2">chain </span><span class="s4">= </span><span class="s2">cert</span><span class="s4">;</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s2">chain </span><span class="s4">= [</span><span class="s2">cert</span><span class="s4">];</span>
+    <span class="s4">}</span>
+  <span class="s4">}</span>
+
+  <span class="s3">var </span><span class="s2">certSafeBags </span><span class="s4">= [];</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">chain</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s6">// convert cert from PEM as necessary</span>
+    <span class="s2">cert </span><span class="s4">= </span><span class="s2">chain</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s3">typeof </span><span class="s2">cert </span><span class="s4">=== </span><span class="s5">'string'</span><span class="s4">) {</span>
+      <span class="s2">cert </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateFromPem</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// SafeBag</span>
+    <span class="s3">var </span><span class="s2">certBagAttrs </span><span class="s4">= (</span><span class="s2">i </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) ? </span><span class="s2">bagAttrs </span><span class="s4">: </span><span class="s2">undefined</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">certAsn1 </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">certificateToAsn1</span><span class="s4">(</span><span class="s2">cert</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">certSafeBag </span><span class="s4">=</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// bagId</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">certBag</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// bagValue</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s6">// CertBag</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+            <span class="s6">// certId</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+              <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">x509Certificate</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+            <span class="s6">// certValue (x509Certificate)</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+              <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+                <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+                <span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">certAsn1</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">())</span>
+            <span class="s4">])])]),</span>
+        <span class="s6">// bagAttributes (OPTIONAL)</span>
+        <span class="s2">certBagAttrs</span>
+      <span class="s4">]);</span>
+    <span class="s2">certSafeBags</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">certSafeBag</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">certSafeBags</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+    <span class="s6">// SafeContents</span>
+    <span class="s3">var </span><span class="s2">certSafeContents </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, </span><span class="s2">certSafeBags</span><span class="s4">);</span>
+
+    <span class="s6">// ContentInfo</span>
+    <span class="s3">var </span><span class="s2">certCI </span><span class="s4">=</span>
+      <span class="s6">// PKCS#7 ContentInfo</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// contentType</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s6">// OID for the content type is 'data'</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// content</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">certSafeContents</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">())</span>
+        <span class="s4">])</span>
+      <span class="s4">]);</span>
+    <span class="s2">contents</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">certCI</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// create safe contents for private key</span>
+  <span class="s3">var </span><span class="s2">keyBag </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">key </span><span class="s4">!== </span><span class="s3">null</span><span class="s4">) {</span>
+    <span class="s6">// SafeBag</span>
+    <span class="s3">var </span><span class="s2">pkAsn1 </span><span class="s4">= </span><span class="s2">pki</span><span class="s4">.</span><span class="s2">wrapRsaPrivateKey</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">privateKeyToAsn1</span><span class="s4">(</span><span class="s2">key</span><span class="s4">));</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">password </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+      <span class="s6">// no encryption</span>
+      <span class="s2">keyBag </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// bagId</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">keyBag</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// bagValue</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s6">// PrivateKeyInfo</span>
+          <span class="s2">pkAsn1</span>
+        <span class="s4">]),</span>
+        <span class="s6">// bagAttributes (OPTIONAL)</span>
+        <span class="s2">bagAttrs</span>
+      <span class="s4">]);</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// encrypted PrivateKeyInfo</span>
+      <span class="s2">keyBag </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// bagId</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">pkcs8ShroudedKeyBag</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// bagValue</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s6">// EncryptedPrivateKeyInfo</span>
+          <span class="s2">pki</span><span class="s4">.</span><span class="s2">encryptPrivateKeyInfo</span><span class="s4">(</span><span class="s2">pkAsn1</span><span class="s4">, </span><span class="s2">password</span><span class="s4">, </span><span class="s2">options</span><span class="s4">)</span>
+        <span class="s4">]),</span>
+        <span class="s6">// bagAttributes (OPTIONAL)</span>
+        <span class="s2">bagAttrs</span>
+      <span class="s4">]);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// SafeContents</span>
+    <span class="s3">var </span><span class="s2">keySafeContents </span><span class="s4">=</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span><span class="s2">keyBag</span><span class="s4">]);</span>
+
+    <span class="s6">// ContentInfo</span>
+    <span class="s3">var </span><span class="s2">keyCI </span><span class="s4">=</span>
+      <span class="s6">// PKCS#7 ContentInfo</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// contentType</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s6">// OID for the content type is 'data'</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+        <span class="s6">// content</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">keySafeContents</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">())</span>
+        <span class="s4">])</span>
+      <span class="s4">]);</span>
+    <span class="s2">contents</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">keyCI</span><span class="s4">);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// create AuthenticatedSafe by stringing together the contents</span>
+  <span class="s3">var </span><span class="s2">safe </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, </span><span class="s2">contents</span><span class="s4">);</span>
+
+  <span class="s3">var </span><span class="s2">macData</span><span class="s4">;</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">useMac</span><span class="s4">) {</span>
+    <span class="s6">// MacData</span>
+    <span class="s3">var </span><span class="s2">sha1 </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+    <span class="s3">var </span><span class="s2">macSalt </span><span class="s4">= </span><span class="s3">new </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">ByteBuffer</span><span class="s4">(</span>
+      <span class="s2">forge</span><span class="s4">.</span><span class="s2">random</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">saltSize</span><span class="s4">));</span>
+    <span class="s3">var </span><span class="s2">count </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">count</span><span class="s4">;</span>
+    <span class="s6">// 160-bit key</span>
+    <span class="s3">var </span><span class="s2">key </span><span class="s4">= </span><span class="s2">p12</span><span class="s4">.</span><span class="s2">generateKey</span><span class="s4">(</span><span class="s2">password</span><span class="s4">, </span><span class="s2">macSalt</span><span class="s4">, </span><span class="s7">3</span><span class="s4">, </span><span class="s2">count</span><span class="s4">, </span><span class="s7">20</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">mac </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">hmac</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+    <span class="s2">mac</span><span class="s4">.</span><span class="s2">start</span><span class="s4">(</span><span class="s2">sha1</span><span class="s4">, </span><span class="s2">key</span><span class="s4">);</span>
+    <span class="s2">mac</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">safe</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">());</span>
+    <span class="s3">var </span><span class="s2">macValue </span><span class="s4">= </span><span class="s2">mac</span><span class="s4">.</span><span class="s2">getMac</span><span class="s4">();</span>
+    <span class="s2">macData </span><span class="s4">= </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// mac DigestInfo</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s6">// digestAlgorithm</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+          <span class="s6">// algorithm = SHA-1</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+            <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">sha1</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+          <span class="s6">// parameters = Null</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">NULL</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s5">''</span><span class="s4">)</span>
+        <span class="s4">]),</span>
+        <span class="s6">// digest</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">,</span>
+          <span class="s3">false</span><span class="s4">, </span><span class="s2">macValue</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">())</span>
+      <span class="s4">]),</span>
+      <span class="s6">// macSalt OCTET STRING</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">, </span><span class="s2">macSalt</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">()),</span>
+      <span class="s6">// iterations INTEGER (XXX: Only support count &lt; 65536)</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">integerToDer</span><span class="s4">(</span><span class="s2">count</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()</span>
+      <span class="s4">)</span>
+    <span class="s4">]);</span>
+  <span class="s4">}</span>
+
+  <span class="s6">// PFX</span>
+  <span class="s3">return </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+    <span class="s6">// version (3)</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">INTEGER</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">integerToDer</span><span class="s4">(</span><span class="s7">3</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+    <span class="s6">// PKCS#7 ContentInfo</span>
+    <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">SEQUENCE</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+      <span class="s6">// contentType</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OID</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+        <span class="s6">// OID for the content type is 'data'</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">oidToDer</span><span class="s4">(</span><span class="s2">pki</span><span class="s4">.</span><span class="s2">oids</span><span class="s4">.</span><span class="s2">data</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">()),</span>
+      <span class="s6">// content</span>
+      <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">CONTEXT_SPECIFIC</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s3">true</span><span class="s4">, [</span>
+        <span class="s2">asn1</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">Class</span><span class="s4">.</span><span class="s2">UNIVERSAL</span><span class="s4">, </span><span class="s2">asn1</span><span class="s4">.</span><span class="s2">Type</span><span class="s4">.</span><span class="s2">OCTETSTRING</span><span class="s4">, </span><span class="s3">false</span><span class="s4">,</span>
+          <span class="s2">asn1</span><span class="s4">.</span><span class="s2">toDer</span><span class="s4">(</span><span class="s2">safe</span><span class="s4">).</span><span class="s2">getBytes</span><span class="s4">())</span>
+      <span class="s4">])</span>
+    <span class="s4">]),</span>
+    <span class="s2">macData</span>
+  <span class="s4">]);</span>
+<span class="s4">};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Derives a PKCS#12 key.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">password the password to derive the key material from, null or</span>
+ <span class="s0">*          undefined for none.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">salt the salt, as a ByteBuffer, to use.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">id the PKCS#12 ID byte (1 = key material, 2 = IV, 3 = MAC).</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">iter the iteration count.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">n the number of bytes to derive from the password.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">md the message digest to use, defaults to SHA-1.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@return </span><span class="s0">a ByteBuffer with the bytes derived from the password.</span>
+ <span class="s0">*/</span>
+<span class="s2">p12</span><span class="s4">.</span><span class="s2">generateKey </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">pbe</span><span class="s4">.</span><span class="s2">generatePkcs12Key</span><span class="s4">;</span>
+</pre>
+</body>
+</html>

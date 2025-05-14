@@ -1,0 +1,376 @@
+<html>
+<head>
+<title>InnerGraph.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+InnerGraph.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Sergey Melyukov @smelukov 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">UsageState </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ExportsInfo&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Node} AnyNode */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;)} Dependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).GetConditionFn} GetConditionFn */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraphConnection&quot;)} ModuleGraphConnection */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraphConnection&quot;).ConnectionState} ConnectionState */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Parser&quot;).ParserState} ParserState */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;)} JavascriptParser */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;TopLevelSymbol | null, Set&lt;string | TopLevelSymbol&gt; | true | undefined&gt;} InnerGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(value: boolean | Set&lt;string&gt; | undefined) =&gt; void} UsageCallback */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} StateObject</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{InnerGraph} innerGraph</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{TopLevelSymbol=} currentTopLevelSymbol</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Map&lt;TopLevelSymbol, Set&lt;UsageCallback&gt;&gt;} usageCallbackMap</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{false|StateObject} State */</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;ParserState, State&gt;} */</span>
+<span class="s4">const </span><span class="s1">parserStateMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+<span class="s4">const </span><span class="s1">topLevelSymbolTag </span><span class="s3">= </span><span class="s1">Symbol</span><span class="s3">(</span><span class="s2">&quot;top level symbol&quot;</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} parserState parser state</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{State | undefined} state</span>
+ <span class="s5">*/</span>
+<span class="s4">function </span><span class="s1">getState</span><span class="s3">(</span><span class="s1">parserState</span><span class="s3">) {</span>
+	<span class="s4">return </span><span class="s1">parserStateMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">parserState</span><span class="s3">);</span>
+<span class="s3">}</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} parserState parser state</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">bailout </span><span class="s3">= </span><span class="s1">parserState </span><span class="s3">=&gt; {</span>
+	<span class="s1">parserStateMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">parserState</span><span class="s3">, </span><span class="s4">false</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} parserState parser state</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">enable </span><span class="s3">= </span><span class="s1">parserState </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">state </span><span class="s3">= </span><span class="s1">parserStateMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">parserState</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">state </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+		<span class="s4">return</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s1">parserStateMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">parserState</span><span class="s3">, {</span>
+		<span class="s1">innerGraph</span><span class="s3">: </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">(),</span>
+		<span class="s1">currentTopLevelSymbol</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+		<span class="s1">usageCallbackMap</span><span class="s3">: </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">()</span>
+	<span class="s3">});</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} parserState parser state</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, when enabled</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">isEnabled </span><span class="s3">= </span><span class="s1">parserState </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">state </span><span class="s3">= </span><span class="s1">parserStateMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">parserState</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">Boolean</span><span class="s3">(</span><span class="s1">state</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} state parser state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{TopLevelSymbol | null} symbol the symbol, or null for all symbols</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | TopLevelSymbol | true} usage usage data</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">addUsage </span><span class="s3">= (</span><span class="s1">state</span><span class="s3">, </span><span class="s1">symbol</span><span class="s3">, </span><span class="s1">usage</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">innerGraphState </span><span class="s3">= </span><span class="s1">getState</span><span class="s3">(</span><span class="s1">state</span><span class="s3">);</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">innerGraphState</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">innerGraph </span><span class="s3">} = </span><span class="s1">innerGraphState</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">info </span><span class="s3">= </span><span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">symbol</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">usage </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+			<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">symbol</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">info </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">symbol</span><span class="s3">, </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">usage</span><span class="s3">]));</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">info </span><span class="s3">!== </span><span class="s4">true</span><span class="s3">) {</span>
+			<span class="s1">info</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">usage</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name name of variable</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | TopLevelSymbol | true} usage usage data</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">addVariableUsage </span><span class="s3">= (</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">, </span><span class="s1">usage</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">symbol </span><span class="s3">=</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */ </span><span class="s3">(</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">getTagData</span><span class="s3">(</span><span class="s1">name</span><span class="s3">, </span><span class="s1">topLevelSymbolTag</span><span class="s3">)</span>
+		<span class="s3">) || </span><span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">tagTopLevelSymbol</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">symbol</span><span class="s3">) {</span>
+		<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">addUsage</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">, </span><span class="s1">symbol</span><span class="s3">, </span><span class="s1">usage</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} state parser state</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">inferDependencyUsage </span><span class="s3">= </span><span class="s1">state </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">innerGraphState </span><span class="s3">= </span><span class="s1">getState</span><span class="s3">(</span><span class="s1">state</span><span class="s3">);</span>
+
+	<span class="s4">if </span><span class="s3">(!</span><span class="s1">innerGraphState</span><span class="s3">) {</span>
+		<span class="s4">return</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s4">const </span><span class="s3">{ </span><span class="s1">innerGraph</span><span class="s3">, </span><span class="s1">usageCallbackMap </span><span class="s3">} = </span><span class="s1">innerGraphState</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">processed </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s0">// flatten graph to terminal nodes (string, undefined or true)</span>
+	<span class="s4">const </span><span class="s1">nonTerminal </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">());</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">nonTerminal</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">key of nonTerminal</span><span class="s3">) {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string|TopLevelSymbol&gt; | true} */</span>
+			<span class="s4">let </span><span class="s1">newSet </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+			<span class="s4">let </span><span class="s1">isTerminal </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">value </span><span class="s3">= </span><span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s4">let </span><span class="s1">alreadyProcessed </span><span class="s3">= </span><span class="s1">processed</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">alreadyProcessed </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">alreadyProcessed </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s1">processed</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">alreadyProcessed</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">value </span><span class="s3">!== </span><span class="s4">true </span><span class="s3">&amp;&amp; </span><span class="s1">value </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of value</span><span class="s3">) {</span>
+					<span class="s1">alreadyProcessed</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of value</span><span class="s3">) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">item </span><span class="s3">=== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+						<span class="s1">newSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+					<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+						<span class="s4">const </span><span class="s1">itemValue </span><span class="s3">= </span><span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">itemValue </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+							<span class="s1">newSet </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+							<span class="s4">break</span><span class="s3">;</span>
+						<span class="s3">}</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">itemValue </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">i of itemValue</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">i </span><span class="s3">=== </span><span class="s1">key</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">alreadyProcessed</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">i</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s1">newSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">i</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">i </span><span class="s3">!== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+									<span class="s1">isTerminal </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">newSet </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+					<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">newSet</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+					<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">undefined</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">newSet</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">isTerminal</span><span class="s3">) {</span>
+				<span class="s1">nonTerminal</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+
+				<span class="s0">// For the global key, merge with all other keys</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">key </span><span class="s3">=== </span><span class="s4">null</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">globalValue </span><span class="s3">= </span><span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">globalValue</span><span class="s3">) {</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">key</span><span class="s3">, </span><span class="s1">value</span><span class="s3">] </span><span class="s1">of innerGraph</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">key </span><span class="s3">!== </span><span class="s4">null </span><span class="s3">&amp;&amp; </span><span class="s1">value </span><span class="s3">!== </span><span class="s4">true</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">globalValue </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+									<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s4">true</span><span class="s3">);</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s4">const </span><span class="s1">newSet </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">value</span><span class="s3">);</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of globalValue</span><span class="s3">) {</span>
+										<span class="s1">newSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s1">newSet</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Dependency, true | Set&lt;string&gt;&gt;} */</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">symbol</span><span class="s3">, </span><span class="s1">callbacks</span><span class="s3">] </span><span class="s1">of usageCallbackMap</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">usage </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{true | Set&lt;string&gt; | undefined} */ </span><span class="s3">(</span>
+			<span class="s1">innerGraph</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">symbol</span><span class="s3">)</span>
+		<span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">callback of callbacks</span><span class="s3">) {</span>
+			<span class="s1">callback</span><span class="s3">(</span><span class="s1">usage </span><span class="s3">=== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s4">false </span><span class="s3">: </span><span class="s1">usage</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} state parser state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{UsageCallback} onUsageCallback on usage callback</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">onUsage </span><span class="s3">= (</span><span class="s1">state</span><span class="s3">, </span><span class="s1">onUsageCallback</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">innerGraphState </span><span class="s3">= </span><span class="s1">getState</span><span class="s3">(</span><span class="s1">state</span><span class="s3">);</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">innerGraphState</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">usageCallbackMap</span><span class="s3">, </span><span class="s1">currentTopLevelSymbol </span><span class="s3">} = </span><span class="s1">innerGraphState</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">currentTopLevelSymbol</span><span class="s3">) {</span>
+			<span class="s4">let </span><span class="s1">callbacks </span><span class="s3">= </span><span class="s1">usageCallbackMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">currentTopLevelSymbol</span><span class="s3">);</span>
+
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">callbacks </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">callbacks </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s1">usageCallbackMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">currentTopLevelSymbol</span><span class="s3">, </span><span class="s1">callbacks</span><span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s1">callbacks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">onUsageCallback</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">onUsageCallback</span><span class="s3">(</span><span class="s4">true</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s1">onUsageCallback</span><span class="s3">(</span><span class="s1">undefined</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} state parser state</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{TopLevelSymbol | undefined} symbol the symbol</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">setTopLevelSymbol </span><span class="s3">= (</span><span class="s1">state</span><span class="s3">, </span><span class="s1">symbol</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">innerGraphState </span><span class="s3">= </span><span class="s1">getState</span><span class="s3">(</span><span class="s1">state</span><span class="s3">);</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">innerGraphState</span><span class="s3">) {</span>
+		<span class="s1">innerGraphState</span><span class="s3">.</span><span class="s1">currentTopLevelSymbol </span><span class="s3">= </span><span class="s1">symbol</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ParserState} state parser state</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{TopLevelSymbol|void} usage data</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">getTopLevelSymbol </span><span class="s3">= </span><span class="s1">state </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">innerGraphState </span><span class="s3">= </span><span class="s1">getState</span><span class="s3">(</span><span class="s1">state</span><span class="s3">);</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">innerGraphState</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">innerGraphState</span><span class="s3">.</span><span class="s1">currentTopLevelSymbol</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser parser</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name name of variable</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{TopLevelSymbol | undefined} symbol</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">tagTopLevelSymbol </span><span class="s3">= (</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">name</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">innerGraphState </span><span class="s3">= </span><span class="s1">getState</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(!</span><span class="s1">innerGraphState</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+
+	<span class="s1">parser</span><span class="s3">.</span><span class="s1">defineVariable</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+
+	<span class="s4">const </span><span class="s1">existingTag </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TopLevelSymbol} */ </span><span class="s3">(</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">getTagData</span><span class="s3">(</span><span class="s1">name</span><span class="s3">, </span><span class="s1">topLevelSymbolTag</span><span class="s3">)</span>
+	<span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">existingTag</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">existingTag</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s4">new </span><span class="s1">TopLevelSymbol</span><span class="s3">(</span><span class="s1">name</span><span class="s3">);</span>
+	<span class="s1">parser</span><span class="s3">.</span><span class="s1">tagVariable</span><span class="s3">(</span><span class="s1">name</span><span class="s3">, </span><span class="s1">topLevelSymbolTag</span><span class="s3">, </span><span class="s1">fn</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">fn</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;string&gt; | boolean} usedByExports usedByExports info</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph moduleGraph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime runtime</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} false, when unused. Otherwise true</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">isDependencyUsedByExports </span><span class="s3">= (</span>
+	<span class="s1">dependency</span><span class="s3">,</span>
+	<span class="s1">usedByExports</span><span class="s3">,</span>
+	<span class="s1">moduleGraph</span><span class="s3">,</span>
+	<span class="s1">runtime</span>
+<span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">usedByExports </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) </span><span class="s4">return false</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">usedByExports </span><span class="s3">!== </span><span class="s4">true </span><span class="s3">&amp;&amp; </span><span class="s1">usedByExports </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">selfModule </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */</span>
+			<span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getParentModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">));</span>
+		<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">selfModule</span><span class="s3">);</span>
+		<span class="s4">let </span><span class="s1">used </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">exportName of usedByExports</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getUsed</span><span class="s3">(</span><span class="s1">exportName</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) !== </span><span class="s1">UsageState</span><span class="s3">.</span><span class="s1">Unused</span><span class="s3">)</span>
+				<span class="s1">used </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">used</span><span class="s3">) </span><span class="s4">return false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">return true</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;string&gt; | boolean | undefined} usedByExports usedByExports info</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph moduleGraph</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{null | false | GetConditionFn} function to determine if the connection is active</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">getDependencyUsedByExportsCondition </span><span class="s3">= (</span>
+	<span class="s1">dependency</span><span class="s3">,</span>
+	<span class="s1">usedByExports</span><span class="s3">,</span>
+	<span class="s1">moduleGraph</span>
+<span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">usedByExports </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) </span><span class="s4">return false</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">usedByExports </span><span class="s3">!== </span><span class="s4">true </span><span class="s3">&amp;&amp; </span><span class="s1">usedByExports </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">selfModule </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */</span>
+			<span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getParentModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">));</span>
+		<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">selfModule</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s3">(</span><span class="s1">connections</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) =&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">exportName of usedByExports</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getUsed</span><span class="s3">(</span><span class="s1">exportName</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) !== </span><span class="s1">UsageState</span><span class="s3">.</span><span class="s1">Unused</span><span class="s3">)</span>
+					<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">return false</span><span class="s3">;</span>
+		<span class="s3">};</span>
+	<span class="s3">}</span>
+	<span class="s4">return null</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">TopLevelSymbol </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name name of the variable</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">name</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s1">name</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">TopLevelSymbol </span><span class="s3">= </span><span class="s1">TopLevelSymbol</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">topLevelSymbolTag </span><span class="s3">= </span><span class="s1">topLevelSymbolTag</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

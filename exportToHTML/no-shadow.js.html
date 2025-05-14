@@ -1,0 +1,361 @@
+<html>
+<head>
+<title>no-shadow.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-shadow.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to flag on declaring variables already declared in the outer scope</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Ilya Volodin</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">FUNC_EXPR_NODE_TYPES </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">([</span><span class="s3">&quot;ArrowFunctionExpression&quot;</span><span class="s4">, </span><span class="s3">&quot;FunctionExpression&quot;</span><span class="s4">]);</span>
+<span class="s6">const </span><span class="s2">CALL_EXPR_NODE_TYPE </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">([</span><span class="s3">&quot;CallExpression&quot;</span><span class="s4">]);</span>
+<span class="s6">const </span><span class="s2">FOR_IN_OF_TYPE </span><span class="s4">= </span><span class="s7">/^For(?:In|Of)Statement$/u</span><span class="s4">;</span>
+<span class="s6">const </span><span class="s2">SENTINEL_TYPE </span><span class="s4">= </span><span class="s7">/^(?:(?:Function|Class)(?:Declaration|Expression)|ArrowFunctionExpression|CatchClause|ImportDeclaration|ExportNamedDeclaration)$/u</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow variable declarations from shadowing variables declared in the outer scope&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-shadow&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [</span>
+            <span class="s4">{</span>
+                <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+                <span class="s2">properties</span><span class="s4">: {</span>
+                    <span class="s2">builtinGlobals</span><span class="s4">: { </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span><span class="s4">, </span><span class="s6">default</span><span class="s4">: </span><span class="s6">false </span><span class="s4">},</span>
+                    <span class="s2">hoist</span><span class="s4">: { </span><span class="s6">enum</span><span class="s4">: [</span><span class="s3">&quot;all&quot;</span><span class="s4">, </span><span class="s3">&quot;functions&quot;</span><span class="s4">, </span><span class="s3">&quot;never&quot;</span><span class="s4">], </span><span class="s6">default</span><span class="s4">: </span><span class="s3">&quot;functions&quot; </span><span class="s4">},</span>
+                    <span class="s2">allow</span><span class="s4">: {</span>
+                        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;array&quot;</span><span class="s4">,</span>
+                        <span class="s2">items</span><span class="s4">: {</span>
+                            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;string&quot;</span>
+                        <span class="s4">}</span>
+                    <span class="s4">},</span>
+                    <span class="s2">ignoreOnInitialization</span><span class="s4">: { </span><span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span><span class="s4">, </span><span class="s6">default</span><span class="s4">: </span><span class="s6">false </span><span class="s4">}</span>
+                <span class="s4">},</span>
+                <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s6">false</span>
+            <span class="s4">}</span>
+        <span class="s4">],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">noShadow</span><span class="s4">: </span><span class="s3">&quot;'{{name}}' is already declared in the upper scope on line {{shadowedLine}} column {{shadowedColumn}}.&quot;</span><span class="s4">,</span>
+            <span class="s2">noShadowGlobal</span><span class="s4">: </span><span class="s3">&quot;'{{name}}' is already a global variable.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+
+        <span class="s6">const </span><span class="s2">options </span><span class="s4">= {</span>
+            <span class="s2">builtinGlobals</span><span class="s4">: </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &amp;&amp; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">].</span><span class="s2">builtinGlobals</span><span class="s4">,</span>
+            <span class="s2">hoist</span><span class="s4">: (</span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &amp;&amp; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">].</span><span class="s2">hoist</span><span class="s4">) || </span><span class="s3">&quot;functions&quot;</span><span class="s4">,</span>
+            <span class="s2">allow</span><span class="s4">: (</span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &amp;&amp; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">].</span><span class="s2">allow</span><span class="s4">) || [],</span>
+            <span class="s2">ignoreOnInitialization</span><span class="s4">: </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &amp;&amp; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s8">0</span><span class="s4">].</span><span class="s2">ignoreOnInitialization</span>
+        <span class="s4">};</span>
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether or not a given location is inside of the range of a given node.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node An node to check.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{number} location A location to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the location is inside of the range of the node.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isInRange</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">location</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">node </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &lt;= </span><span class="s2">location </span><span class="s4">&amp;&amp; </span><span class="s2">location </span><span class="s4">&lt;= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s8">1</span><span class="s4">];</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Searches from the current node through its ancestry to find a matching node.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node a node to get.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{(node: ASTNode) =&gt; boolean} match a callback that checks whether or not the node verifies its condition or not.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ASTNode|null} the matching node.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">findSelfOrAncestor</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">match</span><span class="s4">) {</span>
+            <span class="s6">let </span><span class="s2">currentNode </span><span class="s4">= </span><span class="s2">node</span><span class="s4">;</span>
+
+            <span class="s6">while </span><span class="s4">(</span><span class="s2">currentNode </span><span class="s4">&amp;&amp; !</span><span class="s2">match</span><span class="s4">(</span><span class="s2">currentNode</span><span class="s4">)) {</span>
+                <span class="s2">currentNode </span><span class="s4">= </span><span class="s2">currentNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">return </span><span class="s2">currentNode</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Finds function's outer scope.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope Function's own scope.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Scope} Function's outer scope.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">getOuterScope</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">upper </span><span class="s4">= </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">upper</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;function-expression-name&quot;</span><span class="s4">) {</span>
+                <span class="s6">return </span><span class="s2">upper</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">return </span><span class="s2">upper</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks if a variable and a shadowedVariable have the same init pattern ancestor.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} variable a variable to check.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} shadowedVariable a shadowedVariable to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the variable and the shadowedVariable have the same init pattern ancestor.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isInitPatternNode</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">shadowedVariable</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">outerDef </span><span class="s4">= </span><span class="s2">shadowedVariable</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">outerDef</span><span class="s4">) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s4">{ </span><span class="s2">variableScope </span><span class="s4">} = </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">;</span>
+
+
+            <span class="s6">if </span><span class="s4">(!(</span><span class="s2">FUNC_EXPR_NODE_TYPES</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">variableScope</span><span class="s4">.</span><span class="s2">block</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) &amp;&amp; </span><span class="s2">getOuterScope</span><span class="s4">(</span><span class="s2">variableScope</span><span class="s4">) === </span><span class="s2">shadowedVariable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">)) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">const </span><span class="s2">fun </span><span class="s4">= </span><span class="s2">variableScope</span><span class="s4">.</span><span class="s2">block</span><span class="s4">;</span>
+            <span class="s6">const </span><span class="s4">{ </span><span class="s2">parent </span><span class="s4">} = </span><span class="s2">fun</span><span class="s4">;</span>
+
+            <span class="s6">const </span><span class="s2">callExpression </span><span class="s4">= </span><span class="s2">findSelfOrAncestor</span><span class="s4">(</span>
+                <span class="s2">parent</span><span class="s4">,</span>
+                <span class="s2">node </span><span class="s4">=&gt; </span><span class="s2">CALL_EXPR_NODE_TYPE</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)</span>
+            <span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">callExpression</span><span class="s4">) {</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">let </span><span class="s2">node </span><span class="s4">= </span><span class="s2">outerDef</span><span class="s4">.</span><span class="s2">name</span><span class="s4">;</span>
+            <span class="s6">const </span><span class="s2">location </span><span class="s4">= </span><span class="s2">callExpression</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s8">1</span><span class="s4">];</span>
+
+            <span class="s6">while </span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;VariableDeclarator&quot;</span><span class="s4">) {</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">isInRange</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">init</span><span class="s4">, </span><span class="s2">location</span><span class="s4">)) {</span>
+                        <span class="s6">return true</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">FOR_IN_OF_TYPE</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) &amp;&amp;</span>
+                        <span class="s2">isInRange</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">right</span><span class="s4">, </span><span class="s2">location</span><span class="s4">)</span>
+                    <span class="s4">) {</span>
+                        <span class="s6">return true</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+                    <span class="s6">break</span><span class="s4">;</span>
+                <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;AssignmentPattern&quot;</span><span class="s4">) {</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">isInRange</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">, </span><span class="s2">location</span><span class="s4">)) {</span>
+                        <span class="s6">return true</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+                <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">SENTINEL_TYPE</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">)) {</span>
+                    <span class="s6">break</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s2">node </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">return false</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check if variable name is allowed.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} variable The variable to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the variable name is allowed.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isAllowed</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">options</span><span class="s4">.</span><span class="s2">allow</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">.</span><span class="s2">name</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks if a variable of the class name in the class scope of ClassDeclaration.</span>
+         <span class="s0">*</span>
+         <span class="s0">* ClassDeclaration creates two variables of its name into its outer scope and its class scope.</span>
+         <span class="s0">* So we should ignore the variable in the class scope.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} variable The variable to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the variable of the class name in the class scope of ClassDeclaration.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isDuplicatedClassNameVariable</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">block </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">.</span><span class="s2">block</span><span class="s4">;</span>
+
+            <span class="s6">return </span><span class="s2">block</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ClassDeclaration&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">block</span><span class="s4">.</span><span class="s2">id </span><span class="s4">=== </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">identifiers</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks if a variable is inside the initializer of scopeVar.</span>
+         <span class="s0">*</span>
+         <span class="s0">* To avoid reporting at declarations such as `var a = function a() {};`.</span>
+         <span class="s0">* But it should report `var a = function(a) {};` or `var a = function() { function a() {} };`.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} variable The variable to check.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} scopeVar The scope variable to look for.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the variable is inside initializer of scopeVar.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isOnInitializer</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">scopeVar</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">outerScope </span><span class="s4">= </span><span class="s2">scopeVar</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">;</span>
+            <span class="s6">const </span><span class="s2">outerDef </span><span class="s4">= </span><span class="s2">scopeVar</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+            <span class="s6">const </span><span class="s2">outer </span><span class="s4">= </span><span class="s2">outerDef </span><span class="s4">&amp;&amp; </span><span class="s2">outerDef</span><span class="s4">.</span><span class="s2">parent </span><span class="s4">&amp;&amp; </span><span class="s2">outerDef</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">range</span><span class="s4">;</span>
+            <span class="s6">const </span><span class="s2">innerScope </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">scope</span><span class="s4">;</span>
+            <span class="s6">const </span><span class="s2">innerDef </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+            <span class="s6">const </span><span class="s2">inner </span><span class="s4">= </span><span class="s2">innerDef </span><span class="s4">&amp;&amp; </span><span class="s2">innerDef</span><span class="s4">.</span><span class="s2">name</span><span class="s4">.</span><span class="s2">range</span><span class="s4">;</span>
+
+            <span class="s6">return </span><span class="s4">(</span>
+                <span class="s2">outer </span><span class="s4">&amp;&amp;</span>
+                 <span class="s2">inner </span><span class="s4">&amp;&amp;</span>
+                 <span class="s2">outer</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &lt; </span><span class="s2">inner</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &amp;&amp;</span>
+                 <span class="s2">inner</span><span class="s4">[</span><span class="s8">1</span><span class="s4">] &lt; </span><span class="s2">outer</span><span class="s4">[</span><span class="s8">1</span><span class="s4">] &amp;&amp;</span>
+                 <span class="s4">((</span><span class="s2">innerDef</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;FunctionName&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">innerDef</span><span class="s4">.</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;FunctionExpression&quot;</span><span class="s4">) || </span><span class="s2">innerDef</span><span class="s4">.</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ClassExpression&quot;</span><span class="s4">) &amp;&amp;</span>
+                 <span class="s2">outerScope </span><span class="s4">=== </span><span class="s2">innerScope</span><span class="s4">.</span><span class="s2">upper</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Get a range of a variable's identifier node.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} variable The variable to get.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array|undefined} The range of the variable's identifier node.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">getNameRange</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">def </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+
+            <span class="s6">return </span><span class="s2">def </span><span class="s4">&amp;&amp; </span><span class="s2">def</span><span class="s4">.</span><span class="s2">name</span><span class="s4">.</span><span class="s2">range</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Get declared line and column of a variable.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{eslint-scope.Variable} variable The variable to get.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} The declared line and column of the variable.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">getDeclaredLocation</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">identifier </span><span class="s4">= </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">identifiers</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+            <span class="s6">let </span><span class="s2">obj</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">identifier</span><span class="s4">) {</span>
+                <span class="s2">obj </span><span class="s4">= {</span>
+                    <span class="s2">global</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+                    <span class="s2">line</span><span class="s4">: </span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">line</span><span class="s4">,</span>
+                    <span class="s2">column</span><span class="s4">: </span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">column </span><span class="s4">+ </span><span class="s8">1</span>
+                <span class="s4">};</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s2">obj </span><span class="s4">= {</span>
+                    <span class="s2">global</span><span class="s4">: </span><span class="s6">true</span>
+                <span class="s4">};</span>
+            <span class="s4">}</span>
+            <span class="s6">return </span><span class="s2">obj</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks if a variable is in TDZ of scopeVar.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} variable The variable to check.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} scopeVar The variable of TDZ.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the variable is in TDZ of scopeVar.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isInTdz</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">scopeVar</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">outerDef </span><span class="s4">= </span><span class="s2">scopeVar</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">[</span><span class="s8">0</span><span class="s4">];</span>
+            <span class="s6">const </span><span class="s2">inner </span><span class="s4">= </span><span class="s2">getNameRange</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">);</span>
+            <span class="s6">const </span><span class="s2">outer </span><span class="s4">= </span><span class="s2">getNameRange</span><span class="s4">(</span><span class="s2">scopeVar</span><span class="s4">);</span>
+
+            <span class="s6">return </span><span class="s4">(</span>
+                <span class="s2">inner </span><span class="s4">&amp;&amp;</span>
+                 <span class="s2">outer </span><span class="s4">&amp;&amp;</span>
+                 <span class="s2">inner</span><span class="s4">[</span><span class="s8">1</span><span class="s4">] &lt; </span><span class="s2">outer</span><span class="s4">[</span><span class="s8">0</span><span class="s4">] &amp;&amp;</span>
+
+                 <span class="s5">// Excepts FunctionDeclaration if is {&quot;hoist&quot;:&quot;function&quot;}.</span>
+                 <span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">hoist </span><span class="s4">!== </span><span class="s3">&quot;functions&quot; </span><span class="s4">|| !</span><span class="s2">outerDef </span><span class="s4">|| </span><span class="s2">outerDef</span><span class="s4">.</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;FunctionDeclaration&quot;</span><span class="s4">)</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks the current context for shadowed variables.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Scope} scope Fixme</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkForShadows</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">variables </span><span class="s4">= </span><span class="s2">scope</span><span class="s4">.</span><span class="s2">variables</span><span class="s4">;</span>
+
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s8">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">variables</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">variable </span><span class="s4">= </span><span class="s2">variables</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+                <span class="s5">// Skips &quot;arguments&quot; or variables of a class name in the class scope of ClassDeclaration.</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">variable</span><span class="s4">.</span><span class="s2">identifiers</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s8">0 </span><span class="s4">||</span>
+                     <span class="s2">isDuplicatedClassNameVariable</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">) ||</span>
+                     <span class="s2">isAllowed</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">)</span>
+                <span class="s4">) {</span>
+                    <span class="s6">continue</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s5">// Gets shadowed variable.</span>
+                <span class="s6">const </span><span class="s2">shadowed </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getVariableByName</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">, </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">name</span><span class="s4">);</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">shadowed </span><span class="s4">&amp;&amp;</span>
+                      <span class="s4">(</span><span class="s2">shadowed</span><span class="s4">.</span><span class="s2">identifiers</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s8">0 </span><span class="s4">|| (</span><span class="s2">options</span><span class="s4">.</span><span class="s2">builtinGlobals </span><span class="s4">&amp;&amp; </span><span class="s3">&quot;writeable&quot; </span><span class="s6">in </span><span class="s2">shadowed</span><span class="s4">)) &amp;&amp;</span>
+                      <span class="s4">!</span><span class="s2">isOnInitializer</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">shadowed</span><span class="s4">) &amp;&amp;</span>
+                      <span class="s4">!(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignoreOnInitialization </span><span class="s4">&amp;&amp; </span><span class="s2">isInitPatternNode</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">shadowed</span><span class="s4">)) &amp;&amp;</span>
+                      <span class="s4">!(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">hoist </span><span class="s4">!== </span><span class="s3">&quot;all&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isInTdz</span><span class="s4">(</span><span class="s2">variable</span><span class="s4">, </span><span class="s2">shadowed</span><span class="s4">))</span>
+                <span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">location </span><span class="s4">= </span><span class="s2">getDeclaredLocation</span><span class="s4">(</span><span class="s2">shadowed</span><span class="s4">);</span>
+                    <span class="s6">const </span><span class="s2">messageId </span><span class="s4">= </span><span class="s2">location</span><span class="s4">.</span><span class="s2">global </span><span class="s4">? </span><span class="s3">&quot;noShadowGlobal&quot; </span><span class="s4">: </span><span class="s3">&quot;noShadow&quot;</span><span class="s4">;</span>
+                    <span class="s6">const </span><span class="s2">data </span><span class="s4">= { </span><span class="s2">name</span><span class="s4">: </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">name </span><span class="s4">};</span>
+
+                    <span class="s6">if </span><span class="s4">(!</span><span class="s2">location</span><span class="s4">.</span><span class="s2">global</span><span class="s4">) {</span>
+                        <span class="s2">data</span><span class="s4">.</span><span class="s2">shadowedLine </span><span class="s4">= </span><span class="s2">location</span><span class="s4">.</span><span class="s2">line</span><span class="s4">;</span>
+                        <span class="s2">data</span><span class="s4">.</span><span class="s2">shadowedColumn </span><span class="s4">= </span><span class="s2">location</span><span class="s4">.</span><span class="s2">column</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                        <span class="s2">node</span><span class="s4">: </span><span class="s2">variable</span><span class="s4">.</span><span class="s2">identifiers</span><span class="s4">[</span><span class="s8">0</span><span class="s4">],</span>
+                        <span class="s2">messageId</span><span class="s4">,</span>
+                        <span class="s2">data</span>
+                    <span class="s4">});</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s3">&quot;Program:exit&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">globalScope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s6">const </span><span class="s2">stack </span><span class="s4">= </span><span class="s2">globalScope</span><span class="s4">.</span><span class="s2">childScopes</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">();</span>
+
+                <span class="s6">while </span><span class="s4">(</span><span class="s2">stack</span><span class="s4">.</span><span class="s2">length</span><span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">stack</span><span class="s4">.</span><span class="s2">pop</span><span class="s4">();</span>
+
+                    <span class="s2">stack</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">...scope</span><span class="s4">.</span><span class="s2">childScopes</span><span class="s4">);</span>
+                    <span class="s2">checkForShadows</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

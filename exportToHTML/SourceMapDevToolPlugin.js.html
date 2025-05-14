@@ -1,0 +1,635 @@
+<html>
+<head>
+<title>SourceMapDevToolPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+SourceMapDevToolPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">ConcatSource</span><span class="s3">, </span><span class="s1">RawSource </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;webpack-sources&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">Compilation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./Compilation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleFilenameHelpers </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleFilenameHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ProgressPlugin </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ProgressPlugin&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">SourceMapDevToolModuleOptionsPlugin </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./SourceMapDevToolModuleOptionsPlugin&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createSchemaValidation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/create-schema-validation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createHash </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/createHash&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">relative</span><span class="s3">, </span><span class="s1">dirname </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/fs&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">generateDebugId </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/generateDebugId&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">makePathsAbsolute </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/identifier&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).MapOptions} MapOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../declarations/plugins/SourceMapDevToolPlugin&quot;).SourceMapDevToolPluginOptions} SourceMapDevToolPluginOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Cache&quot;).Etag} Etag */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./CacheFacade&quot;).ItemCacheFacade} ItemCacheFacade */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;).Asset} Asset */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;).AssetInfo} AssetInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./NormalModule&quot;).SourceMap} SourceMap */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./TemplatedPathPlugin&quot;).TemplatePath} TemplatePath */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/Hash&quot;)} Hash */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/createHash&quot;).Algorithm} Algorithm */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/fs&quot;).OutputFileSystem} OutputFileSystem */</span>
+
+<span class="s4">const </span><span class="s1">validate </span><span class="s3">= </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../schemas/plugins/SourceMapDevToolPlugin.check.js&quot;</span><span class="s3">),</span>
+	<span class="s3">() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../schemas/plugins/SourceMapDevToolPlugin.json&quot;</span><span class="s3">),</span>
+	<span class="s3">{</span>
+		<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;SourceMap DevTool Plugin&quot;</span><span class="s3">,</span>
+		<span class="s1">baseDataPath</span><span class="s3">: </span><span class="s2">&quot;options&quot;</span>
+	<span class="s3">}</span>
+<span class="s3">);</span>
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} SourceMapTask</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Source} asset</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{AssetInfo} assetInfo</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{(string | Module)[]} modules</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} source</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{string} file</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{SourceMap} sourceMap</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ItemCacheFacade} cacheItem cache item</span>
+ <span class="s5">*/</span>
+
+<span class="s4">const </span><span class="s1">METACHARACTERS_REGEXP </span><span class="s3">= </span><span class="s7">/[-[\]\\/{}()*+?.^$|]/g</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">CONTENT_HASH_DETECT_REGEXP </span><span class="s3">= </span><span class="s7">/\[contenthash(:\w+)?\]/</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">CSS_AND_JS_MODULE_EXTENSIONS_REGEXP </span><span class="s3">= </span><span class="s7">/\.((c|m)?js|css)($|\?)/i</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">CSS_EXTENSION_DETECT_REGEXP </span><span class="s3">= </span><span class="s7">/\.css($|\?)/i</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">MAP_URL_COMMENT_REGEXP </span><span class="s3">= </span><span class="s7">/\[map\]/g</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">URL_COMMENT_REGEXP </span><span class="s3">= </span><span class="s7">/\[url\]/g</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">URL_FORMATTING_REGEXP </span><span class="s3">= </span><span class="s7">/^\n\/\/(.*)$/</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Reset's .lastIndex of stateful Regular Expressions</span>
+ <span class="s5">* For when `test` or `exec` is called on them</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RegExp} regexp Stateful Regular Expression to be reset</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">resetRegexpState </span><span class="s3">= </span><span class="s1">regexp </span><span class="s3">=&gt; {</span>
+	<span class="s1">regexp</span><span class="s3">.</span><span class="s1">lastIndex </span><span class="s3">= -</span><span class="s8">1</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Escapes regular expression metacharacters</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} str String to quote</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} Escaped string</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">quoteMeta </span><span class="s3">= </span><span class="s1">str </span><span class="s3">=&gt; </span><span class="s1">str</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s1">METACHARACTERS_REGEXP</span><span class="s3">, </span><span class="s2">&quot;</span><span class="s4">\\</span><span class="s2">$&amp;&quot;</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Creating {</span><span class="s6">@link </span><span class="s5">SourceMapTask} for given file</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} file current compiled file</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Source} asset the asset</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssetInfo} assetInfo the asset info</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{MapOptions} options source map options</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation compilation instance</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ItemCacheFacade} cacheItem cache item</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{SourceMapTask | undefined} created task instance or `undefined`</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getTaskForFile </span><span class="s3">= (</span>
+	<span class="s1">file</span><span class="s3">,</span>
+	<span class="s1">asset</span><span class="s3">,</span>
+	<span class="s1">assetInfo</span><span class="s3">,</span>
+	<span class="s1">options</span><span class="s3">,</span>
+	<span class="s1">compilation</span><span class="s3">,</span>
+	<span class="s1">cacheItem</span>
+<span class="s3">) =&gt; {</span>
+	<span class="s4">let </span><span class="s1">source</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMap} */</span>
+	<span class="s4">let </span><span class="s1">sourceMap</span><span class="s3">;</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Check if asset can build source map</span>
+	 <span class="s5">*/</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">sourceAndMap</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">sourceAndMap </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">sourceAndMap</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+		<span class="s1">sourceMap </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMap} */ </span><span class="s3">(</span><span class="s1">sourceAndMap</span><span class="s3">.</span><span class="s1">map</span><span class="s3">);</span>
+		<span class="s1">source </span><span class="s3">= </span><span class="s1">sourceAndMap</span><span class="s3">.</span><span class="s1">source</span><span class="s3">;</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s1">sourceMap </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMap} */ </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">options</span><span class="s3">));</span>
+		<span class="s1">source </span><span class="s3">= </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">source</span><span class="s3">();</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(!</span><span class="s1">sourceMap </span><span class="s3">|| </span><span class="s4">typeof </span><span class="s1">source </span><span class="s3">!== </span><span class="s2">&quot;string&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">context </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">context</span><span class="s3">);</span>
+	<span class="s4">const </span><span class="s1">root </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">root</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">cachedAbsolutify </span><span class="s3">= </span><span class="s1">makePathsAbsolute</span><span class="s3">.</span><span class="s1">bindContextCache</span><span class="s3">(</span><span class="s1">context</span><span class="s3">, </span><span class="s1">root</span><span class="s3">);</span>
+	<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sources</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">source </span><span class="s3">=&gt; {</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">source</span><span class="s3">.</span><span class="s1">startsWith</span><span class="s3">(</span><span class="s2">&quot;webpack://&quot;</span><span class="s3">)) </span><span class="s4">return </span><span class="s1">source</span><span class="s3">;</span>
+		<span class="s1">source </span><span class="s3">= </span><span class="s1">cachedAbsolutify</span><span class="s3">(</span><span class="s1">source</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s8">10</span><span class="s3">));</span>
+		<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">findModule</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">module </span><span class="s3">|| </span><span class="s1">source</span><span class="s3">;</span>
+	<span class="s3">});</span>
+
+	<span class="s4">return </span><span class="s3">{</span>
+		<span class="s1">file</span><span class="s3">,</span>
+		<span class="s1">asset</span><span class="s3">,</span>
+		<span class="s1">source</span><span class="s3">,</span>
+		<span class="s1">assetInfo</span><span class="s3">,</span>
+		<span class="s1">sourceMap</span><span class="s3">,</span>
+		<span class="s1">modules</span><span class="s3">,</span>
+		<span class="s1">cacheItem</span>
+	<span class="s3">};</span>
+<span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">SourceMapDevToolPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{SourceMapDevToolPluginOptions} [options] options object</span>
+	 <span class="s5">* </span><span class="s6">@throws </span><span class="s5">{Error} throws error, if got more than 1 arguments</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options </span><span class="s3">= {}) {</span>
+		<span class="s1">validate</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">sourceMapFilename </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string | false} */ </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">filename</span><span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{false | TemplatePath}} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">sourceMappingURLComment </span><span class="s3">=</span>
+			<span class="s1">options</span><span class="s3">.</span><span class="s1">append </span><span class="s3">=== </span><span class="s4">false</span>
+				<span class="s3">? </span><span class="s4">false</span>
+				<span class="s3">: </span><span class="s0">// eslint-disable-next-line no-useless-concat</span>
+					<span class="s1">options</span><span class="s3">.</span><span class="s1">append </span><span class="s3">|| </span><span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">//# source&quot; </span><span class="s3">+ </span><span class="s2">&quot;MappingURL=[url]&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">moduleFilenameTemplate </span><span class="s3">=</span>
+			<span class="s1">options</span><span class="s3">.</span><span class="s1">moduleFilenameTemplate </span><span class="s3">|| </span><span class="s2">&quot;webpack://[namespace]/[resourcePath]&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">fallbackModuleFilenameTemplate </span><span class="s3">=</span>
+			<span class="s1">options</span><span class="s3">.</span><span class="s1">fallbackModuleFilenameTemplate </span><span class="s3">||</span>
+			<span class="s2">&quot;webpack://[namespace]/[resourcePath]?[hash]&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">namespace </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">namespace </span><span class="s3">|| </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">outputFs </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OutputFileSystem} */ </span><span class="s3">(</span>
+			<span class="s1">compiler</span><span class="s3">.</span><span class="s1">outputFileSystem</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">sourceMapFilename </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">sourceMapFilename</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">sourceMappingURLComment </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">sourceMappingURLComment</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">moduleFilenameTemplate </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">moduleFilenameTemplate</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">namespace </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">namespace</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">fallbackModuleFilenameTemplate </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">fallbackModuleFilenameTemplate</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">requestShortener </span><span class="s3">= </span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">requestShortener</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">options </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s1">options</span><span class="s3">.</span><span class="s1">test </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">test </span><span class="s3">|| </span><span class="s1">CSS_AND_JS_MODULE_EXTENSIONS_REGEXP</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">matchObject </span><span class="s3">= </span><span class="s1">ModuleFilenameHelpers</span><span class="s3">.</span><span class="s1">matchObject</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span>
+			<span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">options</span>
+		<span class="s3">);</span>
+
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;SourceMapDevToolPlugin&quot;</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s4">new </span><span class="s1">SourceMapDevToolModuleOptionsPlugin</span><span class="s3">(</span><span class="s1">options</span><span class="s3">).</span><span class="s1">apply</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">processAssets</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+				<span class="s3">{</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;SourceMapDevToolPlugin&quot;</span><span class="s3">,</span>
+					<span class="s1">stage</span><span class="s3">: </span><span class="s1">Compilation</span><span class="s3">.</span><span class="s1">PROCESS_ASSETS_STAGE_DEV_TOOLING</span><span class="s3">,</span>
+					<span class="s1">additionalAssets</span><span class="s3">: </span><span class="s4">true</span>
+				<span class="s3">},</span>
+				<span class="s3">(</span><span class="s1">assets</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">cache </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getCache</span><span class="s3">(</span><span class="s2">&quot;SourceMapDevToolPlugin&quot;</span><span class="s3">);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string | Module, string&gt;} */</span>
+					<span class="s4">const </span><span class="s1">moduleToSourceNameMapping </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+					<span class="s4">const </span><span class="s1">reportProgress </span><span class="s3">=</span>
+						<span class="s1">ProgressPlugin</span><span class="s3">.</span><span class="s1">getReporter</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">compiler</span><span class="s3">) || (() =&gt; {});</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, Chunk&gt;} */</span>
+					<span class="s4">const </span><span class="s1">fileToChunk </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of chunk</span><span class="s3">.</span><span class="s1">files</span><span class="s3">) {</span>
+							<span class="s1">fileToChunk</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of chunk</span><span class="s3">.</span><span class="s1">auxiliaryFiles</span><span class="s3">) {</span>
+							<span class="s1">fileToChunk</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */</span>
+					<span class="s4">const </span><span class="s1">files </span><span class="s3">= [];</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">file of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">assets</span><span class="s3">)) {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">matchObject</span><span class="s3">(</span><span class="s1">file</span><span class="s3">)) {</span>
+							<span class="s1">files</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+
+					<span class="s1">reportProgress</span><span class="s3">(</span><span class="s8">0</span><span class="s3">);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMapTask[]} */</span>
+					<span class="s4">const </span><span class="s1">tasks </span><span class="s3">= [];</span>
+					<span class="s4">let </span><span class="s1">fileIndex </span><span class="s3">= </span><span class="s8">0</span><span class="s3">;</span>
+
+					<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+						<span class="s1">files</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s4">const </span><span class="s1">asset </span><span class="s3">=</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Readonly&lt;Asset&gt;} */</span>
+								<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getAsset</span><span class="s3">(</span><span class="s1">file</span><span class="s3">));</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">info</span><span class="s3">.</span><span class="s1">related </span><span class="s3">&amp;&amp; </span><span class="s1">asset</span><span class="s3">.</span><span class="s1">info</span><span class="s3">.</span><span class="s1">related</span><span class="s3">.</span><span class="s1">sourceMap</span><span class="s3">) {</span>
+								<span class="s1">fileIndex</span><span class="s3">++;</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">}</span>
+
+							<span class="s4">const </span><span class="s1">chunk </span><span class="s3">= </span><span class="s1">fileToChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">sourceMapNamespace </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">namespace</span><span class="s3">, {</span>
+								<span class="s1">chunk</span>
+							<span class="s3">});</span>
+
+							<span class="s4">const </span><span class="s1">cacheItem </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">.</span><span class="s1">getItemCache</span><span class="s3">(</span>
+								<span class="s1">file</span><span class="s3">,</span>
+								<span class="s1">cache</span><span class="s3">.</span><span class="s1">mergeEtags</span><span class="s3">(</span>
+									<span class="s1">cache</span><span class="s3">.</span><span class="s1">getLazyHashedEtag</span><span class="s3">(</span><span class="s1">asset</span><span class="s3">.</span><span class="s1">source</span><span class="s3">),</span>
+									<span class="s1">sourceMapNamespace</span>
+								<span class="s3">)</span>
+							<span class="s3">);</span>
+
+							<span class="s1">cacheItem</span><span class="s3">.</span><span class="s1">get</span><span class="s3">((</span><span class="s1">err</span><span class="s3">, </span><span class="s1">cacheEntry</span><span class="s3">) =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s5">/**</span>
+								 <span class="s5">* If presented in cache, reassigns assets. Cache assets already have source maps.</span>
+								 <span class="s5">*/</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s3">{ </span><span class="s1">assets</span><span class="s3">, </span><span class="s1">assetsInfo </span><span class="s3">} = </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cachedFile of Object</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">(</span><span class="s1">assets</span><span class="s3">)) {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedFile </span><span class="s3">=== </span><span class="s1">file</span><span class="s3">) {</span>
+											<span class="s1">compilation</span><span class="s3">.</span><span class="s1">updateAsset</span><span class="s3">(</span>
+												<span class="s1">cachedFile</span><span class="s3">,</span>
+												<span class="s1">assets</span><span class="s3">[</span><span class="s1">cachedFile</span><span class="s3">],</span>
+												<span class="s1">assetsInfo</span><span class="s3">[</span><span class="s1">cachedFile</span><span class="s3">]</span>
+											<span class="s3">);</span>
+										<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+											<span class="s1">compilation</span><span class="s3">.</span><span class="s1">emitAsset</span><span class="s3">(</span>
+												<span class="s1">cachedFile</span><span class="s3">,</span>
+												<span class="s1">assets</span><span class="s3">[</span><span class="s1">cachedFile</span><span class="s3">],</span>
+												<span class="s1">assetsInfo</span><span class="s3">[</span><span class="s1">cachedFile</span><span class="s3">]</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s5">/**</span>
+										 <span class="s5">* Add file to chunk, if not presented there</span>
+										 <span class="s5">*/</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedFile </span><span class="s3">!== </span><span class="s1">file </span><span class="s3">&amp;&amp; </span><span class="s1">chunk </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+											<span class="s1">chunk</span><span class="s3">.</span><span class="s1">auxiliaryFiles</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">cachedFile</span><span class="s3">);</span>
+									<span class="s3">}</span>
+
+									<span class="s1">reportProgress</span><span class="s3">(</span>
+										<span class="s3">(</span><span class="s8">0.5 </span><span class="s3">* ++</span><span class="s1">fileIndex</span><span class="s3">) / </span><span class="s1">files</span><span class="s3">.</span><span class="s1">length</span><span class="s3">,</span>
+										<span class="s1">file</span><span class="s3">,</span>
+										<span class="s2">&quot;restored cached SourceMap&quot;</span>
+									<span class="s3">);</span>
+
+									<span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+								<span class="s3">}</span>
+
+								<span class="s1">reportProgress</span><span class="s3">(</span>
+									<span class="s3">(</span><span class="s8">0.5 </span><span class="s3">* </span><span class="s1">fileIndex</span><span class="s3">) / </span><span class="s1">files</span><span class="s3">.</span><span class="s1">length</span><span class="s3">,</span>
+									<span class="s1">file</span><span class="s3">,</span>
+									<span class="s2">&quot;generate SourceMap&quot;</span>
+								<span class="s3">);</span>
+
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SourceMapTask | undefined} */</span>
+								<span class="s4">const </span><span class="s1">task </span><span class="s3">= </span><span class="s1">getTaskForFile</span><span class="s3">(</span>
+									<span class="s1">file</span><span class="s3">,</span>
+									<span class="s1">asset</span><span class="s3">.</span><span class="s1">source</span><span class="s3">,</span>
+									<span class="s1">asset</span><span class="s3">.</span><span class="s1">info</span><span class="s3">,</span>
+									<span class="s3">{</span>
+										<span class="s1">module</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">module</span><span class="s3">,</span>
+										<span class="s1">columns</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">columns</span>
+									<span class="s3">},</span>
+									<span class="s1">compilation</span><span class="s3">,</span>
+									<span class="s1">cacheItem</span>
+								<span class="s3">);</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">task</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">task</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">;</span>
+
+									<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">idx </span><span class="s3">= </span><span class="s8">0</span><span class="s3">; </span><span class="s1">idx </span><span class="s3">&lt; </span><span class="s1">modules</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">idx</span><span class="s3">++) {</span>
+										<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">modules</span><span class="s3">[</span><span class="s1">idx</span><span class="s3">];</span>
+
+										<span class="s4">if </span><span class="s3">(</span>
+											<span class="s4">typeof </span><span class="s1">module </span><span class="s3">=== </span><span class="s2">&quot;string&quot; </span><span class="s3">&amp;&amp;</span>
+											<span class="s7">/^(data|https?):/</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)</span>
+										<span class="s3">) {</span>
+											<span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">module</span><span class="s3">);</span>
+											<span class="s4">continue</span><span class="s3">;</span>
+										<span class="s3">}</span>
+
+										<span class="s4">if </span><span class="s3">(!</span><span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)) {</span>
+											<span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+												<span class="s1">module</span><span class="s3">,</span>
+												<span class="s1">ModuleFilenameHelpers</span><span class="s3">.</span><span class="s1">createFilename</span><span class="s3">(</span>
+													<span class="s1">module</span><span class="s3">,</span>
+													<span class="s3">{</span>
+														<span class="s1">moduleFilenameTemplate</span><span class="s3">,</span>
+														<span class="s1">namespace</span><span class="s3">: </span><span class="s1">sourceMapNamespace</span>
+													<span class="s3">},</span>
+													<span class="s3">{</span>
+														<span class="s1">requestShortener</span><span class="s3">,</span>
+														<span class="s1">chunkGraph</span><span class="s3">,</span>
+														<span class="s1">hashFunction</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashFunction</span>
+													<span class="s3">}</span>
+												<span class="s3">)</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+									<span class="s3">}</span>
+
+									<span class="s1">tasks</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">task</span><span class="s3">);</span>
+								<span class="s3">}</span>
+
+								<span class="s1">reportProgress</span><span class="s3">(</span>
+									<span class="s3">(</span><span class="s8">0.5 </span><span class="s3">* ++</span><span class="s1">fileIndex</span><span class="s3">) / </span><span class="s1">files</span><span class="s3">.</span><span class="s1">length</span><span class="s3">,</span>
+									<span class="s1">file</span><span class="s3">,</span>
+									<span class="s2">&quot;generated SourceMap&quot;</span>
+								<span class="s3">);</span>
+
+								<span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">});</span>
+						<span class="s3">},</span>
+						<span class="s1">err </span><span class="s3">=&gt; {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+								<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+							<span class="s3">}</span>
+
+							<span class="s1">reportProgress</span><span class="s3">(</span><span class="s8">0.5</span><span class="s3">, </span><span class="s2">&quot;resolve sources&quot;</span><span class="s3">);</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+							<span class="s4">const </span><span class="s1">usedNamesSet </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">values</span><span class="s3">());</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;string&gt;} */</span>
+							<span class="s4">const </span><span class="s1">conflictDetectionSet </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+							<span class="s5">/**</span>
+							 <span class="s5">* all modules in defined order (longest identifier first)</span>
+							 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{Array&lt;string | Module&gt;}</span>
+							 <span class="s5">*/</span>
+							<span class="s4">const </span><span class="s1">allModules </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+								<span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">()</span>
+							<span class="s3">).</span><span class="s1">sort</span><span class="s3">((</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+								<span class="s4">const </span><span class="s1">ai </span><span class="s3">= </span><span class="s4">typeof </span><span class="s1">a </span><span class="s3">=== </span><span class="s2">&quot;string&quot; </span><span class="s3">? </span><span class="s1">a </span><span class="s3">: </span><span class="s1">a</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">();</span>
+								<span class="s4">const </span><span class="s1">bi </span><span class="s3">= </span><span class="s4">typeof </span><span class="s1">b </span><span class="s3">=== </span><span class="s2">&quot;string&quot; </span><span class="s3">? </span><span class="s1">b </span><span class="s3">: </span><span class="s1">b</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">();</span>
+								<span class="s4">return </span><span class="s1">ai</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s1">bi</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+							<span class="s3">});</span>
+
+							<span class="s0">// find modules with conflicting source names</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">idx </span><span class="s3">= </span><span class="s8">0</span><span class="s3">; </span><span class="s1">idx </span><span class="s3">&lt; </span><span class="s1">allModules</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">idx</span><span class="s3">++) {</span>
+								<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">allModules</span><span class="s3">[</span><span class="s1">idx</span><span class="s3">];</span>
+								<span class="s4">let </span><span class="s1">sourceName </span><span class="s3">=</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+									<span class="s3">(</span><span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">));</span>
+								<span class="s4">let </span><span class="s1">hasName </span><span class="s3">= </span><span class="s1">conflictDetectionSet</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">sourceName</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">hasName</span><span class="s3">) {</span>
+									<span class="s1">conflictDetectionSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">sourceName</span><span class="s3">);</span>
+									<span class="s4">continue</span><span class="s3">;</span>
+								<span class="s3">}</span>
+
+								<span class="s0">// try the fallback name first</span>
+								<span class="s1">sourceName </span><span class="s3">= </span><span class="s1">ModuleFilenameHelpers</span><span class="s3">.</span><span class="s1">createFilename</span><span class="s3">(</span>
+									<span class="s1">module</span><span class="s3">,</span>
+									<span class="s3">{</span>
+										<span class="s1">moduleFilenameTemplate</span><span class="s3">: </span><span class="s1">fallbackModuleFilenameTemplate</span><span class="s3">,</span>
+										<span class="s1">namespace</span>
+									<span class="s3">},</span>
+									<span class="s3">{</span>
+										<span class="s1">requestShortener</span><span class="s3">,</span>
+										<span class="s1">chunkGraph</span><span class="s3">,</span>
+										<span class="s1">hashFunction</span><span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashFunction</span>
+									<span class="s3">}</span>
+								<span class="s3">);</span>
+								<span class="s1">hasName </span><span class="s3">= </span><span class="s1">usedNamesSet</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">sourceName</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">hasName</span><span class="s3">) {</span>
+									<span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">sourceName</span><span class="s3">);</span>
+									<span class="s1">usedNamesSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">sourceName</span><span class="s3">);</span>
+									<span class="s4">continue</span><span class="s3">;</span>
+								<span class="s3">}</span>
+
+								<span class="s0">// otherwise just append stars until we have a valid name</span>
+								<span class="s4">while </span><span class="s3">(</span><span class="s1">hasName</span><span class="s3">) {</span>
+									<span class="s1">sourceName </span><span class="s3">+= </span><span class="s2">&quot;*&quot;</span><span class="s3">;</span>
+									<span class="s1">hasName </span><span class="s3">= </span><span class="s1">usedNamesSet</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">sourceName</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">sourceName</span><span class="s3">);</span>
+								<span class="s1">usedNamesSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">sourceName</span><span class="s3">);</span>
+							<span class="s3">}</span>
+
+							<span class="s4">let </span><span class="s1">taskIndex </span><span class="s3">= </span><span class="s8">0</span><span class="s3">;</span>
+
+							<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+								<span class="s1">tasks</span><span class="s3">,</span>
+								<span class="s3">(</span><span class="s1">task</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+									<span class="s4">const </span><span class="s1">assets </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">assetsInfo </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">file </span><span class="s3">= </span><span class="s1">task</span><span class="s3">.</span><span class="s1">file</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">chunk </span><span class="s3">= </span><span class="s1">fileToChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">sourceMap </span><span class="s3">= </span><span class="s1">task</span><span class="s3">.</span><span class="s1">sourceMap</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">source </span><span class="s3">= </span><span class="s1">task</span><span class="s3">.</span><span class="s1">source</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">task</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">;</span>
+
+									<span class="s1">reportProgress</span><span class="s3">(</span>
+										<span class="s8">0.5 </span><span class="s3">+ (</span><span class="s8">0.5 </span><span class="s3">* </span><span class="s1">taskIndex</span><span class="s3">) / </span><span class="s1">tasks</span><span class="s3">.</span><span class="s1">length</span><span class="s3">,</span>
+										<span class="s1">file</span><span class="s3">,</span>
+										<span class="s2">&quot;attach SourceMap&quot;</span>
+									<span class="s3">);</span>
+
+									<span class="s4">const </span><span class="s1">moduleFilenames </span><span class="s3">= </span><span class="s1">modules</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">m </span><span class="s3">=&gt;</span>
+										<span class="s1">moduleToSourceNameMapping</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">m</span><span class="s3">)</span>
+									<span class="s3">);</span>
+									<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sources </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string[]} */ </span><span class="s3">(</span><span class="s1">moduleFilenames</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">noSources</span><span class="s3">) {</span>
+										<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sourcesContent </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+									<span class="s3">}</span>
+									<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">sourceRoot </span><span class="s3">|| </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+									<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">file </span><span class="s3">= </span><span class="s1">file</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">usesContentHash </span><span class="s3">=</span>
+										<span class="s1">sourceMapFilename </span><span class="s3">&amp;&amp;</span>
+										<span class="s1">CONTENT_HASH_DETECT_REGEXP</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">sourceMapFilename</span><span class="s3">);</span>
+
+									<span class="s1">resetRegexpState</span><span class="s3">(</span><span class="s1">CONTENT_HASH_DETECT_REGEXP</span><span class="s3">);</span>
+
+									<span class="s0">// If SourceMap and asset uses contenthash, avoid a circular dependency by hiding hash in `file`</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">usesContentHash </span><span class="s3">&amp;&amp; </span><span class="s1">task</span><span class="s3">.</span><span class="s1">assetInfo</span><span class="s3">.</span><span class="s1">contenthash</span><span class="s3">) {</span>
+										<span class="s4">const </span><span class="s1">contenthash </span><span class="s3">= </span><span class="s1">task</span><span class="s3">.</span><span class="s1">assetInfo</span><span class="s3">.</span><span class="s1">contenthash</span><span class="s3">;</span>
+										<span class="s4">const </span><span class="s1">pattern </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">contenthash</span><span class="s3">)</span>
+											<span class="s3">? </span><span class="s1">contenthash</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">quoteMeta</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;|&quot;</span><span class="s3">)</span>
+											<span class="s3">: </span><span class="s1">quoteMeta</span><span class="s3">(</span><span class="s1">contenthash</span><span class="s3">);</span>
+										<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">file </span><span class="s3">= </span><span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">file</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span>
+											<span class="s4">new </span><span class="s1">RegExp</span><span class="s3">(</span><span class="s1">pattern</span><span class="s3">, </span><span class="s2">&quot;g&quot;</span><span class="s3">),</span>
+											<span class="s1">m </span><span class="s3">=&gt; </span><span class="s2">&quot;x&quot;</span><span class="s3">.</span><span class="s1">repeat</span><span class="s3">(</span><span class="s1">m</span><span class="s3">.</span><span class="s1">length</span><span class="s3">)</span>
+										<span class="s3">);</span>
+									<span class="s3">}</span>
+
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{false | TemplatePath} */</span>
+									<span class="s4">let </span><span class="s1">currentSourceMappingURLComment </span><span class="s3">= </span><span class="s1">sourceMappingURLComment</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">cssExtensionDetected </span><span class="s3">=</span>
+										<span class="s1">CSS_EXTENSION_DETECT_REGEXP</span><span class="s3">.</span><span class="s1">test</span><span class="s3">(</span><span class="s1">file</span><span class="s3">);</span>
+									<span class="s1">resetRegexpState</span><span class="s3">(</span><span class="s1">CSS_EXTENSION_DETECT_REGEXP</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span>
+										<span class="s1">currentSourceMappingURLComment </span><span class="s3">!== </span><span class="s4">false </span><span class="s3">&amp;&amp;</span>
+										<span class="s4">typeof </span><span class="s1">currentSourceMappingURLComment </span><span class="s3">!== </span><span class="s2">&quot;function&quot; </span><span class="s3">&amp;&amp;</span>
+										<span class="s1">cssExtensionDetected</span>
+									<span class="s3">) {</span>
+										<span class="s1">currentSourceMappingURLComment </span><span class="s3">=</span>
+											<span class="s1">currentSourceMappingURLComment</span><span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span>
+												<span class="s1">URL_FORMATTING_REGEXP</span><span class="s3">,</span>
+												<span class="s2">&quot;</span><span class="s4">\n</span><span class="s2">/*$1*/&quot;</span>
+											<span class="s3">);</span>
+									<span class="s3">}</span>
+
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">options</span><span class="s3">.</span><span class="s1">debugIds</span><span class="s3">) {</span>
+										<span class="s4">const </span><span class="s1">debugId </span><span class="s3">= </span><span class="s1">generateDebugId</span><span class="s3">(</span><span class="s1">source</span><span class="s3">, </span><span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">file</span><span class="s3">);</span>
+										<span class="s1">sourceMap</span><span class="s3">.</span><span class="s1">debugId </span><span class="s3">= </span><span class="s1">debugId</span><span class="s3">;</span>
+										<span class="s1">currentSourceMappingURLComment </span><span class="s3">= </span><span class="s2">`</span><span class="s4">\n</span><span class="s2">//# debugId=</span><span class="s1">$</span><span class="s3">{</span><span class="s1">debugId</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">currentSourceMappingURLComment</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+									<span class="s3">}</span>
+
+									<span class="s4">const </span><span class="s1">sourceMapString </span><span class="s3">= </span><span class="s1">JSON</span><span class="s3">.</span><span class="s1">stringify</span><span class="s3">(</span><span class="s1">sourceMap</span><span class="s3">);</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">sourceMapFilename</span><span class="s3">) {</span>
+										<span class="s4">const </span><span class="s1">filename </span><span class="s3">= </span><span class="s1">file</span><span class="s3">;</span>
+										<span class="s4">const </span><span class="s1">sourceMapContentHash </span><span class="s3">=</span>
+											<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+											<span class="s3">(</span>
+												<span class="s1">usesContentHash </span><span class="s3">&amp;&amp;</span>
+													<span class="s1">createHash</span><span class="s3">(</span>
+														<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Algorithm} */</span>
+														<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashFunction</span><span class="s3">)</span>
+													<span class="s3">)</span>
+														<span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">sourceMapString</span><span class="s3">)</span>
+														<span class="s3">.</span><span class="s1">digest</span><span class="s3">(</span><span class="s2">&quot;hex&quot;</span><span class="s3">)</span>
+											<span class="s3">);</span>
+										<span class="s4">const </span><span class="s1">pathParams </span><span class="s3">= {</span>
+											<span class="s1">chunk</span><span class="s3">,</span>
+											<span class="s1">filename</span><span class="s3">: </span><span class="s1">options</span><span class="s3">.</span><span class="s1">fileContext</span>
+												<span class="s3">? </span><span class="s1">relative</span><span class="s3">(</span>
+														<span class="s1">outputFs</span><span class="s3">,</span>
+														<span class="s2">`/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">options</span><span class="s3">.</span><span class="s1">fileContext</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+														<span class="s2">`/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">}</span><span class="s2">`</span>
+													<span class="s3">)</span>
+												<span class="s3">: </span><span class="s1">filename</span><span class="s3">,</span>
+											<span class="s1">contentHash</span><span class="s3">: </span><span class="s1">sourceMapContentHash</span>
+										<span class="s3">};</span>
+										<span class="s4">const </span><span class="s3">{ </span><span class="s1">path</span><span class="s3">: </span><span class="s1">sourceMapFile</span><span class="s3">, </span><span class="s1">info</span><span class="s3">: </span><span class="s1">sourceMapInfo </span><span class="s3">} =</span>
+											<span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPathWithInfo</span><span class="s3">(</span>
+												<span class="s1">sourceMapFilename</span><span class="s3">,</span>
+												<span class="s1">pathParams</span>
+											<span class="s3">);</span>
+										<span class="s4">const </span><span class="s1">sourceMapUrl </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">publicPath</span>
+											<span class="s3">? </span><span class="s1">options</span><span class="s3">.</span><span class="s1">publicPath </span><span class="s3">+ </span><span class="s1">sourceMapFile</span>
+											<span class="s3">: </span><span class="s1">relative</span><span class="s3">(</span>
+													<span class="s1">outputFs</span><span class="s3">,</span>
+													<span class="s1">dirname</span><span class="s3">(</span><span class="s1">outputFs</span><span class="s3">, </span><span class="s2">`/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">file</span><span class="s3">}</span><span class="s2">`</span><span class="s3">),</span>
+													<span class="s2">`/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">sourceMapFile</span><span class="s3">}</span><span class="s2">`</span>
+												<span class="s3">);</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Source} */</span>
+										<span class="s4">let </span><span class="s1">asset </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">currentSourceMappingURLComment </span><span class="s3">!== </span><span class="s4">false</span><span class="s3">) {</span>
+											<span class="s0">// Add source map url to compilation asset, if currentSourceMappingURLComment is set</span>
+											<span class="s1">asset </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConcatSource</span><span class="s3">(</span>
+												<span class="s1">asset</span><span class="s3">,</span>
+												<span class="s1">compilation</span><span class="s3">.</span><span class="s1">getPath</span><span class="s3">(</span><span class="s1">currentSourceMappingURLComment</span><span class="s3">, {</span>
+													<span class="s1">url</span><span class="s3">: </span><span class="s1">sourceMapUrl</span><span class="s3">,</span>
+													<span class="s1">...pathParams</span>
+												<span class="s3">})</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s4">const </span><span class="s1">assetInfo </span><span class="s3">= {</span>
+											<span class="s1">related</span><span class="s3">: { </span><span class="s1">sourceMap</span><span class="s3">: </span><span class="s1">sourceMapFile </span><span class="s3">}</span>
+										<span class="s3">};</span>
+										<span class="s1">assets</span><span class="s3">[</span><span class="s1">file</span><span class="s3">] = </span><span class="s1">asset</span><span class="s3">;</span>
+										<span class="s1">assetsInfo</span><span class="s3">[</span><span class="s1">file</span><span class="s3">] = </span><span class="s1">assetInfo</span><span class="s3">;</span>
+										<span class="s1">compilation</span><span class="s3">.</span><span class="s1">updateAsset</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">asset</span><span class="s3">, </span><span class="s1">assetInfo</span><span class="s3">);</span>
+										<span class="s0">// Add source map file to compilation assets and chunk files</span>
+										<span class="s4">const </span><span class="s1">sourceMapAsset </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">sourceMapString</span><span class="s3">);</span>
+										<span class="s4">const </span><span class="s1">sourceMapAssetInfo </span><span class="s3">= {</span>
+											<span class="s1">...sourceMapInfo</span><span class="s3">,</span>
+											<span class="s1">development</span><span class="s3">: </span><span class="s4">true</span>
+										<span class="s3">};</span>
+										<span class="s1">assets</span><span class="s3">[</span><span class="s1">sourceMapFile</span><span class="s3">] = </span><span class="s1">sourceMapAsset</span><span class="s3">;</span>
+										<span class="s1">assetsInfo</span><span class="s3">[</span><span class="s1">sourceMapFile</span><span class="s3">] = </span><span class="s1">sourceMapAssetInfo</span><span class="s3">;</span>
+										<span class="s1">compilation</span><span class="s3">.</span><span class="s1">emitAsset</span><span class="s3">(</span>
+											<span class="s1">sourceMapFile</span><span class="s3">,</span>
+											<span class="s1">sourceMapAsset</span><span class="s3">,</span>
+											<span class="s1">sourceMapAssetInfo</span>
+										<span class="s3">);</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">chunk </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+											<span class="s1">chunk</span><span class="s3">.</span><span class="s1">auxiliaryFiles</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">sourceMapFile</span><span class="s3">);</span>
+									<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">currentSourceMappingURLComment </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+											<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+												<span class="s2">&quot;SourceMapDevToolPlugin: append can't be false when no filename is provided&quot;</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">currentSourceMappingURLComment </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+											<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+												<span class="s2">&quot;SourceMapDevToolPlugin: append can't be a function when no filename is provided&quot;</span>
+											<span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s5">/**</span>
+										 <span class="s5">* Add source map as data url to asset</span>
+										 <span class="s5">*/</span>
+										<span class="s4">const </span><span class="s1">asset </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConcatSource</span><span class="s3">(</span>
+											<span class="s4">new </span><span class="s1">RawSource</span><span class="s3">(</span><span class="s1">source</span><span class="s3">),</span>
+											<span class="s1">currentSourceMappingURLComment</span>
+												<span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span><span class="s1">MAP_URL_COMMENT_REGEXP</span><span class="s3">, () =&gt; </span><span class="s1">sourceMapString</span><span class="s3">)</span>
+												<span class="s3">.</span><span class="s1">replace</span><span class="s3">(</span>
+													<span class="s1">URL_COMMENT_REGEXP</span><span class="s3">,</span>
+													<span class="s3">() =&gt;</span>
+														<span class="s2">`data:application/json;charset=utf-8;base64,</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+															<span class="s1">sourceMapString</span><span class="s3">,</span>
+															<span class="s2">&quot;utf-8&quot;</span>
+														<span class="s3">).</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">&quot;base64&quot;</span><span class="s3">)}</span><span class="s2">`</span>
+												<span class="s3">)</span>
+										<span class="s3">);</span>
+										<span class="s1">assets</span><span class="s3">[</span><span class="s1">file</span><span class="s3">] = </span><span class="s1">asset</span><span class="s3">;</span>
+										<span class="s1">assetsInfo</span><span class="s3">[</span><span class="s1">file</span><span class="s3">] = </span><span class="s1">undefined</span><span class="s3">;</span>
+										<span class="s1">compilation</span><span class="s3">.</span><span class="s1">updateAsset</span><span class="s3">(</span><span class="s1">file</span><span class="s3">, </span><span class="s1">asset</span><span class="s3">);</span>
+									<span class="s3">}</span>
+
+									<span class="s1">task</span><span class="s3">.</span><span class="s1">cacheItem</span><span class="s3">.</span><span class="s1">store</span><span class="s3">({ </span><span class="s1">assets</span><span class="s3">, </span><span class="s1">assetsInfo </span><span class="s3">}, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+										<span class="s1">reportProgress</span><span class="s3">(</span>
+											<span class="s8">0.5 </span><span class="s3">+ (</span><span class="s8">0.5 </span><span class="s3">* ++</span><span class="s1">taskIndex</span><span class="s3">) / </span><span class="s1">tasks</span><span class="s3">.</span><span class="s1">length</span><span class="s3">,</span>
+											<span class="s1">task</span><span class="s3">.</span><span class="s1">file</span><span class="s3">,</span>
+											<span class="s2">&quot;attached SourceMap&quot;</span>
+										<span class="s3">);</span>
+
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+											<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">callback</span><span class="s3">();</span>
+									<span class="s3">});</span>
+								<span class="s3">},</span>
+								<span class="s1">err </span><span class="s3">=&gt; {</span>
+									<span class="s1">reportProgress</span><span class="s3">(</span><span class="s8">1</span><span class="s3">);</span>
+									<span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">SourceMapDevToolPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,325 @@
+<html>
+<head>
+<title>no-misleading-character-class.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #cf8e6d;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-misleading-character-class.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Toru Nagashima &lt;https://github.com/mysticatea&gt;</span>
+ <span class="s0">*/</span>
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">const </span><span class="s4">{ </span><span class="s2">CALL</span><span class="s4">, </span><span class="s2">CONSTRUCT</span><span class="s4">, </span><span class="s2">ReferenceTracker</span><span class="s4">, </span><span class="s2">getStringIfConstant </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint-community/eslint-utils&quot;</span><span class="s4">);</span>
+<span class="s5">const </span><span class="s4">{ </span><span class="s2">RegExpParser</span><span class="s4">, </span><span class="s2">visitRegExpAST </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint-community/regexpp&quot;</span><span class="s4">);</span>
+<span class="s5">const </span><span class="s4">{ </span><span class="s2">isCombiningCharacter</span><span class="s4">, </span><span class="s2">isEmojiModifier</span><span class="s4">, </span><span class="s2">isRegionalIndicatorSymbol</span><span class="s4">, </span><span class="s2">isSurrogatePair </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/unicode&quot;</span><span class="s4">);</span>
+<span class="s5">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils.js&quot;</span><span class="s4">);</span>
+<span class="s5">const </span><span class="s4">{ </span><span class="s2">isValidWithUnicodeFlag </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/regular-expressions&quot;</span><span class="s4">);</span>
+
+<span class="s6">//------------------------------------------------------------------------------</span>
+<span class="s6">// Helpers</span>
+<span class="s6">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{import('@eslint-community/regexpp').AST.Character} Character</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{import('@eslint-community/regexpp').AST.CharacterClassElement} CharacterClassElement</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Iterate character sequences of a given nodes.</span>
+ <span class="s0">*</span>
+ <span class="s0">* CharacterClassRange syntax can steal a part of character sequence,</span>
+ <span class="s0">* so this function reverts CharacterClassRange syntax and restore the sequence.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CharacterClassElement[]} nodes The node list to iterate character sequences.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{IterableIterator&lt;Character[]&gt;} The list of character sequences.</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s4">*</span><span class="s2">iterateCharacterSequence</span><span class="s4">(</span><span class="s2">nodes</span><span class="s4">) {</span>
+
+    <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{Character[]} */</span>
+    <span class="s5">let </span><span class="s2">seq </span><span class="s4">= [];</span>
+
+    <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">node of nodes</span><span class="s4">) {</span>
+        <span class="s5">switch </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+            <span class="s5">case </span><span class="s3">&quot;Character&quot;</span><span class="s4">:</span>
+                <span class="s2">seq</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s5">break</span><span class="s4">;</span>
+
+            <span class="s5">case </span><span class="s3">&quot;CharacterClassRange&quot;</span><span class="s4">:</span>
+                <span class="s2">seq</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">min</span><span class="s4">);</span>
+                <span class="s5">yield </span><span class="s2">seq</span><span class="s4">;</span>
+                <span class="s2">seq </span><span class="s4">= [</span><span class="s2">node</span><span class="s4">.</span><span class="s2">max</span><span class="s4">];</span>
+                <span class="s5">break</span><span class="s4">;</span>
+
+            <span class="s5">case </span><span class="s3">&quot;CharacterSet&quot;</span><span class="s4">:</span>
+            <span class="s5">case </span><span class="s3">&quot;CharacterClass&quot;</span><span class="s4">: </span><span class="s6">// [[]] nesting character class</span>
+            <span class="s5">case </span><span class="s3">&quot;ClassStringDisjunction&quot;</span><span class="s4">: </span><span class="s6">// \q{...}</span>
+            <span class="s5">case </span><span class="s3">&quot;ExpressionCharacterClass&quot;</span><span class="s4">: </span><span class="s6">// [A--B]</span>
+                <span class="s5">if </span><span class="s4">(</span><span class="s2">seq</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+                    <span class="s5">yield </span><span class="s2">seq</span><span class="s4">;</span>
+                    <span class="s2">seq </span><span class="s4">= [];</span>
+                <span class="s4">}</span>
+                <span class="s5">break</span><span class="s4">;</span>
+
+            <span class="s6">// no default</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s5">if </span><span class="s4">(</span><span class="s2">seq</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s5">yield </span><span class="s2">seq</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether the given character node is a Unicode code point escape or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Character} char the character node to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the character node is a Unicode code point escape.</span>
+ <span class="s0">*/</span>
+<span class="s5">function </span><span class="s2">isUnicodeCodePointEscape</span><span class="s4">(</span><span class="s2">char</span><span class="s4">) {</span>
+    <span class="s5">return </span><span class="s8">/^\\u\{[\da-f]+\}$/iu</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">char</span><span class="s4">.</span><span class="s2">raw</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Each function returns `true` if it detects that kind of problem.</span>
+ <span class="s0">* </span><span class="s1">@type </span><span class="s0">{Record&lt;string, (chars: Character[]) =&gt; boolean&gt;}</span>
+ <span class="s0">*/</span>
+<span class="s5">const </span><span class="s2">hasCharacterSequence </span><span class="s4">= {</span>
+    <span class="s2">surrogatePairWithoutUFlag</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">) {</span>
+        <span class="s5">return </span><span class="s2">chars</span><span class="s4">.</span><span class="s2">some</span><span class="s4">((</span><span class="s2">c</span><span class="s4">, </span><span class="s2">i</span><span class="s4">) =&gt; {</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">i </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s5">const </span><span class="s2">c1 </span><span class="s4">= </span><span class="s2">chars</span><span class="s4">[</span><span class="s2">i </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+
+            <span class="s5">return </span><span class="s4">(</span>
+                <span class="s2">isSurrogatePair</span><span class="s4">(</span><span class="s2">c1</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">c</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) &amp;&amp;</span>
+                <span class="s4">!</span><span class="s2">isUnicodeCodePointEscape</span><span class="s4">(</span><span class="s2">c1</span><span class="s4">) &amp;&amp;</span>
+                <span class="s4">!</span><span class="s2">isUnicodeCodePointEscape</span><span class="s4">(</span><span class="s2">c</span><span class="s4">)</span>
+            <span class="s4">);</span>
+        <span class="s4">});</span>
+    <span class="s4">},</span>
+
+    <span class="s2">surrogatePair</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">) {</span>
+        <span class="s5">return </span><span class="s2">chars</span><span class="s4">.</span><span class="s2">some</span><span class="s4">((</span><span class="s2">c</span><span class="s4">, </span><span class="s2">i</span><span class="s4">) =&gt; {</span>
+            <span class="s5">if </span><span class="s4">(</span><span class="s2">i </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+                <span class="s5">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s5">const </span><span class="s2">c1 </span><span class="s4">= </span><span class="s2">chars</span><span class="s4">[</span><span class="s2">i </span><span class="s4">- </span><span class="s7">1</span><span class="s4">];</span>
+
+            <span class="s5">return </span><span class="s4">(</span>
+                <span class="s2">isSurrogatePair</span><span class="s4">(</span><span class="s2">c1</span><span class="s4">.</span><span class="s2">value</span><span class="s4">, </span><span class="s2">c</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) &amp;&amp;</span>
+                <span class="s4">(</span>
+                    <span class="s2">isUnicodeCodePointEscape</span><span class="s4">(</span><span class="s2">c1</span><span class="s4">) ||</span>
+                    <span class="s2">isUnicodeCodePointEscape</span><span class="s4">(</span><span class="s2">c</span><span class="s4">)</span>
+                <span class="s4">)</span>
+            <span class="s4">);</span>
+        <span class="s4">});</span>
+    <span class="s4">},</span>
+
+    <span class="s2">combiningClass</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">) {</span>
+        <span class="s5">return </span><span class="s2">chars</span><span class="s4">.</span><span class="s2">some</span><span class="s4">((</span><span class="s2">c</span><span class="s4">, </span><span class="s2">i</span><span class="s4">) =&gt; (</span>
+            <span class="s2">i </span><span class="s4">!== </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">isCombiningCharacter</span><span class="s4">(</span><span class="s2">c</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) &amp;&amp;</span>
+            <span class="s4">!</span><span class="s2">isCombiningCharacter</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">[</span><span class="s2">i </span><span class="s4">- </span><span class="s7">1</span><span class="s4">].</span><span class="s2">value</span><span class="s4">)</span>
+        <span class="s4">));</span>
+    <span class="s4">},</span>
+
+    <span class="s2">emojiModifier</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">) {</span>
+        <span class="s5">return </span><span class="s2">chars</span><span class="s4">.</span><span class="s2">some</span><span class="s4">((</span><span class="s2">c</span><span class="s4">, </span><span class="s2">i</span><span class="s4">) =&gt; (</span>
+            <span class="s2">i </span><span class="s4">!== </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">isEmojiModifier</span><span class="s4">(</span><span class="s2">c</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) &amp;&amp;</span>
+            <span class="s4">!</span><span class="s2">isEmojiModifier</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">[</span><span class="s2">i </span><span class="s4">- </span><span class="s7">1</span><span class="s4">].</span><span class="s2">value</span><span class="s4">)</span>
+        <span class="s4">));</span>
+    <span class="s4">},</span>
+
+    <span class="s2">regionalIndicatorSymbol</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">) {</span>
+        <span class="s5">return </span><span class="s2">chars</span><span class="s4">.</span><span class="s2">some</span><span class="s4">((</span><span class="s2">c</span><span class="s4">, </span><span class="s2">i</span><span class="s4">) =&gt; (</span>
+            <span class="s2">i </span><span class="s4">!== </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">isRegionalIndicatorSymbol</span><span class="s4">(</span><span class="s2">c</span><span class="s4">.</span><span class="s2">value</span><span class="s4">) &amp;&amp;</span>
+            <span class="s2">isRegionalIndicatorSymbol</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">[</span><span class="s2">i </span><span class="s4">- </span><span class="s7">1</span><span class="s4">].</span><span class="s2">value</span><span class="s4">)</span>
+        <span class="s4">));</span>
+    <span class="s4">},</span>
+
+    <span class="s2">zwj</span><span class="s4">(</span><span class="s2">chars</span><span class="s4">) {</span>
+        <span class="s5">const </span><span class="s2">lastIndex </span><span class="s4">= </span><span class="s2">chars</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">;</span>
+
+        <span class="s5">return </span><span class="s2">chars</span><span class="s4">.</span><span class="s2">some</span><span class="s4">((</span><span class="s2">c</span><span class="s4">, </span><span class="s2">i</span><span class="s4">) =&gt; (</span>
+            <span class="s2">i </span><span class="s4">!== </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">i </span><span class="s4">!== </span><span class="s2">lastIndex </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">c</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s7">0x200d </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">chars</span><span class="s4">[</span><span class="s2">i </span><span class="s4">- </span><span class="s7">1</span><span class="s4">].</span><span class="s2">value </span><span class="s4">!== </span><span class="s7">0x200d </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">chars</span><span class="s4">[</span><span class="s2">i </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">].</span><span class="s2">value </span><span class="s4">!== </span><span class="s7">0x200d</span>
+        <span class="s4">));</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+
+<span class="s5">const </span><span class="s2">kinds </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">hasCharacterSequence</span><span class="s4">);</span>
+
+<span class="s6">//------------------------------------------------------------------------------</span>
+<span class="s6">// Rule Definition</span>
+<span class="s6">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;problem&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow characters which are made with multiple code points in character class syntax&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s5">true</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-misleading-character-class&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">hasSuggestions</span><span class="s4">: </span><span class="s5">true</span><span class="s4">,</span>
+
+        <span class="s2">schema</span><span class="s4">: [],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">surrogatePairWithoutUFlag</span><span class="s4">: </span><span class="s3">&quot;Unexpected surrogate pair in character class. Use 'u' flag.&quot;</span><span class="s4">,</span>
+            <span class="s2">surrogatePair</span><span class="s4">: </span><span class="s3">&quot;Unexpected surrogate pair in character class.&quot;</span><span class="s4">,</span>
+            <span class="s2">combiningClass</span><span class="s4">: </span><span class="s3">&quot;Unexpected combined character in character class.&quot;</span><span class="s4">,</span>
+            <span class="s2">emojiModifier</span><span class="s4">: </span><span class="s3">&quot;Unexpected modified Emoji in character class.&quot;</span><span class="s4">,</span>
+            <span class="s2">regionalIndicatorSymbol</span><span class="s4">: </span><span class="s3">&quot;Unexpected national flag in character class.&quot;</span><span class="s4">,</span>
+            <span class="s2">zwj</span><span class="s4">: </span><span class="s3">&quot;Unexpected joined character sequence in character class.&quot;</span><span class="s4">,</span>
+            <span class="s2">suggestUnicodeFlag</span><span class="s4">: </span><span class="s3">&quot;Add unicode 'u' flag to regex.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s5">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+        <span class="s5">const </span><span class="s2">parser </span><span class="s4">= </span><span class="s5">new </span><span class="s2">RegExpParser</span><span class="s4">();</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Verify a given regular expression.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Node} node The node to report.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} pattern The regular expression pattern to verify.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} flags The flags of the regular expression.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Function} unicodeFixer Fixer for missing &quot;u&quot; flag.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s5">function </span><span class="s2">verify</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">pattern</span><span class="s4">, </span><span class="s2">flags</span><span class="s4">, </span><span class="s2">unicodeFixer</span><span class="s4">) {</span>
+            <span class="s5">let </span><span class="s2">patternNode</span><span class="s4">;</span>
+
+            <span class="s5">try </span><span class="s4">{</span>
+                <span class="s2">patternNode </span><span class="s4">= </span><span class="s2">parser</span><span class="s4">.</span><span class="s2">parsePattern</span><span class="s4">(</span>
+                    <span class="s2">pattern</span><span class="s4">,</span>
+                    <span class="s7">0</span><span class="s4">,</span>
+                    <span class="s2">pattern</span><span class="s4">.</span><span class="s2">length</span><span class="s4">,</span>
+                    <span class="s4">{</span>
+                        <span class="s2">unicode</span><span class="s4">: </span><span class="s2">flags</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;u&quot;</span><span class="s4">),</span>
+                        <span class="s2">unicodeSets</span><span class="s4">: </span><span class="s2">flags</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;v&quot;</span><span class="s4">)</span>
+                    <span class="s4">}</span>
+                <span class="s4">);</span>
+            <span class="s4">} </span><span class="s5">catch </span><span class="s4">{</span>
+
+                <span class="s6">// Ignore regular expressions with syntax errors</span>
+                <span class="s5">return</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">const </span><span class="s2">foundKinds </span><span class="s4">= </span><span class="s5">new </span><span class="s2">Set</span><span class="s4">();</span>
+
+            <span class="s2">visitRegExpAST</span><span class="s4">(</span><span class="s2">patternNode</span><span class="s4">, {</span>
+                <span class="s2">onCharacterClassEnter</span><span class="s4">(</span><span class="s2">ccNode</span><span class="s4">) {</span>
+                    <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">chars of iterateCharacterSequence</span><span class="s4">(</span><span class="s2">ccNode</span><span class="s4">.</span><span class="s2">elements</span><span class="s4">)) {</span>
+                        <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">kind of kinds</span><span class="s4">) {</span>
+                            <span class="s5">if </span><span class="s4">(</span><span class="s2">hasCharacterSequence</span><span class="s4">[</span><span class="s2">kind</span><span class="s4">](</span><span class="s2">chars</span><span class="s4">)) {</span>
+                                <span class="s2">foundKinds</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">kind</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">});</span>
+
+            <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s2">kind of foundKinds</span><span class="s4">) {</span>
+                <span class="s5">let </span><span class="s2">suggest</span><span class="s4">;</span>
+
+                <span class="s5">if </span><span class="s4">(</span><span class="s2">kind </span><span class="s4">=== </span><span class="s3">&quot;surrogatePairWithoutUFlag&quot;</span><span class="s4">) {</span>
+                    <span class="s2">suggest </span><span class="s4">= [{</span>
+                        <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;suggestUnicodeFlag&quot;</span><span class="s4">,</span>
+                        <span class="s2">fix</span><span class="s4">: </span><span class="s2">unicodeFixer</span>
+                    <span class="s4">}];</span>
+                <span class="s4">}</span>
+
+                <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                    <span class="s2">node</span><span class="s4">,</span>
+                    <span class="s2">messageId</span><span class="s4">: </span><span class="s2">kind</span><span class="s4">,</span>
+                    <span class="s2">suggest</span>
+                <span class="s4">});</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s5">return </span><span class="s4">{</span>
+            <span class="s3">&quot;Literal[regex]&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s2">verify</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">regex</span><span class="s4">.</span><span class="s2">pattern</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">regex</span><span class="s4">.</span><span class="s2">flags</span><span class="s4">, </span><span class="s2">fixer </span><span class="s4">=&gt; {</span>
+                    <span class="s5">if </span><span class="s4">(!</span><span class="s2">isValidWithUnicodeFlag</span><span class="s4">(</span><span class="s2">context</span><span class="s4">.</span><span class="s2">languageOptions</span><span class="s4">.</span><span class="s2">ecmaVersion</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">regex</span><span class="s4">.</span><span class="s2">pattern</span><span class="s4">)) {</span>
+                        <span class="s5">return null</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+
+                    <span class="s5">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">insertTextAfter</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s3">&quot;u&quot;</span><span class="s4">);</span>
+                <span class="s4">});</span>
+            <span class="s4">},</span>
+            <span class="s3">&quot;Program&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s5">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s5">const </span><span class="s2">tracker </span><span class="s4">= </span><span class="s5">new </span><span class="s2">ReferenceTracker</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">);</span>
+
+                <span class="s6">/* 
+                 * Iterate calls of RegExp. 
+                 * E.g., `new RegExp()`, `RegExp()`, `new window.RegExp()`, 
+                 *       `const {RegExp: a} = window; new a()`, etc... 
+                 */</span>
+                <span class="s5">for </span><span class="s4">(</span><span class="s5">const </span><span class="s4">{ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">refNode </span><span class="s4">} </span><span class="s2">of tracker</span><span class="s4">.</span><span class="s2">iterateGlobalReferences</span><span class="s4">({</span>
+                    <span class="s2">RegExp</span><span class="s4">: { [</span><span class="s2">CALL</span><span class="s4">]: </span><span class="s5">true</span><span class="s4">, [</span><span class="s2">CONSTRUCT</span><span class="s4">]: </span><span class="s5">true </span><span class="s4">}</span>
+                <span class="s4">})) {</span>
+                    <span class="s5">const </span><span class="s4">[</span><span class="s2">patternNode</span><span class="s4">, </span><span class="s2">flagsNode</span><span class="s4">] = </span><span class="s2">refNode</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">;</span>
+                    <span class="s5">const </span><span class="s2">pattern </span><span class="s4">= </span><span class="s2">getStringIfConstant</span><span class="s4">(</span><span class="s2">patternNode</span><span class="s4">, </span><span class="s2">scope</span><span class="s4">);</span>
+                    <span class="s5">const </span><span class="s2">flags </span><span class="s4">= </span><span class="s2">getStringIfConstant</span><span class="s4">(</span><span class="s2">flagsNode</span><span class="s4">, </span><span class="s2">scope</span><span class="s4">);</span>
+
+                    <span class="s5">if </span><span class="s4">(</span><span class="s5">typeof </span><span class="s2">pattern </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">) {</span>
+                        <span class="s2">verify</span><span class="s4">(</span><span class="s2">refNode</span><span class="s4">, </span><span class="s2">pattern</span><span class="s4">, </span><span class="s2">flags </span><span class="s4">|| </span><span class="s3">&quot;&quot;</span><span class="s4">, </span><span class="s2">fixer </span><span class="s4">=&gt; {</span>
+
+                            <span class="s5">if </span><span class="s4">(!</span><span class="s2">isValidWithUnicodeFlag</span><span class="s4">(</span><span class="s2">context</span><span class="s4">.</span><span class="s2">languageOptions</span><span class="s4">.</span><span class="s2">ecmaVersion</span><span class="s4">, </span><span class="s2">pattern</span><span class="s4">)) {</span>
+                                <span class="s5">return null</span><span class="s4">;</span>
+                            <span class="s4">}</span>
+
+                            <span class="s5">if </span><span class="s4">(</span><span class="s2">refNode</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">1</span><span class="s4">) {</span>
+                                <span class="s5">const </span><span class="s2">penultimateToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getLastToken</span><span class="s4">(</span><span class="s2">refNode</span><span class="s4">, { </span><span class="s2">skip</span><span class="s4">: </span><span class="s7">1 </span><span class="s4">}); </span><span class="s6">// skip closing parenthesis</span>
+
+                                <span class="s5">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">insertTextAfter</span><span class="s4">(</span>
+                                    <span class="s2">penultimateToken</span><span class="s4">,</span>
+                                    <span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isCommaToken</span><span class="s4">(</span><span class="s2">penultimateToken</span><span class="s4">)</span>
+                                        <span class="s4">? </span><span class="s3">' &quot;u&quot;,'</span>
+                                        <span class="s4">: </span><span class="s3">', &quot;u&quot;'</span>
+                                <span class="s4">);</span>
+                            <span class="s4">}</span>
+
+                            <span class="s5">if </span><span class="s4">((</span><span class="s2">flagsNode</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Literal&quot; </span><span class="s4">&amp;&amp; </span><span class="s5">typeof </span><span class="s2">flagsNode</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">) || </span><span class="s2">flagsNode</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;TemplateLiteral&quot;</span><span class="s4">) {</span>
+                                <span class="s5">const </span><span class="s2">range </span><span class="s4">= [</span><span class="s2">flagsNode</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">], </span><span class="s2">flagsNode</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] - </span><span class="s7">1</span><span class="s4">];</span>
+
+                                <span class="s5">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">insertTextAfterRange</span><span class="s4">(</span><span class="s2">range</span><span class="s4">, </span><span class="s3">&quot;u&quot;</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+
+                            <span class="s5">return null</span><span class="s4">;</span>
+                        <span class="s4">});</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

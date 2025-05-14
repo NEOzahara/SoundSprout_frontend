@@ -1,0 +1,461 @@
+<html>
+<head>
+<title>xhr-utils.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #6aab73;}
+.s1 { color: #bcbec4;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #42c3d4;}
+.s5 { color: #2aacb8;}
+.s6 { color: #7a7e85;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+xhr-utils.js</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;use strict&quot;</span><span class="s1">;</span>
+<span class="s3">const </span><span class="s2">fs </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;fs&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">EventEmitter </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;events&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">URL </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;whatwg-url&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">parseDataURL </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;data-urls&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">DOMException </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;domexception/webidl2js-wrapper&quot;</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s2">ProgressEvent </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;../generated/ProgressEvent&quot;</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s2">agentFactory </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;../helpers/agent-factory&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">Request </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;../helpers/http-request&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s2">FormData </span><span class="s1">= </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;form-data&quot;</span><span class="s1">);</span>
+<span class="s3">const </span><span class="s1">{ </span><span class="s2">fireAnEvent </span><span class="s1">} = </span><span class="s2">require</span><span class="s1">(</span><span class="s0">&quot;../helpers/events&quot;</span><span class="s1">);</span>
+
+<span class="s3">const </span><span class="s2">headerListSeparatorRegexp </span><span class="s1">= </span><span class="s4">/,[ \t]*/</span><span class="s1">;</span>
+<span class="s3">const </span><span class="s2">simpleMethods </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">([</span><span class="s0">&quot;GET&quot;</span><span class="s1">, </span><span class="s0">&quot;HEAD&quot;</span><span class="s1">, </span><span class="s0">&quot;POST&quot;</span><span class="s1">]);</span>
+<span class="s3">const </span><span class="s2">simpleHeaders </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">([</span><span class="s0">&quot;accept&quot;</span><span class="s1">, </span><span class="s0">&quot;accept-language&quot;</span><span class="s1">, </span><span class="s0">&quot;content-language&quot;</span><span class="s1">, </span><span class="s0">&quot;content-type&quot;</span><span class="s1">]);</span>
+<span class="s3">const </span><span class="s2">preflightHeaders </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">([</span>
+  <span class="s0">&quot;access-control-expose-headers&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;access-control-allow-headers&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;access-control-allow-credentials&quot;</span><span class="s1">,</span>
+  <span class="s0">&quot;access-control-allow-origin&quot;</span>
+<span class="s1">]);</span>
+
+<span class="s3">const </span><span class="s2">READY_STATES </span><span class="s1">= </span><span class="s2">exports</span><span class="s1">.</span><span class="s2">READY_STATES </span><span class="s1">= </span><span class="s2">Object</span><span class="s1">.</span><span class="s2">freeze</span><span class="s1">({</span>
+  <span class="s2">UNSENT</span><span class="s1">: </span><span class="s5">0</span><span class="s1">,</span>
+  <span class="s2">OPENED</span><span class="s1">: </span><span class="s5">1</span><span class="s1">,</span>
+  <span class="s2">HEADERS_RECEIVED</span><span class="s1">: </span><span class="s5">2</span><span class="s1">,</span>
+  <span class="s2">LOADING</span><span class="s1">: </span><span class="s5">3</span><span class="s1">,</span>
+  <span class="s2">DONE</span><span class="s1">: </span><span class="s5">4</span>
+<span class="s1">});</span>
+
+<span class="s3">function </span><span class="s2">getRequestHeader</span><span class="s1">(</span><span class="s2">requestHeaders</span><span class="s1">, </span><span class="s2">header</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">lcHeader </span><span class="s1">= </span><span class="s2">header</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+  <span class="s3">const </span><span class="s2">keys </span><span class="s1">= </span><span class="s2">Object</span><span class="s1">.</span><span class="s2">keys</span><span class="s1">(</span><span class="s2">requestHeaders</span><span class="s1">);</span>
+  <span class="s3">let </span><span class="s2">n </span><span class="s1">= </span><span class="s2">keys</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+  <span class="s3">while </span><span class="s1">(</span><span class="s2">n</span><span class="s1">--) {</span>
+    <span class="s3">const </span><span class="s2">key </span><span class="s1">= </span><span class="s2">keys</span><span class="s1">[</span><span class="s2">n</span><span class="s1">];</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">key</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">() === </span><span class="s2">lcHeader</span><span class="s1">) {</span>
+      <span class="s3">return </span><span class="s2">requestHeaders</span><span class="s1">[</span><span class="s2">key</span><span class="s1">];</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+  <span class="s3">return null</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">updateRequestHeader</span><span class="s1">(</span><span class="s2">requestHeaders</span><span class="s1">, </span><span class="s2">header</span><span class="s1">, </span><span class="s2">newValue</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">lcHeader </span><span class="s1">= </span><span class="s2">header</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+  <span class="s3">const </span><span class="s2">keys </span><span class="s1">= </span><span class="s2">Object</span><span class="s1">.</span><span class="s2">keys</span><span class="s1">(</span><span class="s2">requestHeaders</span><span class="s1">);</span>
+  <span class="s3">let </span><span class="s2">n </span><span class="s1">= </span><span class="s2">keys</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+  <span class="s3">while </span><span class="s1">(</span><span class="s2">n</span><span class="s1">--) {</span>
+    <span class="s3">const </span><span class="s2">key </span><span class="s1">= </span><span class="s2">keys</span><span class="s1">[</span><span class="s2">n</span><span class="s1">];</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">key</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">() === </span><span class="s2">lcHeader</span><span class="s1">) {</span>
+      <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s2">key</span><span class="s1">] = </span><span class="s2">newValue</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">dispatchError</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">errMessage </span><span class="s1">= </span><span class="s2">xhr</span><span class="s1">.</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">error</span><span class="s1">;</span>
+  <span class="s2">requestErrorSteps</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">, </span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">DOMException</span><span class="s1">.</span><span class="s2">create</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">.</span><span class="s2">_globalObject</span><span class="s1">, [</span><span class="s2">errMessage</span><span class="s1">, </span><span class="s0">&quot;NetworkError&quot;</span><span class="s1">]));</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">.</span><span class="s2">_ownerDocument</span><span class="s1">) {</span>
+    <span class="s3">const </span><span class="s2">error </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Error</span><span class="s1">(</span><span class="s2">errMessage</span><span class="s1">);</span>
+    <span class="s2">error</span><span class="s1">.</span><span class="s2">type </span><span class="s1">= </span><span class="s0">&quot;XMLHttpRequest&quot;</span><span class="s1">; </span><span class="s6">// TODO this should become &quot;resource loading&quot; when XHR goes through resource loader</span>
+
+    <span class="s2">xhr</span><span class="s1">.</span><span class="s2">_ownerDocument</span><span class="s1">.</span><span class="s2">_defaultView</span><span class="s1">.</span><span class="s2">_virtualConsole</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;jsdomError&quot;</span><span class="s1">, </span><span class="s2">error</span><span class="s1">);</span>
+  <span class="s1">}</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">validCORSHeaders</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">, </span><span class="s2">response</span><span class="s1">, </span><span class="s2">flag</span><span class="s1">, </span><span class="s2">properties</span><span class="s1">, </span><span class="s2">origin</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s2">acaoStr </span><span class="s1">= </span><span class="s2">response</span><span class="s1">.</span><span class="s2">headers</span><span class="s1">[</span><span class="s0">&quot;access-control-allow-origin&quot;</span><span class="s1">];</span>
+  <span class="s3">const </span><span class="s2">acao </span><span class="s1">= </span><span class="s2">acaoStr </span><span class="s1">? </span><span class="s2">acaoStr</span><span class="s1">.</span><span class="s2">trim</span><span class="s1">() : </span><span class="s3">null</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">acao </span><span class="s1">!== </span><span class="s0">&quot;*&quot; </span><span class="s1">&amp;&amp; </span><span class="s2">acao </span><span class="s1">!== </span><span class="s2">origin</span><span class="s1">) {</span>
+    <span class="s2">properties</span><span class="s1">.</span><span class="s2">error </span><span class="s1">= </span><span class="s0">&quot;Cross origin &quot; </span><span class="s1">+ </span><span class="s2">origin </span><span class="s1">+ </span><span class="s0">&quot; forbidden&quot;</span><span class="s1">;</span>
+    <span class="s2">dispatchError</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">);</span>
+    <span class="s3">return false</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">const </span><span class="s2">acacStr </span><span class="s1">= </span><span class="s2">response</span><span class="s1">.</span><span class="s2">headers</span><span class="s1">[</span><span class="s0">&quot;access-control-allow-credentials&quot;</span><span class="s1">];</span>
+  <span class="s3">const </span><span class="s2">acac </span><span class="s1">= </span><span class="s2">acacStr </span><span class="s1">? </span><span class="s2">acacStr</span><span class="s1">.</span><span class="s2">trim</span><span class="s1">() : </span><span class="s3">null</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">withCredentials </span><span class="s1">&amp;&amp; </span><span class="s2">acac </span><span class="s1">!== </span><span class="s0">&quot;true&quot;</span><span class="s1">) {</span>
+    <span class="s2">properties</span><span class="s1">.</span><span class="s2">error </span><span class="s1">= </span><span class="s0">&quot;Credentials forbidden&quot;</span><span class="s1">;</span>
+    <span class="s2">dispatchError</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">);</span>
+    <span class="s3">return false</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">validCORSPreflightHeaders</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">, </span><span class="s2">response</span><span class="s1">, </span><span class="s2">flag</span><span class="s1">, </span><span class="s2">properties</span><span class="s1">) {</span>
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">validCORSHeaders</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">, </span><span class="s2">response</span><span class="s1">, </span><span class="s2">flag</span><span class="s1">, </span><span class="s2">properties</span><span class="s1">, </span><span class="s2">properties</span><span class="s1">.</span><span class="s2">origin</span><span class="s1">)) {</span>
+    <span class="s3">return false</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">const </span><span class="s2">acahStr </span><span class="s1">= </span><span class="s2">response</span><span class="s1">.</span><span class="s2">headers</span><span class="s1">[</span><span class="s0">&quot;access-control-allow-headers&quot;</span><span class="s1">];</span>
+  <span class="s3">const </span><span class="s2">acah </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Set</span><span class="s1">(</span><span class="s2">acahStr </span><span class="s1">? </span><span class="s2">acahStr</span><span class="s1">.</span><span class="s2">trim</span><span class="s1">().</span><span class="s2">toLowerCase</span><span class="s1">().</span><span class="s2">split</span><span class="s1">(</span><span class="s2">headerListSeparatorRegexp</span><span class="s1">) : []);</span>
+  <span class="s3">const </span><span class="s2">forbiddenHeaders </span><span class="s1">= </span><span class="s2">acah</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s0">&quot;*&quot;</span><span class="s1">) ?</span>
+  <span class="s1">[] :</span>
+  <span class="s2">Object</span><span class="s1">.</span><span class="s2">keys</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">).</span><span class="s2">filter</span><span class="s1">(</span><span class="s2">header </span><span class="s1">=&gt; {</span>
+    <span class="s3">const </span><span class="s2">lcHeader </span><span class="s1">= </span><span class="s2">header</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+    <span class="s3">return </span><span class="s1">!</span><span class="s2">simpleHeaders</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">lcHeader</span><span class="s1">) &amp;&amp; !</span><span class="s2">acah</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">lcHeader</span><span class="s1">);</span>
+  <span class="s1">});</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">forbiddenHeaders</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">) {</span>
+    <span class="s2">properties</span><span class="s1">.</span><span class="s2">error </span><span class="s1">= </span><span class="s0">&quot;Headers &quot; </span><span class="s1">+ </span><span class="s2">forbiddenHeaders </span><span class="s1">+ </span><span class="s0">&quot; forbidden&quot;</span><span class="s1">;</span>
+    <span class="s2">dispatchError</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">);</span>
+    <span class="s3">return false</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">return true</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">requestErrorSteps</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">, </span><span class="s2">event</span><span class="s1">, </span><span class="s2">exception</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s1">{ </span><span class="s2">flag</span><span class="s1">, </span><span class="s2">properties</span><span class="s1">, </span><span class="s2">upload </span><span class="s1">} = </span><span class="s2">xhr</span><span class="s1">;</span>
+
+  <span class="s2">xhr</span><span class="s1">.</span><span class="s2">readyState </span><span class="s1">= </span><span class="s2">READY_STATES</span><span class="s1">.</span><span class="s2">DONE</span><span class="s1">;</span>
+  <span class="s2">properties</span><span class="s1">.</span><span class="s2">send </span><span class="s1">= </span><span class="s3">false</span><span class="s1">;</span>
+
+  <span class="s2">setResponseToNetworkError</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">synchronous</span><span class="s1">) {</span>
+    <span class="s3">throw </span><span class="s2">exception</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s2">fireAnEvent</span><span class="s1">(</span><span class="s0">&quot;readystatechange&quot;</span><span class="s1">, </span><span class="s2">xhr</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(!</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">uploadComplete</span><span class="s1">) {</span>
+    <span class="s2">properties</span><span class="s1">.</span><span class="s2">uploadComplete </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">properties</span><span class="s1">.</span><span class="s2">uploadListener</span><span class="s1">) {</span>
+      <span class="s2">fireAnEvent</span><span class="s1">(</span><span class="s2">event</span><span class="s1">, </span><span class="s2">upload</span><span class="s1">, </span><span class="s2">ProgressEvent</span><span class="s1">, { </span><span class="s2">loaded</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">total</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">lengthComputable</span><span class="s1">: </span><span class="s3">false </span><span class="s1">});</span>
+      <span class="s2">fireAnEvent</span><span class="s1">(</span><span class="s0">&quot;loadend&quot;</span><span class="s1">, </span><span class="s2">upload</span><span class="s1">, </span><span class="s2">ProgressEvent</span><span class="s1">, { </span><span class="s2">loaded</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">total</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">lengthComputable</span><span class="s1">: </span><span class="s3">false </span><span class="s1">});</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s2">fireAnEvent</span><span class="s1">(</span><span class="s2">event</span><span class="s1">, </span><span class="s2">xhr</span><span class="s1">, </span><span class="s2">ProgressEvent</span><span class="s1">, { </span><span class="s2">loaded</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">total</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">lengthComputable</span><span class="s1">: </span><span class="s3">false </span><span class="s1">});</span>
+  <span class="s2">fireAnEvent</span><span class="s1">(</span><span class="s0">&quot;loadend&quot;</span><span class="s1">, </span><span class="s2">xhr</span><span class="s1">, </span><span class="s2">ProgressEvent</span><span class="s1">, { </span><span class="s2">loaded</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">total</span><span class="s1">: </span><span class="s5">0</span><span class="s1">, </span><span class="s2">lengthComputable</span><span class="s1">: </span><span class="s3">false </span><span class="s1">});</span>
+<span class="s1">}</span>
+
+<span class="s3">function </span><span class="s2">setResponseToNetworkError</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s1">{ </span><span class="s2">properties </span><span class="s1">} = </span><span class="s2">xhr</span><span class="s1">;</span>
+
+  <span class="s2">properties</span><span class="s1">.</span><span class="s2">responseBuffer </span><span class="s1">=</span>
+    <span class="s2">properties</span><span class="s1">.</span><span class="s2">responseCache </span><span class="s1">=</span>
+    <span class="s2">properties</span><span class="s1">.</span><span class="s2">responseTextCache </span><span class="s1">=</span>
+    <span class="s2">properties</span><span class="s1">.</span><span class="s2">responseXMLCache </span><span class="s1">= </span><span class="s3">null</span><span class="s1">;</span>
+
+  <span class="s2">properties</span><span class="s1">.</span><span class="s2">responseHeaders </span><span class="s1">= {};</span>
+  <span class="s2">xhr</span><span class="s1">.</span><span class="s2">status </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+  <span class="s2">xhr</span><span class="s1">.</span><span class="s2">statusText </span><span class="s1">= </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s6">// return a &quot;request&quot; client object or an event emitter matching the same behaviour for unsupported protocols</span>
+<span class="s6">// the callback should be called with a &quot;request&quot; response object or an event emitter matching the same behaviour too</span>
+<span class="s3">function </span><span class="s2">createClient</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">) {</span>
+  <span class="s3">const </span><span class="s1">{ </span><span class="s2">flag</span><span class="s1">, </span><span class="s2">properties </span><span class="s1">} = </span><span class="s2">xhr</span><span class="s1">;</span>
+  <span class="s3">const </span><span class="s2">urlObj </span><span class="s1">= </span><span class="s3">new </span><span class="s2">URL</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">uri</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">uri </span><span class="s1">= </span><span class="s2">urlObj</span><span class="s1">.</span><span class="s2">href</span><span class="s1">;</span>
+  <span class="s3">const </span><span class="s2">ucMethod </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">method</span><span class="s1">.</span><span class="s2">toUpperCase</span><span class="s1">();</span>
+
+  <span class="s3">const </span><span class="s1">{ </span><span class="s2">requestManager </span><span class="s1">} = </span><span class="s2">flag</span><span class="s1">;</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">urlObj</span><span class="s1">.</span><span class="s2">protocol </span><span class="s1">=== </span><span class="s0">&quot;file:&quot;</span><span class="s1">) {</span>
+    <span class="s3">const </span><span class="s2">response </span><span class="s1">= </span><span class="s3">new </span><span class="s2">EventEmitter</span><span class="s1">();</span>
+    <span class="s2">response</span><span class="s1">.</span><span class="s2">statusCode </span><span class="s1">= </span><span class="s5">200</span><span class="s1">;</span>
+    <span class="s2">response</span><span class="s1">.</span><span class="s2">rawHeaders </span><span class="s1">= [];</span>
+    <span class="s2">response</span><span class="s1">.</span><span class="s2">headers </span><span class="s1">= {};</span>
+    <span class="s3">const </span><span class="s2">filePath </span><span class="s1">= </span><span class="s2">urlObj</span><span class="s1">.</span><span class="s2">pathname</span>
+      <span class="s1">.</span><span class="s2">replace</span><span class="s1">(</span><span class="s4">/^file:\/\//</span><span class="s1">, </span><span class="s0">&quot;&quot;</span><span class="s1">)</span>
+      <span class="s1">.</span><span class="s2">replace</span><span class="s1">(</span><span class="s4">/^\/([a-z]):\//i</span><span class="s1">, </span><span class="s0">&quot;$1:/&quot;</span><span class="s1">)</span>
+      <span class="s1">.</span><span class="s2">replace</span><span class="s1">(</span><span class="s4">/%20/g</span><span class="s1">, </span><span class="s0">&quot; &quot;</span><span class="s1">);</span>
+
+    <span class="s3">const </span><span class="s2">client </span><span class="s1">= </span><span class="s3">new </span><span class="s2">EventEmitter</span><span class="s1">();</span>
+
+    <span class="s3">const </span><span class="s2">readableStream </span><span class="s1">= </span><span class="s2">fs</span><span class="s1">.</span><span class="s2">createReadStream</span><span class="s1">(</span><span class="s2">filePath</span><span class="s1">, { </span><span class="s2">encoding</span><span class="s1">: </span><span class="s3">null </span><span class="s1">});</span>
+
+    <span class="s2">readableStream</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;data&quot;</span><span class="s1">, </span><span class="s2">chunk </span><span class="s1">=&gt; {</span>
+      <span class="s2">response</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;data&quot;</span><span class="s1">, </span><span class="s2">chunk</span><span class="s1">);</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;data&quot;</span><span class="s1">, </span><span class="s2">chunk</span><span class="s1">);</span>
+    <span class="s1">});</span>
+
+    <span class="s2">readableStream</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">, () =&gt; {</span>
+      <span class="s2">response</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">);</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">);</span>
+    <span class="s1">});</span>
+
+    <span class="s2">readableStream</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err </span><span class="s1">=&gt; {</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err</span><span class="s1">);</span>
+    <span class="s1">});</span>
+
+    <span class="s2">client</span><span class="s1">.</span><span class="s2">abort </span><span class="s1">= </span><span class="s3">function </span><span class="s1">() {</span>
+      <span class="s2">readableStream</span><span class="s1">.</span><span class="s2">destroy</span><span class="s1">();</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;abort&quot;</span><span class="s1">);</span>
+    <span class="s1">};</span>
+
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">requestManager</span><span class="s1">) {</span>
+      <span class="s3">const </span><span class="s2">req </span><span class="s1">= {</span>
+        <span class="s2">abort</span><span class="s1">() {</span>
+          <span class="s2">properties</span><span class="s1">.</span><span class="s2">abortError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+          <span class="s2">xhr</span><span class="s1">.</span><span class="s2">abort</span><span class="s1">();</span>
+        <span class="s1">}</span>
+      <span class="s1">};</span>
+      <span class="s2">requestManager</span><span class="s1">.</span><span class="s2">add</span><span class="s1">(</span><span class="s2">req</span><span class="s1">);</span>
+      <span class="s3">const </span><span class="s2">rmReq </span><span class="s1">= </span><span class="s2">requestManager</span><span class="s1">.</span><span class="s2">remove</span><span class="s1">.</span><span class="s2">bind</span><span class="s1">(</span><span class="s2">requestManager</span><span class="s1">, </span><span class="s2">req</span><span class="s1">);</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;abort&quot;</span><span class="s1">, </span><span class="s2">rmReq</span><span class="s1">);</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">rmReq</span><span class="s1">);</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">, </span><span class="s2">rmReq</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s2">process</span><span class="s1">.</span><span class="s2">nextTick</span><span class="s1">(() =&gt; </span><span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;response&quot;</span><span class="s1">, </span><span class="s2">response</span><span class="s1">, </span><span class="s2">urlObj</span><span class="s1">.</span><span class="s2">href</span><span class="s1">));</span>
+
+    <span class="s3">return </span><span class="s2">client</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">urlObj</span><span class="s1">.</span><span class="s2">protocol </span><span class="s1">=== </span><span class="s0">&quot;data:&quot;</span><span class="s1">) {</span>
+    <span class="s3">const </span><span class="s2">response </span><span class="s1">= </span><span class="s3">new </span><span class="s2">EventEmitter</span><span class="s1">();</span>
+
+    <span class="s3">const </span><span class="s2">client </span><span class="s1">= </span><span class="s3">new </span><span class="s2">EventEmitter</span><span class="s1">();</span>
+
+    <span class="s3">let </span><span class="s2">buffer</span><span class="s1">;</span>
+    <span class="s3">try </span><span class="s1">{</span>
+      <span class="s3">const </span><span class="s2">parsed </span><span class="s1">= </span><span class="s2">parseDataURL</span><span class="s1">(</span><span class="s2">uri</span><span class="s1">);</span>
+      <span class="s3">const </span><span class="s2">contentType </span><span class="s1">= </span><span class="s2">parsed</span><span class="s1">.</span><span class="s2">mimeType</span><span class="s1">.</span><span class="s2">toString</span><span class="s1">();</span>
+      <span class="s2">buffer </span><span class="s1">= </span><span class="s2">parsed</span><span class="s1">.</span><span class="s2">body</span><span class="s1">;</span>
+      <span class="s2">response</span><span class="s1">.</span><span class="s2">statusCode </span><span class="s1">= </span><span class="s5">200</span><span class="s1">;</span>
+      <span class="s2">response</span><span class="s1">.</span><span class="s2">rawHeaders </span><span class="s1">= [</span><span class="s0">&quot;Content-Type&quot;</span><span class="s1">, </span><span class="s2">contentType</span><span class="s1">];</span>
+      <span class="s2">response</span><span class="s1">.</span><span class="s2">headers </span><span class="s1">= { </span><span class="s0">&quot;content-type&quot;</span><span class="s1">: </span><span class="s2">contentType </span><span class="s1">};</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">err</span><span class="s1">) {</span>
+      <span class="s2">process</span><span class="s1">.</span><span class="s2">nextTick</span><span class="s1">(() =&gt; </span><span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err</span><span class="s1">));</span>
+      <span class="s3">return </span><span class="s2">client</span><span class="s1">;</span>
+    <span class="s1">}</span>
+
+    <span class="s2">client</span><span class="s1">.</span><span class="s2">abort </span><span class="s1">= () =&gt; {</span>
+      <span class="s6">// do nothing</span>
+    <span class="s1">};</span>
+
+    <span class="s2">process</span><span class="s1">.</span><span class="s2">nextTick</span><span class="s1">(() =&gt; {</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;response&quot;</span><span class="s1">, </span><span class="s2">response</span><span class="s1">, </span><span class="s2">urlObj</span><span class="s1">.</span><span class="s2">href</span><span class="s1">);</span>
+      <span class="s2">process</span><span class="s1">.</span><span class="s2">nextTick</span><span class="s1">(() =&gt; {</span>
+        <span class="s2">response</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;data&quot;</span><span class="s1">, </span><span class="s2">buffer</span><span class="s1">);</span>
+        <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;data&quot;</span><span class="s1">, </span><span class="s2">buffer</span><span class="s1">);</span>
+        <span class="s2">response</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">);</span>
+        <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">);</span>
+      <span class="s1">});</span>
+    <span class="s1">});</span>
+
+    <span class="s3">return </span><span class="s2">client</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">const </span><span class="s2">agents </span><span class="s1">= </span><span class="s2">agentFactory</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">proxy</span><span class="s1">, </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">strictSSL</span><span class="s1">);</span>
+  <span class="s3">const </span><span class="s2">requestHeaders </span><span class="s1">= {};</span>
+
+  <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">header </span><span class="s3">in </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">) {</span>
+    <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s2">header</span><span class="s1">] = </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">[</span><span class="s2">header</span><span class="s1">];</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">getRequestHeader</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">, </span><span class="s0">&quot;referer&quot;</span><span class="s1">) === </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">requestHeaders</span><span class="s1">.</span><span class="s2">Referer </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">referrer</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">getRequestHeader</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">, </span><span class="s0">&quot;user-agent&quot;</span><span class="s1">) === </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s0">&quot;User-Agent&quot;</span><span class="s1">] = </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">userAgent</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">getRequestHeader</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">, </span><span class="s0">&quot;accept-language&quot;</span><span class="s1">) === </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s0">&quot;Accept-Language&quot;</span><span class="s1">] = </span><span class="s0">&quot;en&quot;</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">getRequestHeader</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">, </span><span class="s0">&quot;accept&quot;</span><span class="s1">) === </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">requestHeaders</span><span class="s1">.</span><span class="s2">Accept </span><span class="s1">= </span><span class="s0">&quot;*/*&quot;</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">crossOrigin </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">origin </span><span class="s1">!== </span><span class="s2">urlObj</span><span class="s1">.</span><span class="s2">origin</span><span class="s1">;</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">crossOrigin</span><span class="s1">) {</span>
+    <span class="s2">requestHeaders</span><span class="s1">.</span><span class="s2">Origin </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">origin</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s2">options </span><span class="s1">= { </span><span class="s2">rejectUnauthorized</span><span class="s1">: </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">strictSSL</span><span class="s1">, </span><span class="s2">agents</span><span class="s1">, </span><span class="s2">followRedirects</span><span class="s1">: </span><span class="s3">true </span><span class="s1">};</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">auth</span><span class="s1">) {</span>
+    <span class="s2">options</span><span class="s1">.</span><span class="s2">user </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">auth</span><span class="s1">.</span><span class="s2">user </span><span class="s1">|| </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+    <span class="s2">options</span><span class="s1">.</span><span class="s2">pass </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">auth</span><span class="s1">.</span><span class="s2">pass </span><span class="s1">|| </span><span class="s0">&quot;&quot;</span><span class="s1">;</span>
+  <span class="s1">}</span>
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">cookieJar </span><span class="s1">&amp;&amp; (!</span><span class="s2">crossOrigin </span><span class="s1">|| </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">withCredentials</span><span class="s1">)) {</span>
+    <span class="s2">options</span><span class="s1">.</span><span class="s2">cookieJar </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">cookieJar</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">const </span><span class="s1">{ </span><span class="s2">body </span><span class="s1">} = </span><span class="s2">flag</span><span class="s1">;</span>
+  <span class="s3">const </span><span class="s2">hasBody </span><span class="s1">= </span><span class="s2">body </span><span class="s1">!== </span><span class="s2">undefined </span><span class="s1">&amp;&amp;</span>
+                  <span class="s2">body </span><span class="s1">!== </span><span class="s3">null </span><span class="s1">&amp;&amp;</span>
+                  <span class="s2">body </span><span class="s1">!== </span><span class="s0">&quot;&quot; </span><span class="s1">&amp;&amp;</span>
+                  <span class="s1">!(</span><span class="s2">ucMethod </span><span class="s1">=== </span><span class="s0">&quot;HEAD&quot; </span><span class="s1">|| </span><span class="s2">ucMethod </span><span class="s1">=== </span><span class="s0">&quot;GET&quot;</span><span class="s1">);</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">hasBody </span><span class="s1">&amp;&amp; </span><span class="s2">getRequestHeader</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">, </span><span class="s0">&quot;content-type&quot;</span><span class="s1">) === </span><span class="s3">null</span><span class="s1">) {</span>
+    <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s0">&quot;Content-Type&quot;</span><span class="s1">] = </span><span class="s0">&quot;text/plain;charset=UTF-8&quot;</span><span class="s1">;</span>
+  <span class="s1">}</span>
+
+  <span class="s3">function </span><span class="s2">doRequest</span><span class="s1">() {</span>
+    <span class="s3">try </span><span class="s1">{</span>
+      <span class="s3">let </span><span class="s2">requestBody </span><span class="s1">= </span><span class="s2">body</span><span class="s1">;</span>
+      <span class="s3">let </span><span class="s2">len </span><span class="s1">= </span><span class="s5">0</span><span class="s1">;</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">hasBody</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">formData</span><span class="s1">) {</span>
+          <span class="s6">// TODO: implement https://html.spec.whatwg.org/#multipart-form-data</span>
+          <span class="s6">// directly instead of using an external library</span>
+          <span class="s2">requestBody </span><span class="s1">= </span><span class="s3">new </span><span class="s2">FormData</span><span class="s1">();</span>
+          <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">entry of body</span><span class="s1">) {</span>
+            <span class="s2">requestBody</span><span class="s1">.</span><span class="s2">append</span><span class="s1">(</span><span class="s2">entry</span><span class="s1">.</span><span class="s2">name</span><span class="s1">, </span><span class="s2">entry</span><span class="s1">.</span><span class="s2">value</span><span class="s1">, </span><span class="s2">entry</span><span class="s1">.</span><span class="s2">options</span><span class="s1">);</span>
+          <span class="s1">}</span>
+          <span class="s2">len </span><span class="s1">= </span><span class="s2">requestBody</span><span class="s1">.</span><span class="s2">getLengthSync</span><span class="s1">();</span>
+          <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s0">&quot;Content-Type&quot;</span><span class="s1">] = </span><span class="s0">`multipart/form-data; boundary=</span><span class="s2">$</span><span class="s1">{</span><span class="s2">requestBody</span><span class="s1">.</span><span class="s2">getBoundary</span><span class="s1">()}</span><span class="s0">`</span><span class="s1">;</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+          <span class="s3">if </span><span class="s1">(</span><span class="s3">typeof </span><span class="s2">body </span><span class="s1">=== </span><span class="s0">&quot;string&quot;</span><span class="s1">) {</span>
+            <span class="s2">len </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">byteLength</span><span class="s1">(</span><span class="s2">body</span><span class="s1">);</span>
+          <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+            <span class="s2">len </span><span class="s1">= </span><span class="s2">body</span><span class="s1">.</span><span class="s2">length</span><span class="s1">;</span>
+          <span class="s1">}</span>
+          <span class="s2">requestBody </span><span class="s1">= </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">isBuffer</span><span class="s1">(</span><span class="s2">requestBody</span><span class="s1">) ? </span><span class="s2">requestBody </span><span class="s1">: </span><span class="s2">Buffer</span><span class="s1">.</span><span class="s2">from</span><span class="s1">(</span><span class="s2">requestBody</span><span class="s1">);</span>
+        <span class="s1">}</span>
+        <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s0">&quot;Content-Length&quot;</span><span class="s1">] = </span><span class="s2">len</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s2">requestHeaders</span><span class="s1">[</span><span class="s0">&quot;Accept-Encoding&quot;</span><span class="s1">] = </span><span class="s0">&quot;gzip, deflate&quot;</span><span class="s1">;</span>
+      <span class="s3">const </span><span class="s2">requestClient </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Request</span><span class="s1">(</span><span class="s2">uri</span><span class="s1">, </span><span class="s2">options</span><span class="s1">, { </span><span class="s2">method</span><span class="s1">: </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">method</span><span class="s1">, </span><span class="s2">headers</span><span class="s1">: </span><span class="s2">requestHeaders </span><span class="s1">});</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">hasBody</span><span class="s1">) {</span>
+        <span class="s3">if </span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">formData</span><span class="s1">) {</span>
+          <span class="s2">requestBody</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err </span><span class="s1">=&gt; {</span>
+            <span class="s2">requestClient</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err</span><span class="s1">);</span>
+            <span class="s2">requestClient</span><span class="s1">.</span><span class="s2">abort</span><span class="s1">();</span>
+          <span class="s1">});</span>
+          <span class="s2">requestClient</span><span class="s1">.</span><span class="s2">pipeRequest</span><span class="s1">(</span><span class="s2">requestBody</span><span class="s1">);</span>
+        <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+          <span class="s2">requestClient</span><span class="s1">.</span><span class="s2">write</span><span class="s1">(</span><span class="s2">requestBody</span><span class="s1">);</span>
+        <span class="s1">}</span>
+      <span class="s1">}</span>
+      <span class="s3">return </span><span class="s2">requestClient</span><span class="s1">;</span>
+    <span class="s1">} </span><span class="s3">catch </span><span class="s1">(</span><span class="s2">e</span><span class="s1">) {</span>
+      <span class="s3">const </span><span class="s2">eventEmitterclient </span><span class="s1">= </span><span class="s3">new </span><span class="s2">EventEmitter</span><span class="s1">();</span>
+      <span class="s2">process</span><span class="s1">.</span><span class="s2">nextTick</span><span class="s1">(() =&gt; </span><span class="s2">eventEmitterclient</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">e</span><span class="s1">));</span>
+      <span class="s2">eventEmitterclient</span><span class="s1">.</span><span class="s2">end </span><span class="s1">= () =&gt; {};</span>
+      <span class="s3">return </span><span class="s2">eventEmitterclient</span><span class="s1">;</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+
+  <span class="s3">let </span><span class="s2">client</span><span class="s1">;</span>
+
+  <span class="s3">const </span><span class="s2">nonSimpleHeaders </span><span class="s1">= </span><span class="s2">Object</span><span class="s1">.</span><span class="s2">keys</span><span class="s1">(</span><span class="s2">flag</span><span class="s1">.</span><span class="s2">requestHeaders</span><span class="s1">)</span>
+    <span class="s1">.</span><span class="s2">filter</span><span class="s1">(</span><span class="s2">header </span><span class="s1">=&gt; !</span><span class="s2">simpleHeaders</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">header</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">()));</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">crossOrigin </span><span class="s1">&amp;&amp; (!</span><span class="s2">simpleMethods</span><span class="s1">.</span><span class="s2">has</span><span class="s1">(</span><span class="s2">ucMethod</span><span class="s1">) || </span><span class="s2">nonSimpleHeaders</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">0 </span><span class="s1">|| </span><span class="s2">properties</span><span class="s1">.</span><span class="s2">uploadListener</span><span class="s1">)) {</span>
+    <span class="s2">client </span><span class="s1">= </span><span class="s3">new </span><span class="s2">EventEmitter</span><span class="s1">();</span>
+
+    <span class="s3">const </span><span class="s2">preflightRequestHeaders </span><span class="s1">= {};</span>
+    <span class="s3">for </span><span class="s1">(</span><span class="s3">const </span><span class="s2">header </span><span class="s3">in </span><span class="s2">requestHeaders</span><span class="s1">) {</span>
+      <span class="s6">// the only existing request headers the cors spec allows on the preflight request are Origin and Referer</span>
+      <span class="s3">const </span><span class="s2">lcHeader </span><span class="s1">= </span><span class="s2">header</span><span class="s1">.</span><span class="s2">toLowerCase</span><span class="s1">();</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">lcHeader </span><span class="s1">=== </span><span class="s0">&quot;origin&quot; </span><span class="s1">|| </span><span class="s2">lcHeader </span><span class="s1">=== </span><span class="s0">&quot;referer&quot;</span><span class="s1">) {</span>
+        <span class="s2">preflightRequestHeaders</span><span class="s1">[</span><span class="s2">header</span><span class="s1">] = </span><span class="s2">requestHeaders</span><span class="s1">[</span><span class="s2">header</span><span class="s1">];</span>
+      <span class="s1">}</span>
+    <span class="s1">}</span>
+
+    <span class="s2">preflightRequestHeaders</span><span class="s1">[</span><span class="s0">&quot;Access-Control-Request-Method&quot;</span><span class="s1">] = </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">method</span><span class="s1">;</span>
+    <span class="s3">if </span><span class="s1">(</span><span class="s2">nonSimpleHeaders</span><span class="s1">.</span><span class="s2">length </span><span class="s1">&gt; </span><span class="s5">0</span><span class="s1">) {</span>
+      <span class="s2">preflightRequestHeaders</span><span class="s1">[</span><span class="s0">&quot;Access-Control-Request-Headers&quot;</span><span class="s1">] = </span><span class="s2">nonSimpleHeaders</span><span class="s1">.</span><span class="s2">join</span><span class="s1">(</span><span class="s0">&quot;, &quot;</span><span class="s1">);</span>
+    <span class="s1">}</span>
+
+    <span class="s2">preflightRequestHeaders</span><span class="s1">[</span><span class="s0">&quot;User-Agent&quot;</span><span class="s1">] = </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">userAgent</span><span class="s1">;</span>
+
+    <span class="s2">flag</span><span class="s1">.</span><span class="s2">preflight </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+
+    <span class="s3">const </span><span class="s2">rejectUnauthorized </span><span class="s1">= </span><span class="s2">flag</span><span class="s1">.</span><span class="s2">strictSSL</span><span class="s1">;</span>
+    <span class="s3">const </span><span class="s2">preflightClient </span><span class="s1">= </span><span class="s3">new </span><span class="s2">Request</span><span class="s1">(</span>
+      <span class="s2">uri</span><span class="s1">,</span>
+      <span class="s1">{ </span><span class="s2">agents</span><span class="s1">, </span><span class="s2">followRedirects</span><span class="s1">: </span><span class="s3">false </span><span class="s1">},</span>
+      <span class="s1">{ </span><span class="s2">method</span><span class="s1">: </span><span class="s0">&quot;OPTIONS&quot;</span><span class="s1">, </span><span class="s2">headers</span><span class="s1">: </span><span class="s2">preflightRequestHeaders</span><span class="s1">, </span><span class="s2">rejectUnauthorized </span><span class="s1">}</span>
+    <span class="s1">);</span>
+
+    <span class="s2">preflightClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;response&quot;</span><span class="s1">, </span><span class="s2">resp </span><span class="s1">=&gt; {</span>
+      <span class="s6">// don't send the real request if the preflight request returned an error</span>
+      <span class="s3">if </span><span class="s1">(</span><span class="s2">resp</span><span class="s1">.</span><span class="s2">statusCode </span><span class="s1">&lt; </span><span class="s5">200 </span><span class="s1">|| </span><span class="s2">resp</span><span class="s1">.</span><span class="s2">statusCode </span><span class="s1">&gt; </span><span class="s5">299</span><span class="s1">) {</span>
+        <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s3">new </span><span class="s2">Error</span><span class="s1">(</span><span class="s0">&quot;Response for preflight has invalid HTTP status code &quot; </span><span class="s1">+ </span><span class="s2">resp</span><span class="s1">.</span><span class="s2">statusCode</span><span class="s1">));</span>
+        <span class="s3">return</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s6">// don't send the real request if we aren't allowed to use the headers</span>
+      <span class="s3">if </span><span class="s1">(!</span><span class="s2">validCORSPreflightHeaders</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">, </span><span class="s2">resp</span><span class="s1">, </span><span class="s2">flag</span><span class="s1">, </span><span class="s2">properties</span><span class="s1">)) {</span>
+        <span class="s2">setResponseToNetworkError</span><span class="s1">(</span><span class="s2">xhr</span><span class="s1">);</span>
+        <span class="s3">return</span><span class="s1">;</span>
+      <span class="s1">}</span>
+      <span class="s6">// Set request gzip option right before headers are set</span>
+      <span class="s3">const </span><span class="s2">realClient </span><span class="s1">= </span><span class="s2">doRequest</span><span class="s1">();</span>
+      <span class="s2">realClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;response&quot;</span><span class="s1">, (</span><span class="s2">...args</span><span class="s1">) =&gt; </span><span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;response&quot;</span><span class="s1">, </span><span class="s2">...args</span><span class="s1">));</span>
+      <span class="s2">realClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;data&quot;</span><span class="s1">, </span><span class="s2">chunk </span><span class="s1">=&gt; </span><span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;data&quot;</span><span class="s1">, </span><span class="s2">chunk</span><span class="s1">));</span>
+      <span class="s2">realClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">, () =&gt; </span><span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">));</span>
+      <span class="s2">realClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;abort&quot;</span><span class="s1">, () =&gt; </span><span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;abort&quot;</span><span class="s1">));</span>
+      <span class="s2">realClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;request&quot;</span><span class="s1">, </span><span class="s2">req </span><span class="s1">=&gt; {</span>
+        <span class="s2">client</span><span class="s1">.</span><span class="s2">headers </span><span class="s1">= </span><span class="s2">realClient</span><span class="s1">.</span><span class="s2">headers</span><span class="s1">;</span>
+        <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;request&quot;</span><span class="s1">, </span><span class="s2">req</span><span class="s1">);</span>
+      <span class="s1">});</span>
+      <span class="s2">realClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;redirect&quot;</span><span class="s1">, (</span><span class="s2">...args</span><span class="s1">) =&gt; {</span>
+        <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;redirect&quot;</span><span class="s1">, </span><span class="s2">...args</span><span class="s1">);</span>
+      <span class="s1">});</span>
+      <span class="s2">realClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err </span><span class="s1">=&gt; {</span>
+        <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err</span><span class="s1">);</span>
+      <span class="s1">});</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">abort </span><span class="s1">= () =&gt; {</span>
+        <span class="s2">realClient</span><span class="s1">.</span><span class="s2">abort</span><span class="s1">();</span>
+      <span class="s1">};</span>
+      <span class="s2">setImmediate</span><span class="s1">(() =&gt; </span><span class="s2">realClient</span><span class="s1">.</span><span class="s2">end</span><span class="s1">());</span>
+    <span class="s1">});</span>
+
+    <span class="s2">preflightClient</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err </span><span class="s1">=&gt; {</span>
+      <span class="s2">client</span><span class="s1">.</span><span class="s2">emit</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">err</span><span class="s1">);</span>
+    <span class="s1">});</span>
+
+    <span class="s2">client</span><span class="s1">.</span><span class="s2">abort </span><span class="s1">= () =&gt; {</span>
+      <span class="s2">preflightClient</span><span class="s1">.</span><span class="s2">abort</span><span class="s1">();</span>
+    <span class="s1">};</span>
+    <span class="s2">setImmediate</span><span class="s1">(() =&gt; </span><span class="s2">preflightClient</span><span class="s1">.</span><span class="s2">end</span><span class="s1">());</span>
+  <span class="s1">} </span><span class="s3">else </span><span class="s1">{</span>
+    <span class="s2">client </span><span class="s1">= </span><span class="s2">doRequest</span><span class="s1">();</span>
+    <span class="s2">setImmediate</span><span class="s1">(() =&gt; </span><span class="s2">client</span><span class="s1">.</span><span class="s2">end</span><span class="s1">());</span>
+  <span class="s1">}</span>
+
+  <span class="s3">if </span><span class="s1">(</span><span class="s2">requestManager</span><span class="s1">) {</span>
+    <span class="s3">const </span><span class="s2">req </span><span class="s1">= {</span>
+      <span class="s2">abort</span><span class="s1">() {</span>
+        <span class="s2">properties</span><span class="s1">.</span><span class="s2">abortError </span><span class="s1">= </span><span class="s3">true</span><span class="s1">;</span>
+        <span class="s2">xhr</span><span class="s1">.</span><span class="s2">abort</span><span class="s1">();</span>
+      <span class="s1">}</span>
+    <span class="s1">};</span>
+    <span class="s2">requestManager</span><span class="s1">.</span><span class="s2">add</span><span class="s1">(</span><span class="s2">req</span><span class="s1">);</span>
+    <span class="s3">const </span><span class="s2">rmReq </span><span class="s1">= </span><span class="s2">requestManager</span><span class="s1">.</span><span class="s2">remove</span><span class="s1">.</span><span class="s2">bind</span><span class="s1">(</span><span class="s2">requestManager</span><span class="s1">, </span><span class="s2">req</span><span class="s1">);</span>
+    <span class="s2">client</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;abort&quot;</span><span class="s1">, </span><span class="s2">rmReq</span><span class="s1">);</span>
+    <span class="s2">client</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;error&quot;</span><span class="s1">, </span><span class="s2">rmReq</span><span class="s1">);</span>
+    <span class="s2">client</span><span class="s1">.</span><span class="s2">on</span><span class="s1">(</span><span class="s0">&quot;end&quot;</span><span class="s1">, </span><span class="s2">rmReq</span><span class="s1">);</span>
+  <span class="s1">}</span>
+  <span class="s3">return </span><span class="s2">client</span><span class="s1">;</span>
+<span class="s1">}</span>
+
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">headerListSeparatorRegexp </span><span class="s1">= </span><span class="s2">headerListSeparatorRegexp</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">simpleHeaders </span><span class="s1">= </span><span class="s2">simpleHeaders</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">preflightHeaders </span><span class="s1">= </span><span class="s2">preflightHeaders</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">getRequestHeader </span><span class="s1">= </span><span class="s2">getRequestHeader</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">updateRequestHeader </span><span class="s1">= </span><span class="s2">updateRequestHeader</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">dispatchError </span><span class="s1">= </span><span class="s2">dispatchError</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">validCORSHeaders </span><span class="s1">= </span><span class="s2">validCORSHeaders</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">requestErrorSteps </span><span class="s1">= </span><span class="s2">requestErrorSteps</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">setResponseToNetworkError </span><span class="s1">= </span><span class="s2">setResponseToNetworkError</span><span class="s1">;</span>
+<span class="s2">exports</span><span class="s1">.</span><span class="s2">createClient </span><span class="s1">= </span><span class="s2">createClient</span><span class="s1">;</span>
+</pre>
+</body>
+</html>

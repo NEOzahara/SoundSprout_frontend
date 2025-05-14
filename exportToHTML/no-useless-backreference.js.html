@@ -1,0 +1,218 @@
+<html>
+<head>
+<title>no-useless-backreference.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-useless-backreference.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to disallow useless backreferences in regular expressions</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Milos Djermanovic</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">CALL</span><span class="s4">, </span><span class="s2">CONSTRUCT</span><span class="s4">, </span><span class="s2">ReferenceTracker</span><span class="s4">, </span><span class="s2">getStringIfConstant </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint-community/eslint-utils&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">RegExpParser</span><span class="s4">, </span><span class="s2">visitRegExpAST </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint-community/regexpp&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">parser </span><span class="s4">= </span><span class="s6">new </span><span class="s2">RegExpParser</span><span class="s4">();</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Finds the path from the given `regexpp` AST node to the root node.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{regexpp.Node} node Node.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{regexpp.Node[]} Array that starts with the given node and ends with the root node.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getPathToRoot</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">path </span><span class="s4">= [];</span>
+    <span class="s6">let </span><span class="s2">current </span><span class="s4">= </span><span class="s2">node</span><span class="s4">;</span>
+
+    <span class="s6">do </span><span class="s4">{</span>
+        <span class="s2">path</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">current</span><span class="s4">);</span>
+        <span class="s2">current </span><span class="s4">= </span><span class="s2">current</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+    <span class="s4">} </span><span class="s6">while </span><span class="s4">(</span><span class="s2">current</span><span class="s4">);</span>
+
+    <span class="s6">return </span><span class="s2">path</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines whether the given `regexpp` AST node is a lookaround node.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{regexpp.Node} node Node.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if it is a lookaround node.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isLookaround</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Assertion&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">kind </span><span class="s4">=== </span><span class="s3">&quot;lookahead&quot; </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">kind </span><span class="s4">=== </span><span class="s3">&quot;lookbehind&quot;</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines whether the given `regexpp` AST node is a negative lookaround node.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{regexpp.Node} node Node.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if it is a negative lookaround node.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isNegativeLookaround</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">isLookaround</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) &amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">negate</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;problem&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow useless backreferences in regular expressions&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-useless-backreference&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">nested</span><span class="s4">: </span><span class="s3">&quot;Backreference '{{ bref }}' will be ignored. It references group '{{ group }}' from within that group.&quot;</span><span class="s4">,</span>
+            <span class="s2">forward</span><span class="s4">: </span><span class="s3">&quot;Backreference '{{ bref }}' will be ignored. It references group '{{ group }}' which appears later in the pattern.&quot;</span><span class="s4">,</span>
+            <span class="s2">backward</span><span class="s4">: </span><span class="s3">&quot;Backreference '{{ bref }}' will be ignored. It references group '{{ group }}' which appears before in the same lookbehind.&quot;</span><span class="s4">,</span>
+            <span class="s2">disjunctive</span><span class="s4">: </span><span class="s3">&quot;Backreference '{{ bref }}' will be ignored. It references group '{{ group }}' which is in another alternative.&quot;</span><span class="s4">,</span>
+            <span class="s2">intoNegativeLookaround</span><span class="s4">: </span><span class="s3">&quot;Backreference '{{ bref }}' will be ignored. It references group '{{ group }}' which is in a negative lookaround.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks and reports useless backreferences in the given regular expression.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node Node that represents regular expression. A regex literal or RegExp constructor call.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} pattern Regular expression pattern.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} flags Regular expression flags.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">checkRegex</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">pattern</span><span class="s4">, </span><span class="s2">flags</span><span class="s4">) {</span>
+            <span class="s6">let </span><span class="s2">regExpAST</span><span class="s4">;</span>
+
+            <span class="s6">try </span><span class="s4">{</span>
+                <span class="s2">regExpAST </span><span class="s4">= </span><span class="s2">parser</span><span class="s4">.</span><span class="s2">parsePattern</span><span class="s4">(</span><span class="s2">pattern</span><span class="s4">, </span><span class="s7">0</span><span class="s4">, </span><span class="s2">pattern</span><span class="s4">.</span><span class="s2">length</span><span class="s4">, { </span><span class="s2">unicode</span><span class="s4">: </span><span class="s2">flags</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;u&quot;</span><span class="s4">), </span><span class="s2">unicodeSets</span><span class="s4">: </span><span class="s2">flags</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;v&quot;</span><span class="s4">) });</span>
+            <span class="s4">} </span><span class="s6">catch </span><span class="s4">{</span>
+
+                <span class="s5">// Ignore regular expressions with syntax errors</span>
+                <span class="s6">return</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s2">visitRegExpAST</span><span class="s4">(</span><span class="s2">regExpAST</span><span class="s4">, {</span>
+                <span class="s2">onBackreferenceEnter</span><span class="s4">(</span><span class="s2">bref</span><span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">group </span><span class="s4">= </span><span class="s2">bref</span><span class="s4">.</span><span class="s2">resolved</span><span class="s4">,</span>
+                        <span class="s2">brefPath </span><span class="s4">= </span><span class="s2">getPathToRoot</span><span class="s4">(</span><span class="s2">bref</span><span class="s4">),</span>
+                        <span class="s2">groupPath </span><span class="s4">= </span><span class="s2">getPathToRoot</span><span class="s4">(</span><span class="s2">group</span><span class="s4">);</span>
+                    <span class="s6">let </span><span class="s2">messageId </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">brefPath</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">group</span><span class="s4">)) {</span>
+
+                        <span class="s5">// group is bref's ancestor =&gt; bref is nested ('nested reference') =&gt; group hasn't matched yet when bref starts to match.</span>
+                        <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;nested&quot;</span><span class="s4">;</span>
+                    <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+
+                        <span class="s5">// Start from the root to find the lowest common ancestor.</span>
+                        <span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s2">brefPath</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">,</span>
+                            <span class="s2">j </span><span class="s4">= </span><span class="s2">groupPath</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">;</span>
+
+                        <span class="s6">do </span><span class="s4">{</span>
+                            <span class="s2">i</span><span class="s4">--;</span>
+                            <span class="s2">j</span><span class="s4">--;</span>
+                        <span class="s4">} </span><span class="s6">while </span><span class="s4">(</span><span class="s2">brefPath</span><span class="s4">[</span><span class="s2">i</span><span class="s4">] === </span><span class="s2">groupPath</span><span class="s4">[</span><span class="s2">j</span><span class="s4">]);</span>
+
+                        <span class="s6">const </span><span class="s2">indexOfLowestCommonAncestor </span><span class="s4">= </span><span class="s2">j </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">,</span>
+                            <span class="s2">groupCut </span><span class="s4">= </span><span class="s2">groupPath</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s7">0</span><span class="s4">, </span><span class="s2">indexOfLowestCommonAncestor</span><span class="s4">),</span>
+                            <span class="s2">commonPath </span><span class="s4">= </span><span class="s2">groupPath</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s2">indexOfLowestCommonAncestor</span><span class="s4">),</span>
+                            <span class="s2">lowestCommonLookaround </span><span class="s4">= </span><span class="s2">commonPath</span><span class="s4">.</span><span class="s2">find</span><span class="s4">(</span><span class="s2">isLookaround</span><span class="s4">),</span>
+                            <span class="s2">isMatchingBackward </span><span class="s4">= </span><span class="s2">lowestCommonLookaround </span><span class="s4">&amp;&amp; </span><span class="s2">lowestCommonLookaround</span><span class="s4">.</span><span class="s2">kind </span><span class="s4">=== </span><span class="s3">&quot;lookbehind&quot;</span><span class="s4">;</span>
+
+                        <span class="s6">if </span><span class="s4">(!</span><span class="s2">isMatchingBackward </span><span class="s4">&amp;&amp; </span><span class="s2">bref</span><span class="s4">.</span><span class="s2">end </span><span class="s4">&lt;= </span><span class="s2">group</span><span class="s4">.</span><span class="s2">start</span><span class="s4">) {</span>
+
+                            <span class="s5">// bref is left, group is right ('forward reference') =&gt; group hasn't matched yet when bref starts to match.</span>
+                            <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;forward&quot;</span><span class="s4">;</span>
+                        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">isMatchingBackward </span><span class="s4">&amp;&amp; </span><span class="s2">group</span><span class="s4">.</span><span class="s2">end </span><span class="s4">&lt;= </span><span class="s2">bref</span><span class="s4">.</span><span class="s2">start</span><span class="s4">) {</span>
+
+                            <span class="s5">// the opposite of the previous when the regex is matching backward in a lookbehind context.</span>
+                            <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;backward&quot;</span><span class="s4">;</span>
+                        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">groupCut</span><span class="s4">[</span><span class="s2">groupCut</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">].</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Alternative&quot;</span><span class="s4">) {</span>
+
+                            <span class="s5">// group's and bref's ancestor nodes below the lowest common ancestor are sibling alternatives =&gt; they're disjunctive.</span>
+                            <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;disjunctive&quot;</span><span class="s4">;</span>
+                        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">groupCut</span><span class="s4">.</span><span class="s2">some</span><span class="s4">(</span><span class="s2">isNegativeLookaround</span><span class="s4">)) {</span>
+
+                            <span class="s5">// group is in a negative lookaround which isn't bref's ancestor =&gt; group has already failed when bref starts to match.</span>
+                            <span class="s2">messageId </span><span class="s4">= </span><span class="s3">&quot;intoNegativeLookaround&quot;</span><span class="s4">;</span>
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">messageId</span><span class="s4">) {</span>
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                            <span class="s2">node</span><span class="s4">,</span>
+                            <span class="s2">messageId</span><span class="s4">,</span>
+                            <span class="s2">data</span><span class="s4">: {</span>
+                                <span class="s2">bref</span><span class="s4">: </span><span class="s2">bref</span><span class="s4">.</span><span class="s2">raw</span><span class="s4">,</span>
+                                <span class="s2">group</span><span class="s4">: </span><span class="s2">group</span><span class="s4">.</span><span class="s2">raw</span>
+                            <span class="s4">}</span>
+                        <span class="s4">});</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">});</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s3">&quot;Literal[regex]&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s4">{ </span><span class="s2">pattern</span><span class="s4">, </span><span class="s2">flags </span><span class="s4">} = </span><span class="s2">node</span><span class="s4">.</span><span class="s2">regex</span><span class="s4">;</span>
+
+                <span class="s2">checkRegex</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">pattern</span><span class="s4">, </span><span class="s2">flags</span><span class="s4">);</span>
+            <span class="s4">},</span>
+            <span class="s2">Program</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">scope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">),</span>
+                    <span class="s2">tracker </span><span class="s4">= </span><span class="s6">new </span><span class="s2">ReferenceTracker</span><span class="s4">(</span><span class="s2">scope</span><span class="s4">),</span>
+                    <span class="s2">traceMap </span><span class="s4">= {</span>
+                        <span class="s2">RegExp</span><span class="s4">: {</span>
+                            <span class="s4">[</span><span class="s2">CALL</span><span class="s4">]: </span><span class="s6">true</span><span class="s4">,</span>
+                            <span class="s4">[</span><span class="s2">CONSTRUCT</span><span class="s4">]: </span><span class="s6">true</span>
+                        <span class="s4">}</span>
+                    <span class="s4">};</span>
+
+                <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">{ </span><span class="s2">node</span><span class="s4">: </span><span class="s2">refNode </span><span class="s4">} </span><span class="s2">of tracker</span><span class="s4">.</span><span class="s2">iterateGlobalReferences</span><span class="s4">(</span><span class="s2">traceMap</span><span class="s4">)) {</span>
+                    <span class="s6">const </span><span class="s4">[</span><span class="s2">patternNode</span><span class="s4">, </span><span class="s2">flagsNode</span><span class="s4">] = </span><span class="s2">refNode</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">,</span>
+                        <span class="s2">pattern </span><span class="s4">= </span><span class="s2">getStringIfConstant</span><span class="s4">(</span><span class="s2">patternNode</span><span class="s4">, </span><span class="s2">scope</span><span class="s4">),</span>
+                        <span class="s2">flags </span><span class="s4">= </span><span class="s2">getStringIfConstant</span><span class="s4">(</span><span class="s2">flagsNode</span><span class="s4">, </span><span class="s2">scope</span><span class="s4">);</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">pattern </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">) {</span>
+                        <span class="s2">checkRegex</span><span class="s4">(</span><span class="s2">refNode</span><span class="s4">, </span><span class="s2">pattern</span><span class="s4">, </span><span class="s2">flags </span><span class="s4">|| </span><span class="s3">&quot;&quot;</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

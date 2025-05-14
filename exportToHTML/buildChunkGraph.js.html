@@ -1,0 +1,1378 @@
+<html>
+<head>
+<title>buildChunkGraph.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+buildChunkGraph.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">AsyncDependencyToInitialChunkError </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AsyncDependencyToInitialChunkError&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">connectChunkGroupParentAndChild </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./GraphHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleGraphConnection </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleGraphConnection&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">getEntryRuntime</span><span class="s3">, </span><span class="s1">mergeRuntime </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/runtime&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./AsyncDependenciesBlock&quot;)} AsyncDependenciesBlock */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ChunkGroup&quot;)} ChunkGroup */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;)} Compilation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./DependenciesBlock&quot;)} DependenciesBlock */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;)} Dependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;).DependencyLocation} DependencyLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Entrypoint&quot;)} Entrypoint */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleGraphConnection&quot;).ConnectionState} ConnectionState */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./logging/Logger&quot;).Logger} Logger */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} QueueItem</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} action</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{DependenciesBlock} block</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Module} module</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Chunk} chunk</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ChunkGroup} chunkGroup</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ChunkGroupInfo} chunkGroupInfo</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ChunkGroupInfo</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ChunkGroup} chunkGroup the chunk group</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{RuntimeSpec} runtime the runtimes</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} initialized is this chunk group initialized</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint | undefined} minAvailableModules current minimal set of modules available at this point</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint[]} availableModulesToBeMerged enqueued updates to the minimal set of available modules</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Set&lt;Module&gt;=} skippedItems modules that were skipped because module is already available in parent chunks (need to reconsider when minAvailableModules is shrinking)</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Set&lt;[Module, ModuleGraphConnection[]]&gt;=} skippedModuleConnections referenced modules that where skipped because they were not active in this runtime</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{bigint | undefined} resultingAvailableModules set of modules available including modules from this chunk group</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Set&lt;ChunkGroupInfo&gt; | undefined} children set of children chunk groups, that will be revisited when availableModules shrink</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Set&lt;ChunkGroupInfo&gt; | undefined} availableSources set of chunk groups that are the source for minAvailableModules</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Set&lt;ChunkGroupInfo&gt; | undefined} availableChildren set of chunk groups which depend on the this chunk group as availableSource</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} preOrderIndex next pre order index</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} postOrderIndex next post order index</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} chunkLoading has a chunk loading mechanism</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} asyncChunks create async chunks</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} BlockChunkGroupConnection</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ChunkGroupInfo} originChunkGroupInfo origin chunk group</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{ChunkGroup} chunkGroup referenced chunk group</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(Module | ConnectionState | ModuleGraphConnection)[]} BlockModulesInTuples */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(Module | ConnectionState | ModuleGraphConnection[])[]} BlockModulesInFlattenTuples */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;DependenciesBlock, BlockModulesInFlattenTuples&gt;} BlockModulesMap */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;Chunk, bigint&gt;} MaskByChunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Set&lt;DependenciesBlock&gt;} BlocksWithNestedBlocks */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;AsyncDependenciesBlock, BlockChunkGroupConnection[]&gt;} BlockConnections */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;ChunkGroup, ChunkGroupInfo&gt;} ChunkGroupInfoMap */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Set&lt;ChunkGroup&gt;} AllCreatedChunkGroups */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Map&lt;Entrypoint, Module[]&gt;} InputEntrypointsAndModules */</span>
+
+<span class="s4">const </span><span class="s1">ZERO_BIGINT </span><span class="s3">= </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s7">0</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ONE_BIGINT </span><span class="s3">= </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s7">1</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{bigint} mask The mask to test</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} ordinal The ordinal of the bit to test</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} If the ordinal-th bit is set in the mask</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">isOrdinalSetInMask </span><span class="s3">= (</span><span class="s1">mask</span><span class="s3">, </span><span class="s1">ordinal</span><span class="s3">) =&gt;</span>
+	<span class="s1">BigInt</span><span class="s3">.</span><span class="s1">asUintN</span><span class="s3">(</span><span class="s7">1</span><span class="s3">, </span><span class="s1">mask </span><span class="s3">&gt;&gt; </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s1">ordinal</span><span class="s3">)) !== </span><span class="s1">ZERO_BIGINT</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraphConnection[]} connections list of connections</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime for which runtime</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ConnectionState} connection state</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getActiveStateOfConnections </span><span class="s3">= (</span><span class="s1">connections</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) =&gt; {</span>
+	<span class="s4">let </span><span class="s1">merged </span><span class="s3">= </span><span class="s1">connections</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">getActiveState</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">merged </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) </span><span class="s4">return true</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">1</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">connections</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+		<span class="s4">const </span><span class="s1">c </span><span class="s3">= </span><span class="s1">connections</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+		<span class="s1">merged </span><span class="s3">= </span><span class="s1">ModuleGraphConnection</span><span class="s3">.</span><span class="s1">addConnectionStates</span><span class="s3">(</span>
+			<span class="s1">merged</span><span class="s3">,</span>
+			<span class="s1">c</span><span class="s3">.</span><span class="s1">getActiveState</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+		<span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">merged </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) </span><span class="s4">return true</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">merged</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime runtime</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{BlockModulesMap} blockModulesMap block modules map</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">extractBlockModules </span><span class="s3">= (</span><span class="s1">module</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">blockModulesMap</span><span class="s3">) =&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependenciesBlock | undefined} */</span>
+	<span class="s4">let </span><span class="s1">blockCache</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesInTuples | undefined} */</span>
+	<span class="s4">let </span><span class="s1">modules</span><span class="s3">;</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesInTuples[]} */</span>
+	<span class="s4">const </span><span class="s1">arrays </span><span class="s3">= [];</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependenciesBlock[]} */</span>
+	<span class="s4">const </span><span class="s1">queue </span><span class="s3">= [</span><span class="s1">module</span><span class="s3">];</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">block </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependenciesBlock} */ </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">());</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module[]} */</span>
+		<span class="s4">const </span><span class="s1">arr </span><span class="s3">= [];</span>
+		<span class="s1">arrays</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">arr</span><span class="s3">);</span>
+		<span class="s1">blockModulesMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s1">arr</span><span class="s3">);</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">b of block</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">) {</span>
+			<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of moduleGraph</span><span class="s3">.</span><span class="s1">getOutgoingConnections</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)) {</span>
+		<span class="s4">const </span><span class="s1">d </span><span class="s3">= </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">dependency</span><span class="s3">;</span>
+		<span class="s0">// We skip connections without dependency</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">d</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">m </span><span class="s3">= </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+		<span class="s0">// We skip connections without Module pointer</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">m</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s0">// We skip weak connections</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">weak</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">block </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getParentBlock</span><span class="s3">(</span><span class="s1">d</span><span class="s3">);</span>
+		<span class="s4">let </span><span class="s1">index </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getParentBlockIndex</span><span class="s3">(</span><span class="s1">d</span><span class="s3">);</span>
+
+		<span class="s0">// deprecated fallback</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">&lt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s1">index </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependenciesBlock} */ </span><span class="s3">(</span><span class="s1">block</span><span class="s3">).</span><span class="s1">dependencies</span><span class="s3">.</span><span class="s1">indexOf</span><span class="s3">(</span><span class="s1">d</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">blockCache </span><span class="s3">!== </span><span class="s1">block</span><span class="s3">) {</span>
+			<span class="s1">modules </span><span class="s3">=</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesInTuples} */</span>
+				<span class="s3">(</span>
+					<span class="s1">blockModulesMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+						<span class="s3">(</span><span class="s1">blockCache </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependenciesBlock} */ </span><span class="s3">(</span><span class="s1">block</span><span class="s3">))</span>
+					<span class="s3">)</span>
+				<span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">const </span><span class="s1">i </span><span class="s3">= </span><span class="s1">index </span><span class="s3">* </span><span class="s7">3</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesInTuples} */</span>
+		<span class="s3">(</span><span class="s1">modules</span><span class="s3">)[</span><span class="s1">i</span><span class="s3">] = </span><span class="s1">m</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesInTuples} */</span>
+		<span class="s3">(</span><span class="s1">modules</span><span class="s3">)[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">] = </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">getActiveState</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesInTuples} */</span>
+		<span class="s3">(</span><span class="s1">modules</span><span class="s3">)[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">2</span><span class="s3">] = </span><span class="s1">connection</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">modules of arrays</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">indexMap</span><span class="s3">;</span>
+		<span class="s4">let </span><span class="s1">length </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s1">outer</span><span class="s3">: </span><span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">j </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">j </span><span class="s3">&lt; </span><span class="s1">modules</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">j </span><span class="s3">+= </span><span class="s7">3</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">m </span><span class="s3">= </span><span class="s1">modules</span><span class="s3">[</span><span class="s1">j</span><span class="s3">];</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">m </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">state </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ConnectionState} */ </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">j </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">]);</span>
+			<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection} */ </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">j </span><span class="s3">+ </span><span class="s7">2</span><span class="s3">]);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">indexMap </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+				<span class="s4">for </span><span class="s3">(; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">length</span><span class="s3">; </span><span class="s1">i </span><span class="s3">+= </span><span class="s7">3</span><span class="s3">) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">i</span><span class="s3">] === </span><span class="s1">m</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">merged </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ConnectionState} */ </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">]);</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[]} */</span>
+						<span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{unknown} */ </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">2</span><span class="s3">])).</span><span class="s1">push</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">merged </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) </span><span class="s4">continue </span><span class="s1">outer</span><span class="s3">;</span>
+						<span class="s1">modules</span><span class="s3">[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">] = </span><span class="s1">ModuleGraphConnection</span><span class="s3">.</span><span class="s1">addConnectionStates</span><span class="s3">(</span>
+							<span class="s1">merged</span><span class="s3">,</span>
+							<span class="s1">state</span>
+						<span class="s3">);</span>
+						<span class="s4">continue </span><span class="s1">outer</span><span class="s3">;</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s1">modules</span><span class="s3">[</span><span class="s1">length</span><span class="s3">] = </span><span class="s1">m</span><span class="s3">;</span>
+				<span class="s1">length</span><span class="s3">++;</span>
+				<span class="s1">modules</span><span class="s3">[</span><span class="s1">length</span><span class="s3">] = </span><span class="s1">state</span><span class="s3">;</span>
+				<span class="s1">length</span><span class="s3">++;</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[]} */</span>
+				<span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{unknown} */ </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">length</span><span class="s3">])) = [</span><span class="s1">connection</span><span class="s3">];</span>
+				<span class="s1">length</span><span class="s3">++;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">30</span><span class="s3">) {</span>
+					<span class="s0">// To avoid worse case performance, we will use an index map for</span>
+					<span class="s0">// linear cost access, which allows to maintain O(n) complexity</span>
+					<span class="s0">// while keeping allocations down to a minimum</span>
+					<span class="s1">indexMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">length</span><span class="s3">; </span><span class="s1">i </span><span class="s3">+= </span><span class="s7">3</span><span class="s3">) {</span>
+						<span class="s1">indexMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">i</span><span class="s3">], </span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s4">const </span><span class="s1">idx </span><span class="s3">= </span><span class="s1">indexMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">m</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">idx </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">merged </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ConnectionState} */ </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">idx</span><span class="s3">]);</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[]} */</span>
+					<span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{unknown} */ </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">idx </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">])).</span><span class="s1">push</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">merged </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+					<span class="s1">modules</span><span class="s3">[</span><span class="s1">idx</span><span class="s3">] = </span><span class="s1">ModuleGraphConnection</span><span class="s3">.</span><span class="s1">addConnectionStates</span><span class="s3">(</span>
+						<span class="s1">merged</span><span class="s3">,</span>
+						<span class="s1">state</span>
+					<span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">modules</span><span class="s3">[</span><span class="s1">length</span><span class="s3">] = </span><span class="s1">m</span><span class="s3">;</span>
+					<span class="s1">length</span><span class="s3">++;</span>
+					<span class="s1">modules</span><span class="s3">[</span><span class="s1">length</span><span class="s3">] = </span><span class="s1">state</span><span class="s3">;</span>
+					<span class="s1">indexMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">m</span><span class="s3">, </span><span class="s1">length</span><span class="s3">);</span>
+					<span class="s1">length</span><span class="s3">++;</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[]} */</span>
+					<span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{unknown} */</span>
+						<span class="s3">(</span><span class="s1">modules</span><span class="s3">[</span><span class="s1">length</span><span class="s3">])</span>
+					<span class="s3">) = [</span><span class="s1">connection</span><span class="s3">];</span>
+					<span class="s1">length</span><span class="s3">++;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s1">modules</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s1">length</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Logger} logger a logger</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{InputEntrypointsAndModules} inputEntrypointsAndModules chunk groups which are processed with the modules</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGroupInfoMap} chunkGroupInfoMap mapping from chunk group to available modules</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{BlockConnections} blockConnections connection for blocks</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{BlocksWithNestedBlocks} blocksWithNestedBlocks flag for blocks that have nested blocks</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AllCreatedChunkGroups} allCreatedChunkGroups filled with all chunk groups that are created here</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{MaskByChunk} maskByChunk module content mask by chunk</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">visitModules </span><span class="s3">= (</span>
+	<span class="s1">logger</span><span class="s3">,</span>
+	<span class="s1">compilation</span><span class="s3">,</span>
+	<span class="s1">inputEntrypointsAndModules</span><span class="s3">,</span>
+	<span class="s1">chunkGroupInfoMap</span><span class="s3">,</span>
+	<span class="s1">blockConnections</span><span class="s3">,</span>
+	<span class="s1">blocksWithNestedBlocks</span><span class="s3">,</span>
+	<span class="s1">allCreatedChunkGroups</span><span class="s3">,</span>
+	<span class="s1">maskByChunk</span>
+<span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s3">{ </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">moduleMemCaches </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+
+	<span class="s4">const </span><span class="s1">blockModulesRuntimeMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesMap | undefined} */</span>
+	<span class="s4">let </span><span class="s1">blockModulesMap</span><span class="s3">;</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, number&gt;} */</span>
+	<span class="s4">const </span><span class="s1">ordinalByModule </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module The module to look up</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} The ordinal of the module in masks</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">getModuleOrdinal </span><span class="s3">= </span><span class="s1">module </span><span class="s3">=&gt; {</span>
+		<span class="s4">let </span><span class="s1">ordinal </span><span class="s3">= </span><span class="s1">ordinalByModule</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">ordinal </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">ordinal </span><span class="s3">= </span><span class="s1">ordinalByModule</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+			<span class="s1">ordinalByModule</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">ordinal</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">ordinal</span><span class="s3">;</span>
+	<span class="s3">};</span>
+
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">mask </span><span class="s3">= </span><span class="s1">ZERO_BIGINT</span><span class="s3">;</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">m of chunkGraph</span><span class="s3">.</span><span class="s1">getChunkModulesIterable</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">)) {</span>
+			<span class="s1">mask </span><span class="s3">|= </span><span class="s1">ONE_BIGINT </span><span class="s3">&lt;&lt; </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s1">getModuleOrdinal</span><span class="s3">(</span><span class="s1">m</span><span class="s3">));</span>
+		<span class="s3">}</span>
+		<span class="s1">maskByChunk</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">mask</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependenciesBlock} block block</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime runtime</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{BlockModulesInFlattenTuples} block modules in flatten tuples</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">getBlockModules </span><span class="s3">= (</span><span class="s1">block</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) =&gt; {</span>
+		<span class="s1">blockModulesMap </span><span class="s3">= </span><span class="s1">blockModulesRuntimeMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">blockModulesMap </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">blockModulesMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+			<span class="s1">blockModulesRuntimeMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">blockModulesMap</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">let </span><span class="s1">blockModules </span><span class="s3">= </span><span class="s1">blockModulesMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">blockModules </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">blockModules</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">block</span><span class="s3">.</span><span class="s1">getRootBlock</span><span class="s3">());</span>
+		<span class="s4">const </span><span class="s1">memCache </span><span class="s3">= </span><span class="s1">moduleMemCaches </span><span class="s3">&amp;&amp; </span><span class="s1">moduleMemCaches</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">memCache </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s1">memCache</span><span class="s3">.</span><span class="s1">provide</span><span class="s3">(</span>
+				<span class="s2">&quot;bundleChunkGraph.blockModules&quot;</span><span class="s3">,</span>
+				<span class="s1">runtime</span><span class="s3">,</span>
+				<span class="s3">() =&gt; {</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules: prepare&quot;</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+					<span class="s1">extractBlockModules</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">map</span><span class="s3">);</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeAggregate</span><span class="s3">(</span><span class="s2">&quot;visitModules: prepare&quot;</span><span class="s3">);</span>
+					<span class="s4">return </span><span class="s1">map</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">block</span><span class="s3">, </span><span class="s1">blockModules</span><span class="s3">] </span><span class="s1">of map</span><span class="s3">)</span>
+				<span class="s1">blockModulesMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s1">blockModules</span><span class="s3">);</span>
+			<span class="s4">return </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules: prepare&quot;</span><span class="s3">);</span>
+		<span class="s1">extractBlockModules</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">blockModulesMap</span><span class="s3">);</span>
+		<span class="s1">blockModules </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockModulesInFlattenTuples} */</span>
+			<span class="s3">(</span><span class="s1">blockModulesMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">block</span><span class="s3">));</span>
+		<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeAggregate</span><span class="s3">(</span><span class="s2">&quot;visitModules: prepare&quot;</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">blockModules</span><span class="s3">;</span>
+	<span class="s3">};</span>
+
+	<span class="s4">let </span><span class="s1">statProcessedQueueItems </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">statProcessedBlocks </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">statConnectedChunkGroups </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">statProcessedChunkGroupsForMerging </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">statMergedAvailableModuleSets </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">statForkedAvailableModules </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">statForkedAvailableModulesCount </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">statForkedAvailableModulesCountPlus </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">statForkedMergedModulesCount </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">statForkedMergedModulesCountPlus </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">statForkedResultModulesCount </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">statChunkGroupInfoUpdated </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">statChildChunkGroupsReconnected </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+
+	<span class="s4">let </span><span class="s1">nextChunkGroupIndex </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">nextFreeModulePreOrderIndex </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">nextFreeModulePostOrderIndex </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;DependenciesBlock, ChunkGroupInfo&gt;} */</span>
+	<span class="s4">const </span><span class="s1">blockChunkGroups </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;ChunkGroupInfo, Set&lt;DependenciesBlock&gt;&gt;} */</span>
+	<span class="s4">const </span><span class="s1">blocksByChunkGroups </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, ChunkGroupInfo&gt;} */</span>
+	<span class="s4">const </span><span class="s1">namedChunkGroups </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, ChunkGroupInfo&gt;} */</span>
+	<span class="s4">const </span><span class="s1">namedAsyncEntrypoints </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkGroupInfo&gt;} */</span>
+	<span class="s4">const </span><span class="s1">outdatedOrderIndexChunkGroups </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+	<span class="s4">const </span><span class="s1">ADD_AND_ENTER_ENTRY_MODULE </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">ADD_AND_ENTER_MODULE </span><span class="s3">= </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">ENTER_MODULE </span><span class="s3">= </span><span class="s7">2</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">PROCESS_BLOCK </span><span class="s3">= </span><span class="s7">3</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">PROCESS_ENTRY_BLOCK </span><span class="s3">= </span><span class="s7">4</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">LEAVE_MODULE </span><span class="s3">= </span><span class="s7">5</span><span class="s3">;</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{QueueItem[]} */</span>
+	<span class="s4">let </span><span class="s1">queue </span><span class="s3">= [];</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;ChunkGroupInfo, Set&lt;[ChunkGroupInfo, QueueItem | null]&gt;&gt;} */</span>
+	<span class="s4">const </span><span class="s1">queueConnect </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkGroupInfo&gt;} */</span>
+	<span class="s4">const </span><span class="s1">chunkGroupsForCombining </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+	<span class="s0">// Fill queue with entrypoint modules</span>
+	<span class="s0">// Create ChunkGroupInfo for entrypoints</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">modules</span><span class="s3">] </span><span class="s1">of inputEntrypointsAndModules</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">getEntryRuntime</span><span class="s3">(</span>
+			<span class="s1">compilation</span><span class="s3">,</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">name</span><span class="s3">),</span>
+			<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">options</span>
+		<span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */</span>
+		<span class="s4">const </span><span class="s1">chunkGroupInfo </span><span class="s3">= {</span>
+			<span class="s1">initialized</span><span class="s3">: </span><span class="s4">false</span><span class="s3">,</span>
+			<span class="s1">chunkGroup</span><span class="s3">,</span>
+			<span class="s1">runtime</span><span class="s3">,</span>
+			<span class="s1">minAvailableModules</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">availableModulesToBeMerged</span><span class="s3">: [],</span>
+			<span class="s1">skippedItems</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">resultingAvailableModules</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">children</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">availableSources</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">availableChildren</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">preOrderIndex</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+			<span class="s1">postOrderIndex</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+			<span class="s1">chunkLoading</span><span class="s3">:</span>
+				<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkLoading </span><span class="s3">!== </span><span class="s1">undefined</span>
+					<span class="s3">? </span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkLoading </span><span class="s3">!== </span><span class="s4">false</span>
+					<span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">chunkLoading </span><span class="s3">!== </span><span class="s4">false</span><span class="s3">,</span>
+			<span class="s1">asyncChunks</span><span class="s3">:</span>
+				<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">asyncChunks </span><span class="s3">!== </span><span class="s1">undefined</span>
+					<span class="s3">? </span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">asyncChunks</span>
+					<span class="s3">: </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">asyncChunks </span><span class="s3">!== </span><span class="s4">false</span>
+		<span class="s3">};</span>
+		<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">index </span><span class="s3">= </span><span class="s1">nextChunkGroupIndex</span><span class="s3">++;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">getNumberOfParents</span><span class="s3">() &gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s0">// minAvailableModules for child entrypoints are unknown yet, set to undefined.</span>
+			<span class="s0">// This means no module is added until other sets are merged into</span>
+			<span class="s0">// this minAvailableModules (by the parent entrypoints)</span>
+			<span class="s4">const </span><span class="s1">skippedItems </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">modules</span><span class="s3">);</span>
+			<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">skippedItems </span><span class="s3">= </span><span class="s1">skippedItems</span><span class="s3">;</span>
+			<span class="s1">chunkGroupsForCombining</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s0">// The application may start here: We start with an empty list of available modules</span>
+			<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">minAvailableModules </span><span class="s3">= </span><span class="s1">ZERO_BIGINT</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">chunk </span><span class="s3">= </span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">getEntrypointChunk</span><span class="s3">();</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+				<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+					<span class="s1">action</span><span class="s3">: </span><span class="s1">ADD_AND_ENTER_MODULE</span><span class="s3">,</span>
+					<span class="s1">block</span><span class="s3">: </span><span class="s1">module</span><span class="s3">,</span>
+					<span class="s1">module</span><span class="s3">,</span>
+					<span class="s1">chunk</span><span class="s3">,</span>
+					<span class="s1">chunkGroup</span><span class="s3">,</span>
+					<span class="s1">chunkGroupInfo</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s1">chunkGroupInfoMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">chunkGroupInfo</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) {</span>
+			<span class="s1">namedChunkGroups</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">name</span><span class="s3">, </span><span class="s1">chunkGroupInfo</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s0">// Fill availableSources with parent-child dependencies between entrypoints</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkGroupInfo of chunkGroupsForCombining</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGroup </span><span class="s3">} = </span><span class="s1">chunkGroupInfo</span><span class="s3">;</span>
+		<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">availableSources </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">parent of chunkGroup</span><span class="s3">.</span><span class="s1">parentsIterable</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">parentChunkGroupInfo </span><span class="s3">=</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */</span>
+				<span class="s3">(</span><span class="s1">chunkGroupInfoMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">parent</span><span class="s3">));</span>
+			<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">availableSources</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">parentChunkGroupInfo</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">parentChunkGroupInfo</span><span class="s3">.</span><span class="s1">availableChildren </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">parentChunkGroupInfo</span><span class="s3">.</span><span class="s1">availableChildren </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+			<span class="s3">}</span>
+			<span class="s1">parentChunkGroupInfo</span><span class="s3">.</span><span class="s1">availableChildren</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s0">// pop() is used to read from the queue</span>
+	<span class="s0">// so it need to be reversed to be iterated in</span>
+	<span class="s0">// correct order</span>
+	<span class="s1">queue</span><span class="s3">.</span><span class="s1">reverse</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkGroupInfo&gt;} */</span>
+	<span class="s4">const </span><span class="s1">outdatedChunkGroupInfo </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;[ChunkGroupInfo, QueueItem | null]&gt;} */</span>
+	<span class="s4">const </span><span class="s1">chunkGroupsForMerging </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{QueueItem[]} */</span>
+	<span class="s4">let </span><span class="s1">queueDelayed </span><span class="s3">= [];</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{[Module, ModuleGraphConnection[]][]} */</span>
+	<span class="s4">const </span><span class="s1">skipConnectionBuffer </span><span class="s3">= [];</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module[]} */</span>
+	<span class="s4">const </span><span class="s1">skipBuffer </span><span class="s3">= [];</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{QueueItem[]} */</span>
+	<span class="s4">const </span><span class="s1">queueBuffer </span><span class="s3">= [];</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */</span>
+	<span class="s4">let </span><span class="s1">module</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Chunk} */</span>
+	<span class="s4">let </span><span class="s1">chunk</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroup} */</span>
+	<span class="s4">let </span><span class="s1">chunkGroup</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependenciesBlock} */</span>
+	<span class="s4">let </span><span class="s1">block</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */</span>
+	<span class="s4">let </span><span class="s1">chunkGroupInfo</span><span class="s3">;</span>
+
+	<span class="s0">// For each async Block in graph</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AsyncDependenciesBlock} b iterating over each Async DepBlock</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">iteratorBlock </span><span class="s3">= </span><span class="s1">b </span><span class="s3">=&gt; {</span>
+		<span class="s0">// 1. We create a chunk group with single chunk in it for this Block</span>
+		<span class="s0">// but only once (blockChunkGroups map)</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo | undefined} */</span>
+		<span class="s4">let </span><span class="s1">cgi </span><span class="s3">= </span><span class="s1">blockChunkGroups</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroup | undefined} */</span>
+		<span class="s4">let </span><span class="s1">c</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Entrypoint | undefined} */</span>
+		<span class="s4">let </span><span class="s1">entrypoint</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">entryOptions </span><span class="s3">= </span><span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions </span><span class="s3">&amp;&amp; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">.</span><span class="s1">entryOptions</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cgi </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">chunkName </span><span class="s3">= (</span><span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions </span><span class="s3">&amp;&amp; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) || </span><span class="s1">b</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">entryOptions</span><span class="s3">) {</span>
+				<span class="s1">cgi </span><span class="s3">= </span><span class="s1">namedAsyncEntrypoints</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">));</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">cgi</span><span class="s3">) {</span>
+					<span class="s1">entrypoint </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">addAsyncEntrypoint</span><span class="s3">(</span>
+						<span class="s1">entryOptions</span><span class="s3">,</span>
+						<span class="s1">module</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">request</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s1">maskByChunk</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">entrypoint</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">[</span><span class="s7">0</span><span class="s3">], </span><span class="s1">ZERO_BIGINT</span><span class="s3">);</span>
+					<span class="s1">entrypoint</span><span class="s3">.</span><span class="s1">index </span><span class="s3">= </span><span class="s1">nextChunkGroupIndex</span><span class="s3">++;</span>
+					<span class="s1">cgi </span><span class="s3">= {</span>
+						<span class="s1">chunkGroup</span><span class="s3">: </span><span class="s1">entrypoint</span><span class="s3">,</span>
+						<span class="s1">initialized</span><span class="s3">: </span><span class="s4">false</span><span class="s3">,</span>
+						<span class="s1">runtime</span><span class="s3">:</span>
+							<span class="s1">entrypoint</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">runtime </span><span class="s3">||</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string | undefined} */ </span><span class="s3">(</span><span class="s1">entrypoint</span><span class="s3">.</span><span class="s1">name</span><span class="s3">),</span>
+						<span class="s1">minAvailableModules</span><span class="s3">: </span><span class="s1">ZERO_BIGINT</span><span class="s3">,</span>
+						<span class="s1">availableModulesToBeMerged</span><span class="s3">: [],</span>
+						<span class="s1">skippedItems</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">resultingAvailableModules</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">children</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">availableSources</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">availableChildren</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">preOrderIndex</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">postOrderIndex</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">chunkLoading</span><span class="s3">:</span>
+							<span class="s1">entryOptions</span><span class="s3">.</span><span class="s1">chunkLoading </span><span class="s3">!== </span><span class="s1">undefined</span>
+								<span class="s3">? </span><span class="s1">entryOptions</span><span class="s3">.</span><span class="s1">chunkLoading </span><span class="s3">!== </span><span class="s4">false</span>
+								<span class="s3">: </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">chunkLoading</span><span class="s3">,</span>
+						<span class="s1">asyncChunks</span><span class="s3">:</span>
+							<span class="s1">entryOptions</span><span class="s3">.</span><span class="s1">asyncChunks </span><span class="s3">!== </span><span class="s1">undefined</span>
+								<span class="s3">? </span><span class="s1">entryOptions</span><span class="s3">.</span><span class="s1">asyncChunks</span>
+								<span class="s3">: </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">asyncChunks</span>
+					<span class="s3">};</span>
+					<span class="s1">chunkGroupInfoMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+						<span class="s1">entrypoint</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */</span>
+						<span class="s3">(</span><span class="s1">cgi</span><span class="s3">)</span>
+					<span class="s3">);</span>
+
+					<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">connectBlockAndChunkGroup</span><span class="s3">(</span><span class="s1">b</span><span class="s3">, </span><span class="s1">entrypoint</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">) {</span>
+						<span class="s1">namedAsyncEntrypoints</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+							<span class="s1">chunkName</span><span class="s3">,</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */</span>
+							<span class="s3">(</span><span class="s1">cgi</span><span class="s3">)</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">entrypoint </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Entrypoint} */ </span><span class="s3">(</span><span class="s1">cgi</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">);</span>
+					<span class="s0">// TODO merge entryOptions</span>
+					<span class="s1">entrypoint</span><span class="s3">.</span><span class="s1">addOrigin</span><span class="s3">(</span>
+						<span class="s1">module</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">request</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">connectBlockAndChunkGroup</span><span class="s3">(</span><span class="s1">b</span><span class="s3">, </span><span class="s1">entrypoint</span><span class="s3">);</span>
+				<span class="s3">}</span>
+
+				<span class="s0">// 2. We enqueue the DependenciesBlock for traversal</span>
+				<span class="s1">queueDelayed</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+					<span class="s1">action</span><span class="s3">: </span><span class="s1">PROCESS_ENTRY_BLOCK</span><span class="s3">,</span>
+					<span class="s1">block</span><span class="s3">: </span><span class="s1">b</span><span class="s3">,</span>
+					<span class="s1">module</span><span class="s3">,</span>
+					<span class="s1">chunk</span><span class="s3">: </span><span class="s1">entrypoint</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">[</span><span class="s7">0</span><span class="s3">],</span>
+					<span class="s1">chunkGroup</span><span class="s3">: </span><span class="s1">entrypoint</span><span class="s3">,</span>
+					<span class="s1">chunkGroupInfo</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */ </span><span class="s3">(</span><span class="s1">cgi</span><span class="s3">)</span>
+				<span class="s3">});</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(!</span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">asyncChunks </span><span class="s3">|| !</span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">chunkLoading</span><span class="s3">) {</span>
+				<span class="s0">// Just queue the block into the current chunk group</span>
+				<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+					<span class="s1">action</span><span class="s3">: </span><span class="s1">PROCESS_BLOCK</span><span class="s3">,</span>
+					<span class="s1">block</span><span class="s3">: </span><span class="s1">b</span><span class="s3">,</span>
+					<span class="s1">module</span><span class="s3">,</span>
+					<span class="s1">chunk</span><span class="s3">,</span>
+					<span class="s1">chunkGroup</span><span class="s3">,</span>
+					<span class="s1">chunkGroupInfo</span>
+				<span class="s3">});</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">cgi </span><span class="s3">= </span><span class="s1">chunkName </span><span class="s3">? </span><span class="s1">namedChunkGroups</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">) : </span><span class="s1">undefined</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">cgi</span><span class="s3">) {</span>
+					<span class="s1">c </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">addChunkInGroup</span><span class="s3">(</span>
+						<span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions </span><span class="s3">|| </span><span class="s1">b</span><span class="s3">.</span><span class="s1">chunkName</span><span class="s3">,</span>
+						<span class="s1">module</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">request</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s1">maskByChunk</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">c</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">[</span><span class="s7">0</span><span class="s3">], </span><span class="s1">ZERO_BIGINT</span><span class="s3">);</span>
+					<span class="s1">c</span><span class="s3">.</span><span class="s1">index </span><span class="s3">= </span><span class="s1">nextChunkGroupIndex</span><span class="s3">++;</span>
+					<span class="s1">cgi </span><span class="s3">= {</span>
+						<span class="s1">initialized</span><span class="s3">: </span><span class="s4">false</span><span class="s3">,</span>
+						<span class="s1">chunkGroup</span><span class="s3">: </span><span class="s1">c</span><span class="s3">,</span>
+						<span class="s1">runtime</span><span class="s3">: </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">,</span>
+						<span class="s1">minAvailableModules</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">availableModulesToBeMerged</span><span class="s3">: [],</span>
+						<span class="s1">skippedItems</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">resultingAvailableModules</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">children</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">availableSources</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">availableChildren</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+						<span class="s1">preOrderIndex</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">postOrderIndex</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">chunkLoading</span><span class="s3">: </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">chunkLoading</span><span class="s3">,</span>
+						<span class="s1">asyncChunks</span><span class="s3">: </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">asyncChunks</span>
+					<span class="s3">};</span>
+					<span class="s1">allCreatedChunkGroups</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">c</span><span class="s3">);</span>
+					<span class="s1">chunkGroupInfoMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">c</span><span class="s3">, </span><span class="s1">cgi</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">) {</span>
+						<span class="s1">namedChunkGroups</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">, </span><span class="s1">cgi</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">c </span><span class="s3">= </span><span class="s1">cgi</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">c</span><span class="s3">.</span><span class="s1">isInitial</span><span class="s3">()) {</span>
+						<span class="s1">compilation</span><span class="s3">.</span><span class="s1">errors</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+							<span class="s4">new </span><span class="s1">AsyncDependencyToInitialChunkError</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">chunkName</span><span class="s3">),</span>
+								<span class="s1">module</span><span class="s3">,</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">)</span>
+							<span class="s3">)</span>
+						<span class="s3">);</span>
+						<span class="s1">c </span><span class="s3">= </span><span class="s1">chunkGroup</span><span class="s3">;</span>
+					<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+						<span class="s1">c</span><span class="s3">.</span><span class="s1">addOptions</span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">groupOptions</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">c</span><span class="s3">.</span><span class="s1">addOrigin</span><span class="s3">(</span>
+						<span class="s1">module</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">),</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">request</span><span class="s3">)</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s1">blockConnections</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">b</span><span class="s3">, []);</span>
+			<span class="s3">}</span>
+			<span class="s1">blockChunkGroups</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">b</span><span class="s3">, </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */ </span><span class="s3">(</span><span class="s1">cgi</span><span class="s3">));</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">entryOptions</span><span class="s3">) {</span>
+			<span class="s1">entrypoint </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Entrypoint} */ </span><span class="s3">(</span><span class="s1">cgi</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">c </span><span class="s3">= </span><span class="s1">cgi</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">c </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s0">// 2. We store the connection for the block</span>
+			<span class="s0">// to connect it later if needed</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockChunkGroupConnection[]} */</span>
+			<span class="s3">(</span><span class="s1">blockConnections</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">b</span><span class="s3">)).</span><span class="s1">push</span><span class="s3">({</span>
+				<span class="s1">originChunkGroupInfo</span><span class="s3">: </span><span class="s1">chunkGroupInfo</span><span class="s3">,</span>
+				<span class="s1">chunkGroup</span><span class="s3">: </span><span class="s1">c</span>
+			<span class="s3">});</span>
+
+			<span class="s0">// 3. We enqueue the chunk group info creation/updating</span>
+			<span class="s4">let </span><span class="s1">connectList </span><span class="s3">= </span><span class="s1">queueConnect</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">connectList </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">connectList </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s1">queueConnect</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">, </span><span class="s1">connectList</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s1">connectList</span><span class="s3">.</span><span class="s1">add</span><span class="s3">([</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */ </span><span class="s3">(</span><span class="s1">cgi</span><span class="s3">),</span>
+				<span class="s3">{</span>
+					<span class="s1">action</span><span class="s3">: </span><span class="s1">PROCESS_BLOCK</span><span class="s3">,</span>
+					<span class="s1">block</span><span class="s3">: </span><span class="s1">b</span><span class="s3">,</span>
+					<span class="s1">module</span><span class="s3">,</span>
+					<span class="s1">chunk</span><span class="s3">: </span><span class="s1">c</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">[</span><span class="s7">0</span><span class="s3">],</span>
+					<span class="s1">chunkGroup</span><span class="s3">: </span><span class="s1">c</span><span class="s3">,</span>
+					<span class="s1">chunkGroupInfo</span><span class="s3">: </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfo} */ </span><span class="s3">(</span><span class="s1">cgi</span><span class="s3">)</span>
+				<span class="s3">}</span>
+			<span class="s3">]);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">entrypoint </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">addAsyncEntrypoint</span><span class="s3">(</span><span class="s1">entrypoint</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">};</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependenciesBlock} block the block</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">processBlock </span><span class="s3">= </span><span class="s1">block </span><span class="s3">=&gt; {</span>
+		<span class="s1">statProcessedBlocks</span><span class="s3">++;</span>
+		<span class="s0">// get prepared block info</span>
+		<span class="s4">const </span><span class="s1">blockModules </span><span class="s3">= </span><span class="s1">getBlockModules</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">);</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">blockModules </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">minAvailableModules </span><span class="s3">=</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */</span>
+				<span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">minAvailableModules</span><span class="s3">);</span>
+			<span class="s0">// Buffer items because order need to be reversed to get indices correct</span>
+			<span class="s0">// Traverse all referenced modules</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">, </span><span class="s1">len </span><span class="s3">= </span><span class="s1">blockModules</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">len</span><span class="s3">; </span><span class="s1">i </span><span class="s3">+= </span><span class="s7">3</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">refModule </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">blockModules</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]);</span>
+				<span class="s0">// For single comparisons this might be cheaper</span>
+				<span class="s4">const </span><span class="s1">isModuleInChunk </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">isModuleInChunk</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">isModuleInChunk</span><span class="s3">) {</span>
+					<span class="s0">// skip early if already connected</span>
+					<span class="s4">continue</span><span class="s3">;</span>
+				<span class="s3">}</span>
+
+				<span class="s4">const </span><span class="s1">refOrdinal </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s1">getModuleOrdinal</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">activeState </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ConnectionState} */ </span><span class="s3">(</span>
+					<span class="s1">blockModules</span><span class="s3">[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">]</span>
+				<span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">activeState </span><span class="s3">!== </span><span class="s4">true</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">connections </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[]} */ </span><span class="s3">(</span>
+						<span class="s1">blockModules</span><span class="s3">[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">2</span><span class="s3">]</span>
+					<span class="s3">);</span>
+					<span class="s1">skipConnectionBuffer</span><span class="s3">.</span><span class="s1">push</span><span class="s3">([</span><span class="s1">refModule</span><span class="s3">, </span><span class="s1">connections</span><span class="s3">]);</span>
+					<span class="s0">// We skip inactive connections</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">activeState </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+				<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">isOrdinalSetInMask</span><span class="s3">(</span><span class="s1">minAvailableModules</span><span class="s3">, </span><span class="s1">refOrdinal</span><span class="s3">)) {</span>
+					<span class="s0">// already in parent chunks, skip it for now</span>
+					<span class="s1">skipBuffer</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">);</span>
+					<span class="s4">continue</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s0">// enqueue, then add and enter to be in the correct order</span>
+				<span class="s0">// this is relevant with circular dependencies</span>
+				<span class="s1">queueBuffer</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+					<span class="s1">action</span><span class="s3">: </span><span class="s1">activeState </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">? </span><span class="s1">ADD_AND_ENTER_MODULE </span><span class="s3">: </span><span class="s1">PROCESS_BLOCK</span><span class="s3">,</span>
+					<span class="s1">block</span><span class="s3">: </span><span class="s1">refModule</span><span class="s3">,</span>
+					<span class="s1">module</span><span class="s3">: </span><span class="s1">refModule</span><span class="s3">,</span>
+					<span class="s1">chunk</span><span class="s3">,</span>
+					<span class="s1">chunkGroup</span><span class="s3">,</span>
+					<span class="s1">chunkGroupInfo</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+			<span class="s0">// Add buffered items in reverse order</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">skipConnectionBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s4">let </span><span class="s3">{ </span><span class="s1">skippedModuleConnections </span><span class="s3">} = </span><span class="s1">chunkGroupInfo</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">skippedModuleConnections </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">skippedModuleConnections </span><span class="s3">= </span><span class="s1">skippedModuleConnections </span><span class="s3">=</span>
+						<span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s3">}</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s1">skipConnectionBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s7">1</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&gt;= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i</span><span class="s3">--) {</span>
+					<span class="s1">skippedModuleConnections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">skipConnectionBuffer</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]);</span>
+				<span class="s3">}</span>
+				<span class="s1">skipConnectionBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">skipBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s4">let </span><span class="s3">{ </span><span class="s1">skippedItems </span><span class="s3">} = </span><span class="s1">chunkGroupInfo</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">skippedItems </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">skippedItems </span><span class="s3">= </span><span class="s1">skippedItems </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s3">}</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s1">skipBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s7">1</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&gt;= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i</span><span class="s3">--) {</span>
+					<span class="s1">skippedItems</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">skipBuffer</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]);</span>
+				<span class="s3">}</span>
+				<span class="s1">skipBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">queueBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s1">queueBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s7">1</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&gt;= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i</span><span class="s3">--) {</span>
+					<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">queueBuffer</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]);</span>
+				<span class="s3">}</span>
+				<span class="s1">queueBuffer</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Traverse all Blocks</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">b of block</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">) {</span>
+			<span class="s1">iteratorBlock</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">block</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">&amp;&amp; </span><span class="s1">module </span><span class="s3">!== </span><span class="s1">block</span><span class="s3">) {</span>
+			<span class="s1">blocksWithNestedBlocks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">};</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependenciesBlock} block the block</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">processEntryBlock </span><span class="s3">= </span><span class="s1">block </span><span class="s3">=&gt; {</span>
+		<span class="s1">statProcessedBlocks</span><span class="s3">++;</span>
+		<span class="s0">// get prepared block info</span>
+		<span class="s4">const </span><span class="s1">blockModules </span><span class="s3">= </span><span class="s1">getBlockModules</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">);</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">blockModules </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s0">// Traverse all referenced modules in reverse order</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s1">blockModules</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s7">3</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&gt;= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">-= </span><span class="s7">3</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">refModule </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">blockModules</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]);</span>
+				<span class="s4">const </span><span class="s1">activeState </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ConnectionState} */ </span><span class="s3">(</span>
+					<span class="s1">blockModules</span><span class="s3">[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">]</span>
+				<span class="s3">);</span>
+				<span class="s0">// enqueue, then add and enter to be in the correct order</span>
+				<span class="s0">// this is relevant with circular dependencies</span>
+				<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+					<span class="s1">action</span><span class="s3">:</span>
+						<span class="s1">activeState </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">? </span><span class="s1">ADD_AND_ENTER_ENTRY_MODULE </span><span class="s3">: </span><span class="s1">PROCESS_BLOCK</span><span class="s3">,</span>
+					<span class="s1">block</span><span class="s3">: </span><span class="s1">refModule</span><span class="s3">,</span>
+					<span class="s1">module</span><span class="s3">: </span><span class="s1">refModule</span><span class="s3">,</span>
+					<span class="s1">chunk</span><span class="s3">,</span>
+					<span class="s1">chunkGroup</span><span class="s3">,</span>
+					<span class="s1">chunkGroupInfo</span>
+				<span class="s3">});</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Traverse all Blocks</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">b of block</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">) {</span>
+			<span class="s1">iteratorBlock</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">block</span><span class="s3">.</span><span class="s1">blocks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">&amp;&amp; </span><span class="s1">module </span><span class="s3">!== </span><span class="s1">block</span><span class="s3">) {</span>
+			<span class="s1">blocksWithNestedBlocks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">};</span>
+
+	<span class="s4">const </span><span class="s1">processQueue </span><span class="s3">= () =&gt; {</span>
+		<span class="s4">while </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) {</span>
+			<span class="s1">statProcessedQueueItems</span><span class="s3">++;</span>
+			<span class="s4">const </span><span class="s1">queueItem </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{QueueItem} */ </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">());</span>
+			<span class="s1">module </span><span class="s3">= </span><span class="s1">queueItem</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+			<span class="s1">block </span><span class="s3">= </span><span class="s1">queueItem</span><span class="s3">.</span><span class="s1">block</span><span class="s3">;</span>
+			<span class="s1">chunk </span><span class="s3">= </span><span class="s1">queueItem</span><span class="s3">.</span><span class="s1">chunk</span><span class="s3">;</span>
+			<span class="s1">chunkGroup </span><span class="s3">= </span><span class="s1">queueItem</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">;</span>
+			<span class="s1">chunkGroupInfo </span><span class="s3">= </span><span class="s1">queueItem</span><span class="s3">.</span><span class="s1">chunkGroupInfo</span><span class="s3">;</span>
+
+			<span class="s4">switch </span><span class="s3">(</span><span class="s1">queueItem</span><span class="s3">.</span><span class="s1">action</span><span class="s3">) {</span>
+				<span class="s4">case </span><span class="s1">ADD_AND_ENTER_ENTRY_MODULE</span><span class="s3">:</span>
+					<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">connectChunkAndEntryModule</span><span class="s3">(</span>
+						<span class="s1">chunk</span><span class="s3">,</span>
+						<span class="s1">module</span><span class="s3">,</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Entrypoint} */ </span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">)</span>
+					<span class="s3">);</span>
+				<span class="s0">// fallthrough</span>
+				<span class="s4">case </span><span class="s1">ADD_AND_ENTER_MODULE</span><span class="s3">: {</span>
+					<span class="s4">const </span><span class="s1">isModuleInChunk </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">isModuleInChunk</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">isModuleInChunk</span><span class="s3">) {</span>
+						<span class="s0">// already connected, skip it</span>
+						<span class="s4">break</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s0">// We connect Module and Chunk</span>
+					<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">connectChunkAndModule</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">module</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">moduleOrdinal </span><span class="s3">= </span><span class="s1">getModuleOrdinal</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+					<span class="s4">let </span><span class="s1">chunkMask </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */ </span><span class="s3">(</span><span class="s1">maskByChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">));</span>
+					<span class="s1">chunkMask </span><span class="s3">|= </span><span class="s1">ONE_BIGINT </span><span class="s3">&lt;&lt; </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s1">moduleOrdinal</span><span class="s3">);</span>
+					<span class="s1">maskByChunk</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">chunkMask</span><span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s0">// fallthrough</span>
+				<span class="s4">case </span><span class="s1">ENTER_MODULE</span><span class="s3">: {</span>
+					<span class="s4">const </span><span class="s1">index </span><span class="s3">= </span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">getModulePreOrderIndex</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+						<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">setModulePreOrderIndex</span><span class="s3">(</span>
+							<span class="s1">module</span><span class="s3">,</span>
+							<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">preOrderIndex</span><span class="s3">++</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+
+					<span class="s4">if </span><span class="s3">(</span>
+						<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">setPreOrderIndexIfUnset</span><span class="s3">(</span>
+							<span class="s1">module</span><span class="s3">,</span>
+							<span class="s1">nextFreeModulePreOrderIndex</span>
+						<span class="s3">)</span>
+					<span class="s3">) {</span>
+						<span class="s1">nextFreeModulePreOrderIndex</span><span class="s3">++;</span>
+					<span class="s3">}</span>
+
+					<span class="s0">// reuse queueItem</span>
+					<span class="s1">queueItem</span><span class="s3">.</span><span class="s1">action </span><span class="s3">= </span><span class="s1">LEAVE_MODULE</span><span class="s3">;</span>
+					<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">queueItem</span><span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s0">// fallthrough</span>
+				<span class="s4">case </span><span class="s1">PROCESS_BLOCK</span><span class="s3">: {</span>
+					<span class="s1">processBlock</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">case </span><span class="s1">PROCESS_ENTRY_BLOCK</span><span class="s3">: {</span>
+					<span class="s1">processEntryBlock</span><span class="s3">(</span><span class="s1">block</span><span class="s3">);</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">case </span><span class="s1">LEAVE_MODULE</span><span class="s3">: {</span>
+					<span class="s4">const </span><span class="s1">index </span><span class="s3">= </span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">getModulePostOrderIndex</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">index </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+						<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">setModulePostOrderIndex</span><span class="s3">(</span>
+							<span class="s1">module</span><span class="s3">,</span>
+							<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">postOrderIndex</span><span class="s3">++</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+
+					<span class="s4">if </span><span class="s3">(</span>
+						<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">setPostOrderIndexIfUnset</span><span class="s3">(</span>
+							<span class="s1">module</span><span class="s3">,</span>
+							<span class="s1">nextFreeModulePostOrderIndex</span>
+						<span class="s3">)</span>
+					<span class="s3">) {</span>
+						<span class="s1">nextFreeModulePostOrderIndex</span><span class="s3">++;</span>
+					<span class="s3">}</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">};</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGroupInfo} chunkGroupInfo The info object for the chunk group</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{bigint} The mask of available modules after the chunk group</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">calculateResultingAvailableModules </span><span class="s3">= </span><span class="s1">chunkGroupInfo </span><span class="s3">=&gt; {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">resultingAvailableModules </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">)</span>
+			<span class="s4">return </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">resultingAvailableModules</span><span class="s3">;</span>
+
+		<span class="s4">let </span><span class="s1">resultingAvailableModules </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */ </span><span class="s3">(</span>
+			<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">minAvailableModules</span>
+		<span class="s3">);</span>
+
+		<span class="s0">// add the modules from the chunk group to the set</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunkGroupInfo</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">mask </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */ </span><span class="s3">(</span><span class="s1">maskByChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">));</span>
+			<span class="s1">resultingAvailableModules </span><span class="s3">|= </span><span class="s1">mask</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">return </span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">resultingAvailableModules </span><span class="s3">=</span>
+			<span class="s1">resultingAvailableModules</span><span class="s3">);</span>
+	<span class="s3">};</span>
+
+	<span class="s4">const </span><span class="s1">processConnectQueue </span><span class="s3">= () =&gt; {</span>
+		<span class="s0">// Figure out new parents for chunk groups</span>
+		<span class="s0">// to get new available modules for these children</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">chunkGroupInfo</span><span class="s3">, </span><span class="s1">targets</span><span class="s3">] </span><span class="s1">of queueConnect</span><span class="s3">) {</span>
+			<span class="s0">// 1. Add new targets to the list of children</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">children </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">children </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+			<span class="s3">}</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">target</span><span class="s3">] </span><span class="s1">of targets</span><span class="s3">) {</span>
+				<span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">children</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">target</span><span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// 2. Calculate resulting available modules</span>
+			<span class="s4">const </span><span class="s1">resultingAvailableModules </span><span class="s3">=</span>
+				<span class="s1">calculateResultingAvailableModules</span><span class="s3">(</span><span class="s1">chunkGroupInfo</span><span class="s3">);</span>
+
+			<span class="s4">const </span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">;</span>
+
+			<span class="s0">// 3. Update chunk group info</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">target</span><span class="s3">, </span><span class="s1">processBlock</span><span class="s3">] </span><span class="s1">of targets</span><span class="s3">) {</span>
+				<span class="s1">target</span><span class="s3">.</span><span class="s1">availableModulesToBeMerged</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">resultingAvailableModules</span><span class="s3">);</span>
+				<span class="s1">chunkGroupsForMerging</span><span class="s3">.</span><span class="s1">add</span><span class="s3">([</span><span class="s1">target</span><span class="s3">, </span><span class="s1">processBlock</span><span class="s3">]);</span>
+				<span class="s4">const </span><span class="s1">oldRuntime </span><span class="s3">= </span><span class="s1">target</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">newRuntime </span><span class="s3">= </span><span class="s1">mergeRuntime</span><span class="s3">(</span><span class="s1">oldRuntime</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">oldRuntime </span><span class="s3">!== </span><span class="s1">newRuntime</span><span class="s3">) {</span>
+					<span class="s1">target</span><span class="s3">.</span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">newRuntime</span><span class="s3">;</span>
+					<span class="s1">outdatedChunkGroupInfo</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">target</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+
+			<span class="s1">statConnectedChunkGroups </span><span class="s3">+= </span><span class="s1">targets</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s1">queueConnect</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+	<span class="s3">};</span>
+
+	<span class="s4">const </span><span class="s1">processChunkGroupsForMerging </span><span class="s3">= () =&gt; {</span>
+		<span class="s1">statProcessedChunkGroupsForMerging </span><span class="s3">+= </span><span class="s1">chunkGroupsForMerging</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+
+		<span class="s0">// Execute the merge</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">info</span><span class="s3">, </span><span class="s1">processBlock</span><span class="s3">] </span><span class="s1">of chunkGroupsForMerging</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">availableModulesToBeMerged </span><span class="s3">= </span><span class="s1">info</span><span class="s3">.</span><span class="s1">availableModulesToBeMerged</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">cachedMinAvailableModules </span><span class="s3">= </span><span class="s1">info</span><span class="s3">.</span><span class="s1">minAvailableModules</span><span class="s3">;</span>
+			<span class="s4">let </span><span class="s1">minAvailableModules </span><span class="s3">= </span><span class="s1">cachedMinAvailableModules</span><span class="s3">;</span>
+
+			<span class="s1">statMergedAvailableModuleSets </span><span class="s3">+= </span><span class="s1">availableModulesToBeMerged</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">availableModules of availableModulesToBeMerged</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">minAvailableModules </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s1">minAvailableModules </span><span class="s3">= </span><span class="s1">availableModules</span><span class="s3">;</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">minAvailableModules </span><span class="s3">&amp;= </span><span class="s1">availableModules</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+
+			<span class="s4">const </span><span class="s1">changed </span><span class="s3">= </span><span class="s1">minAvailableModules </span><span class="s3">!== </span><span class="s1">cachedMinAvailableModules</span><span class="s3">;</span>
+
+			<span class="s1">availableModulesToBeMerged</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">changed</span><span class="s3">) {</span>
+				<span class="s1">info</span><span class="s3">.</span><span class="s1">minAvailableModules </span><span class="s3">= </span><span class="s1">minAvailableModules</span><span class="s3">;</span>
+				<span class="s1">info</span><span class="s3">.</span><span class="s1">resultingAvailableModules </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+				<span class="s1">outdatedChunkGroupInfo</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">info</span><span class="s3">);</span>
+			<span class="s3">}</span>
+
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">processBlock</span><span class="s3">) {</span>
+				<span class="s4">let </span><span class="s1">blocks </span><span class="s3">= </span><span class="s1">blocksByChunkGroups</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">info</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">blocks</span><span class="s3">) {</span>
+					<span class="s1">blocksByChunkGroups</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">info</span><span class="s3">, (</span><span class="s1">blocks </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">()));</span>
+				<span class="s3">}</span>
+
+				<span class="s0">// Whether to walk block depends on minAvailableModules and input block.</span>
+				<span class="s0">// We can treat creating chunk group as a function with 2 input, entry block and minAvailableModules</span>
+				<span class="s0">// If input is the same, we can skip re-walk</span>
+				<span class="s4">let </span><span class="s1">needWalkBlock </span><span class="s3">= !</span><span class="s1">info</span><span class="s3">.</span><span class="s1">initialized </span><span class="s3">|| </span><span class="s1">changed</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">blocks</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">processBlock</span><span class="s3">.</span><span class="s1">block</span><span class="s3">)) {</span>
+					<span class="s1">needWalkBlock </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s1">blocks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">processBlock</span><span class="s3">.</span><span class="s1">block</span><span class="s3">);</span>
+				<span class="s3">}</span>
+
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">needWalkBlock</span><span class="s3">) {</span>
+					<span class="s1">info</span><span class="s3">.</span><span class="s1">initialized </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+					<span class="s1">queueDelayed</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">processBlock</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s1">chunkGroupsForMerging</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+	<span class="s3">};</span>
+
+	<span class="s4">const </span><span class="s1">processChunkGroupsForCombining </span><span class="s3">= () =&gt; {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">info of chunkGroupsForCombining</span><span class="s3">) {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">source of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkGroupInfo&gt;} */ </span><span class="s3">(</span>
+				<span class="s1">info</span><span class="s3">.</span><span class="s1">availableSources</span>
+			<span class="s3">)) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">source</span><span class="s3">.</span><span class="s1">minAvailableModules </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+					<span class="s1">chunkGroupsForCombining</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">info</span><span class="s3">);</span>
+					<span class="s4">break</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">info of chunkGroupsForCombining</span><span class="s3">) {</span>
+			<span class="s4">let </span><span class="s1">availableModules </span><span class="s3">= </span><span class="s1">ZERO_BIGINT</span><span class="s3">;</span>
+			<span class="s0">// combine minAvailableModules from all resultingAvailableModules</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">source of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkGroupInfo&gt;} */ </span><span class="s3">(</span>
+				<span class="s1">info</span><span class="s3">.</span><span class="s1">availableSources</span>
+			<span class="s3">)) {</span>
+				<span class="s4">const </span><span class="s1">resultingAvailableModules </span><span class="s3">=</span>
+					<span class="s1">calculateResultingAvailableModules</span><span class="s3">(</span><span class="s1">source</span><span class="s3">);</span>
+				<span class="s1">availableModules </span><span class="s3">|= </span><span class="s1">resultingAvailableModules</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s1">info</span><span class="s3">.</span><span class="s1">minAvailableModules </span><span class="s3">= </span><span class="s1">availableModules</span><span class="s3">;</span>
+			<span class="s1">info</span><span class="s3">.</span><span class="s1">resultingAvailableModules </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+			<span class="s1">outdatedChunkGroupInfo</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">info</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">chunkGroupsForCombining</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+	<span class="s3">};</span>
+
+	<span class="s4">const </span><span class="s1">processOutdatedChunkGroupInfo </span><span class="s3">= () =&gt; {</span>
+		<span class="s1">statChunkGroupInfoUpdated </span><span class="s3">+= </span><span class="s1">outdatedChunkGroupInfo</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+		<span class="s0">// Revisit skipped elements</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">info of outdatedChunkGroupInfo</span><span class="s3">) {</span>
+			<span class="s0">// 1. Reconsider skipped items</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">skippedItems </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">minAvailableModules </span><span class="s3">=</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */</span>
+					<span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">minAvailableModules</span><span class="s3">);</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of info</span><span class="s3">.</span><span class="s1">skippedItems</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">ordinal </span><span class="s3">= </span><span class="s1">getModuleOrdinal</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">isOrdinalSetInMask</span><span class="s3">(</span><span class="s1">minAvailableModules</span><span class="s3">, </span><span class="s1">ordinal</span><span class="s3">)) {</span>
+						<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+							<span class="s1">action</span><span class="s3">: </span><span class="s1">ADD_AND_ENTER_MODULE</span><span class="s3">,</span>
+							<span class="s1">block</span><span class="s3">: </span><span class="s1">module</span><span class="s3">,</span>
+							<span class="s1">module</span><span class="s3">,</span>
+							<span class="s1">chunk</span><span class="s3">: </span><span class="s1">info</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">[</span><span class="s7">0</span><span class="s3">],</span>
+							<span class="s1">chunkGroup</span><span class="s3">: </span><span class="s1">info</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">,</span>
+							<span class="s1">chunkGroupInfo</span><span class="s3">: </span><span class="s1">info</span>
+						<span class="s3">});</span>
+						<span class="s1">info</span><span class="s3">.</span><span class="s1">skippedItems</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// 2. Reconsider skipped connections</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">skippedModuleConnections </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">minAvailableModules </span><span class="s3">=</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */</span>
+					<span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">minAvailableModules</span><span class="s3">);</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">entry of info</span><span class="s3">.</span><span class="s1">skippedModuleConnections</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s3">[</span><span class="s1">module</span><span class="s3">, </span><span class="s1">connections</span><span class="s3">] = </span><span class="s1">entry</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">activeState </span><span class="s3">= </span><span class="s1">getActiveStateOfConnections</span><span class="s3">(</span>
+						<span class="s1">connections</span><span class="s3">,</span>
+						<span class="s1">info</span><span class="s3">.</span><span class="s1">runtime</span>
+					<span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">activeState </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">activeState </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">ordinal </span><span class="s3">= </span><span class="s1">getModuleOrdinal</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s1">info</span><span class="s3">.</span><span class="s1">skippedModuleConnections</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">isOrdinalSetInMask</span><span class="s3">(</span><span class="s1">minAvailableModules</span><span class="s3">, </span><span class="s1">ordinal</span><span class="s3">)) {</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;ChunkGroupInfo[&quot;skippedItems&quot;]&gt;} */</span>
+							<span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">skippedItems</span><span class="s3">).</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+							<span class="s4">continue</span><span class="s3">;</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+					<span class="s1">queue</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+						<span class="s1">action</span><span class="s3">: </span><span class="s1">activeState </span><span class="s3">=== </span><span class="s4">true </span><span class="s3">? </span><span class="s1">ADD_AND_ENTER_MODULE </span><span class="s3">: </span><span class="s1">PROCESS_BLOCK</span><span class="s3">,</span>
+						<span class="s1">block</span><span class="s3">: </span><span class="s1">module</span><span class="s3">,</span>
+						<span class="s1">module</span><span class="s3">,</span>
+						<span class="s1">chunk</span><span class="s3">: </span><span class="s1">info</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">[</span><span class="s7">0</span><span class="s3">],</span>
+						<span class="s1">chunkGroup</span><span class="s3">: </span><span class="s1">info</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">,</span>
+						<span class="s1">chunkGroupInfo</span><span class="s3">: </span><span class="s1">info</span>
+					<span class="s3">});</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// 2. Reconsider children chunk groups</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">children </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">statChildChunkGroupsReconnected </span><span class="s3">+= </span><span class="s1">info</span><span class="s3">.</span><span class="s1">children</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cgi of info</span><span class="s3">.</span><span class="s1">children</span><span class="s3">) {</span>
+					<span class="s4">let </span><span class="s1">connectList </span><span class="s3">= </span><span class="s1">queueConnect</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">info</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">connectList </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+						<span class="s1">connectList </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+						<span class="s1">queueConnect</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">info</span><span class="s3">, </span><span class="s1">connectList</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">connectList</span><span class="s3">.</span><span class="s1">add</span><span class="s3">([</span><span class="s1">cgi</span><span class="s3">, </span><span class="s4">null</span><span class="s3">]);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+
+			<span class="s0">// 3. Reconsider chunk groups for combining</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">info</span><span class="s3">.</span><span class="s1">availableChildren </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">cgi of info</span><span class="s3">.</span><span class="s1">availableChildren</span><span class="s3">) {</span>
+					<span class="s1">chunkGroupsForCombining</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">cgi</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s1">outdatedOrderIndexChunkGroups</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">info</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">outdatedChunkGroupInfo</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+	<span class="s3">};</span>
+
+	<span class="s0">// Iterative traversal of the Module graph</span>
+	<span class="s0">// Recursive would be simpler to write but could result in Stack Overflows</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">length </span><span class="s3">|| </span><span class="s1">queueConnect</span><span class="s3">.</span><span class="s1">size</span><span class="s3">) {</span>
+		<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules: visiting&quot;</span><span class="s3">);</span>
+		<span class="s1">processQueue</span><span class="s3">();</span>
+		<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeAggregateEnd</span><span class="s3">(</span><span class="s2">&quot;visitModules: prepare&quot;</span><span class="s3">);</span>
+		<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;visitModules: visiting&quot;</span><span class="s3">);</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGroupsForCombining</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules: combine available modules&quot;</span><span class="s3">);</span>
+			<span class="s1">processChunkGroupsForCombining</span><span class="s3">();</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;visitModules: combine available modules&quot;</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">queueConnect</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules: calculating available modules&quot;</span><span class="s3">);</span>
+			<span class="s1">processConnectQueue</span><span class="s3">();</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;visitModules: calculating available modules&quot;</span><span class="s3">);</span>
+
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGroupsForMerging</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules: merging available modules&quot;</span><span class="s3">);</span>
+				<span class="s1">processChunkGroupsForMerging</span><span class="s3">();</span>
+				<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;visitModules: merging available modules&quot;</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">outdatedChunkGroupInfo</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules: check modules for revisit&quot;</span><span class="s3">);</span>
+			<span class="s1">processOutdatedChunkGroupInfo</span><span class="s3">();</span>
+			<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;visitModules: check modules for revisit&quot;</span><span class="s3">);</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Run queueDelayed when all items of the queue are processed</span>
+		<span class="s0">// This is important to get the global indexing correct</span>
+		<span class="s0">// Async blocks should be processed after all sync blocks are processed</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">queue</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">tempQueue </span><span class="s3">= </span><span class="s1">queue</span><span class="s3">;</span>
+			<span class="s1">queue </span><span class="s3">= </span><span class="s1">queueDelayed</span><span class="s3">.</span><span class="s1">reverse</span><span class="s3">();</span>
+			<span class="s1">queueDelayed </span><span class="s3">= </span><span class="s1">tempQueue</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">info of outdatedOrderIndexChunkGroups</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">} = </span><span class="s1">info</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">blocks </span><span class="s3">= </span><span class="s1">blocksByChunkGroups</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">info</span><span class="s3">);</span>
+
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">blocks</span><span class="s3">) {</span>
+			<span class="s4">continue</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">block of blocks</span><span class="s3">) {</span>
+			<span class="s4">let </span><span class="s1">preOrderIndex </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s4">let </span><span class="s1">postOrderIndex </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependenciesBlock} current current</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{BlocksWithNestedBlocks} visited visited dependencies blocks</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">process </span><span class="s3">= (</span><span class="s1">current</span><span class="s3">, </span><span class="s1">visited</span><span class="s3">) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">blockModules </span><span class="s3">= </span><span class="s1">getBlockModules</span><span class="s3">(</span><span class="s1">current</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">, </span><span class="s1">len </span><span class="s3">= </span><span class="s1">blockModules</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">len</span><span class="s3">; </span><span class="s1">i </span><span class="s3">+= </span><span class="s7">3</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">activeState </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ConnectionState} */ </span><span class="s3">(</span>
+						<span class="s1">blockModules</span><span class="s3">[</span><span class="s1">i </span><span class="s3">+ </span><span class="s7">1</span><span class="s3">]</span>
+					<span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">activeState </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) {</span>
+						<span class="s4">continue</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s4">const </span><span class="s1">refModule </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">blockModules</span><span class="s3">[</span><span class="s1">i</span><span class="s3">]);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">visited</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">)) {</span>
+						<span class="s4">continue</span><span class="s3">;</span>
+					<span class="s3">}</span>
+
+					<span class="s1">visited</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">);</span>
+
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">) {</span>
+						<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">setModulePreOrderIndex</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">, </span><span class="s1">preOrderIndex</span><span class="s3">++);</span>
+						<span class="s1">process</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">, </span><span class="s1">visited</span><span class="s3">);</span>
+						<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">setModulePostOrderIndex</span><span class="s3">(</span><span class="s1">refModule</span><span class="s3">, </span><span class="s1">postOrderIndex</span><span class="s3">++);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">};</span>
+			<span class="s1">process</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">());</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s1">outdatedOrderIndexChunkGroups</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+	<span class="s1">ordinalByModule</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+		<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statProcessedQueueItems</span><span class="s3">} </span><span class="s2">queue items processed (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statProcessedBlocks</span><span class="s3">} </span><span class="s2">blocks)`</span>
+	<span class="s3">);</span>
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statConnectedChunkGroups</span><span class="s3">} </span><span class="s2">chunk groups connected`</span><span class="s3">);</span>
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+		<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statProcessedChunkGroupsForMerging</span><span class="s3">} </span><span class="s2">chunk groups processed for merging (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statMergedAvailableModuleSets</span><span class="s3">} </span><span class="s2">module sets, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statForkedAvailableModules</span><span class="s3">} </span><span class="s2">forked, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statForkedAvailableModulesCount</span><span class="s3">} </span><span class="s2">+ </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statForkedAvailableModulesCountPlus</span><span class="s3">} </span><span class="s2">modules forked, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statForkedMergedModulesCount</span><span class="s3">} </span><span class="s2">+ </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statForkedMergedModulesCountPlus</span><span class="s3">} </span><span class="s2">modules merged into fork, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statForkedResultModulesCount</span><span class="s3">} </span><span class="s2">resulting modules)`</span>
+	<span class="s3">);</span>
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">log</span><span class="s3">(</span>
+		<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statChunkGroupInfoUpdated</span><span class="s3">} </span><span class="s2">chunk group info updated (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statChildChunkGroupsReconnected</span><span class="s3">} </span><span class="s2">already connected chunk groups reconnected)`</span>
+	<span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{BlocksWithNestedBlocks} blocksWithNestedBlocks flag for blocks that have nested blocks</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{BlockConnections} blockConnections connection for blocks</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{MaskByChunk} maskByChunk mapping from chunk to module mask</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">connectChunkGroups </span><span class="s3">= (</span>
+	<span class="s1">compilation</span><span class="s3">,</span>
+	<span class="s1">blocksWithNestedBlocks</span><span class="s3">,</span>
+	<span class="s1">blockConnections</span><span class="s3">,</span>
+	<span class="s1">maskByChunk</span>
+<span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGraph </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Helper function to check if all modules of a chunk are available</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGroup} chunkGroup the chunkGroup to scan</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{bigint} availableModules the comparator set</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} return true if all modules of a chunk are available</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">areModulesAvailable </span><span class="s3">= (</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">availableModules</span><span class="s3">) =&gt; {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">chunkMask </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */ </span><span class="s3">(</span><span class="s1">maskByChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">));</span>
+			<span class="s4">if </span><span class="s3">((</span><span class="s1">chunkMask </span><span class="s3">&amp; </span><span class="s1">availableModules</span><span class="s3">) !== </span><span class="s1">chunkMask</span><span class="s3">) </span><span class="s4">return false</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return true</span><span class="s3">;</span>
+	<span class="s3">};</span>
+
+	<span class="s0">// For each edge in the basic chunk graph</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">block</span><span class="s3">, </span><span class="s1">connections</span><span class="s3">] </span><span class="s1">of blockConnections</span><span class="s3">) {</span>
+		<span class="s0">// 1. Check if connection is needed</span>
+		<span class="s0">// When none of the dependencies need to be connected</span>
+		<span class="s0">// we can skip all of them</span>
+		<span class="s0">// It's not possible to filter each item so it doesn't create inconsistent</span>
+		<span class="s0">// connections and modules can only create one version</span>
+		<span class="s0">// TODO maybe decide this per runtime</span>
+		<span class="s4">if </span><span class="s3">(</span>
+			<span class="s0">// TODO is this needed?</span>
+			<span class="s3">!</span><span class="s1">blocksWithNestedBlocks</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">block</span><span class="s3">) &amp;&amp;</span>
+			<span class="s1">connections</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(({ </span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">originChunkGroupInfo </span><span class="s3">}) =&gt;</span>
+				<span class="s1">areModulesAvailable</span><span class="s3">(</span>
+					<span class="s1">chunkGroup</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{bigint} */ </span><span class="s3">(</span><span class="s1">originChunkGroupInfo</span><span class="s3">.</span><span class="s1">resultingAvailableModules</span><span class="s3">)</span>
+				<span class="s3">)</span>
+			<span class="s3">)</span>
+		<span class="s3">) {</span>
+			<span class="s4">continue</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// 2. Foreach edge</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">connections</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+			<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">originChunkGroupInfo </span><span class="s3">} = </span><span class="s1">connections</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+
+			<span class="s0">// 3. Connect block with chunk</span>
+			<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">connectBlockAndChunkGroup</span><span class="s3">(</span><span class="s1">block</span><span class="s3">, </span><span class="s1">chunkGroup</span><span class="s3">);</span>
+
+			<span class="s0">// 4. Connect chunk with parent</span>
+			<span class="s1">connectChunkGroupParentAndChild</span><span class="s3">(</span>
+				<span class="s1">originChunkGroupInfo</span><span class="s3">.</span><span class="s1">chunkGroup</span><span class="s3">,</span>
+				<span class="s1">chunkGroup</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Remove all unconnected chunk groups</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Iterable&lt;ChunkGroup&gt;} allCreatedChunkGroups all chunk groups that where created before</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">cleanupUnconnectedGroups </span><span class="s3">= (</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">allCreatedChunkGroups</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGraph </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkGroup of allCreatedChunkGroups</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">getNumberOfParents</span><span class="s3">() === </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+				<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">disconnectChunk</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">disconnectChunkGroup</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">);</span>
+			<span class="s1">chunkGroup</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">();</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* This method creates the Chunk graph from the Module graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{InputEntrypointsAndModules} inputEntrypointsAndModules chunk groups which are processed with the modules</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">buildChunkGraph </span><span class="s3">= (</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">inputEntrypointsAndModules</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span><span class="s2">&quot;webpack.buildChunkGraph&quot;</span><span class="s3">);</span>
+
+	<span class="s0">// SHARED STATE</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlockConnections} */</span>
+	<span class="s4">const </span><span class="s1">blockConnections </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AllCreatedChunkGroups} */</span>
+	<span class="s4">const </span><span class="s1">allCreatedChunkGroups </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkGroupInfoMap} */</span>
+	<span class="s4">const </span><span class="s1">chunkGroupInfoMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BlocksWithNestedBlocks} */</span>
+	<span class="s4">const </span><span class="s1">blocksWithNestedBlocks </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{MaskByChunk} */</span>
+	<span class="s4">const </span><span class="s1">maskByChunk </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+	<span class="s0">// PART ONE</span>
+
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;visitModules&quot;</span><span class="s3">);</span>
+	<span class="s1">visitModules</span><span class="s3">(</span>
+		<span class="s1">logger</span><span class="s3">,</span>
+		<span class="s1">compilation</span><span class="s3">,</span>
+		<span class="s1">inputEntrypointsAndModules</span><span class="s3">,</span>
+		<span class="s1">chunkGroupInfoMap</span><span class="s3">,</span>
+		<span class="s1">blockConnections</span><span class="s3">,</span>
+		<span class="s1">blocksWithNestedBlocks</span><span class="s3">,</span>
+		<span class="s1">allCreatedChunkGroups</span><span class="s3">,</span>
+		<span class="s1">maskByChunk</span>
+	<span class="s3">);</span>
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;visitModules&quot;</span><span class="s3">);</span>
+
+	<span class="s0">// PART TWO</span>
+
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;connectChunkGroups&quot;</span><span class="s3">);</span>
+	<span class="s1">connectChunkGroups</span><span class="s3">(</span>
+		<span class="s1">compilation</span><span class="s3">,</span>
+		<span class="s1">blocksWithNestedBlocks</span><span class="s3">,</span>
+		<span class="s1">blockConnections</span><span class="s3">,</span>
+		<span class="s1">maskByChunk</span>
+	<span class="s3">);</span>
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;connectChunkGroups&quot;</span><span class="s3">);</span>
+
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">chunkGroupInfo</span><span class="s3">] </span><span class="s1">of chunkGroupInfoMap</span><span class="s3">) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">)</span>
+			<span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">mergeRuntime</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">chunkGroupInfo</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// Cleanup work</span>
+
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;cleanup&quot;</span><span class="s3">);</span>
+	<span class="s1">cleanupUnconnectedGroups</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">allCreatedChunkGroups</span><span class="s3">);</span>
+	<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;cleanup&quot;</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">buildChunkGraph</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

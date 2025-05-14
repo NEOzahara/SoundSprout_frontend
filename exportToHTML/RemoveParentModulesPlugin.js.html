@@ -1,0 +1,228 @@
+<html>
+<head>
+<title>RemoveParentModulesPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+RemoveParentModulesPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">STAGE_BASIC </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../OptimizationStages&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGroup&quot;)} ChunkGroup */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Intersects multiple masks represented as bigints</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{bigint[]} masks The module masks to intersect</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{bigint} The intersection of all masks</span>
+ <span class="s5">*/</span>
+<span class="s4">function </span><span class="s1">intersectMasks</span><span class="s3">(</span><span class="s1">masks</span><span class="s3">) {</span>
+	<span class="s4">let </span><span class="s1">result </span><span class="s3">= </span><span class="s1">masks</span><span class="s3">[</span><span class="s7">0</span><span class="s3">];</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s1">masks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">- </span><span class="s7">1</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&gt;= </span><span class="s7">1</span><span class="s3">; </span><span class="s1">i</span><span class="s3">--) {</span>
+		<span class="s1">result </span><span class="s3">&amp;= </span><span class="s1">masks</span><span class="s3">[</span><span class="s1">i</span><span class="s3">];</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+<span class="s3">}</span>
+
+<span class="s4">const </span><span class="s1">ZERO_BIGINT </span><span class="s3">= </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s7">0</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ONE_BIGINT </span><span class="s3">= </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s7">1</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">THIRTY_TWO_BIGINT </span><span class="s3">= </span><span class="s1">BigInt</span><span class="s3">(</span><span class="s7">32</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Parses the module mask and returns the modules represented by it</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{bigint} mask the module mask</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module[]} ordinalModules the modules in the order they were added to the mask (LSB is index 0)</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Generator&lt;Module&gt;} the modules represented by the mask</span>
+ <span class="s5">*/</span>
+<span class="s4">function</span><span class="s3">* </span><span class="s1">getModulesFromMask</span><span class="s3">(</span><span class="s1">mask</span><span class="s3">, </span><span class="s1">ordinalModules</span><span class="s3">) {</span>
+	<span class="s4">let </span><span class="s1">offset </span><span class="s3">= </span><span class="s7">31</span><span class="s3">;</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">mask </span><span class="s3">!== </span><span class="s1">ZERO_BIGINT</span><span class="s3">) {</span>
+		<span class="s0">// Consider the last 32 bits, since that's what Math.clz32 can handle</span>
+		<span class="s4">let </span><span class="s1">last32 </span><span class="s3">= </span><span class="s1">Number</span><span class="s3">(</span><span class="s1">BigInt</span><span class="s3">.</span><span class="s1">asUintN</span><span class="s3">(</span><span class="s7">32</span><span class="s3">, </span><span class="s1">mask</span><span class="s3">));</span>
+		<span class="s4">while </span><span class="s3">(</span><span class="s1">last32 </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">last </span><span class="s3">= </span><span class="s1">Math</span><span class="s3">.</span><span class="s1">clz32</span><span class="s3">(</span><span class="s1">last32</span><span class="s3">);</span>
+			<span class="s0">// The number of trailing zeros is the number trimmed off the input mask + 31 - the number of leading zeros</span>
+			<span class="s0">// The 32 is baked into the initial value of offset</span>
+			<span class="s4">const </span><span class="s1">moduleIndex </span><span class="s3">= </span><span class="s1">offset </span><span class="s3">- </span><span class="s1">last</span><span class="s3">;</span>
+			<span class="s0">// The number of trailing zeros is the index into the array generated by getOrCreateModuleMask</span>
+			<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">ordinalModules</span><span class="s3">[</span><span class="s1">moduleIndex</span><span class="s3">];</span>
+			<span class="s4">yield </span><span class="s1">module</span><span class="s3">;</span>
+			<span class="s0">// Remove the matched module from the mask</span>
+			<span class="s0">// Since we can only count leading zeros, not trailing, we can't just downshift the mask</span>
+			<span class="s1">last32 </span><span class="s3">&amp;= ~(</span><span class="s7">1 </span><span class="s3">&lt;&lt; (</span><span class="s7">31 </span><span class="s3">- </span><span class="s1">last</span><span class="s3">));</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Remove the processed chunk from the mask</span>
+		<span class="s1">mask </span><span class="s3">&gt;&gt;= </span><span class="s1">THIRTY_TWO_BIGINT</span><span class="s3">;</span>
+		<span class="s1">offset </span><span class="s3">+= </span><span class="s7">32</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">class </span><span class="s1">RemoveParentModulesPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;RemoveParentModulesPlugin&quot;</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Iterable&lt;Chunk&gt;} chunks the chunks</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGroup[]} chunkGroups the chunk groups</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">handler </span><span class="s3">= (</span><span class="s1">chunks</span><span class="s3">, </span><span class="s1">chunkGroups</span><span class="s3">) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">queue </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+				<span class="s4">const </span><span class="s1">availableModulesMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+				<span class="s4">let </span><span class="s1">nextModuleMask </span><span class="s3">= </span><span class="s1">ONE_BIGINT</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">maskByModule </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module[]} */</span>
+				<span class="s4">const </span><span class="s1">ordinalModules </span><span class="s3">= [];</span>
+
+				<span class="s5">/**</span>
+				 <span class="s5">* Gets or creates a unique mask for a module</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} mod the module to get the mask for</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{bigint} the module mask to uniquely identify the module</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">getOrCreateModuleMask </span><span class="s3">= </span><span class="s1">mod </span><span class="s3">=&gt; {</span>
+					<span class="s4">let </span><span class="s1">id </span><span class="s3">= </span><span class="s1">maskByModule</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">mod</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">id </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+						<span class="s1">id </span><span class="s3">= </span><span class="s1">nextModuleMask</span><span class="s3">;</span>
+						<span class="s1">ordinalModules</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">mod</span><span class="s3">);</span>
+						<span class="s1">maskByModule</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">mod</span><span class="s3">, </span><span class="s1">id</span><span class="s3">);</span>
+						<span class="s1">nextModuleMask </span><span class="s3">&lt;&lt;= </span><span class="s1">ONE_BIGINT</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s4">return </span><span class="s1">id</span><span class="s3">;</span>
+				<span class="s3">};</span>
+
+				<span class="s0">// Initialize masks by chunk and by chunk group for quicker comparisons</span>
+				<span class="s4">const </span><span class="s1">chunkMasks </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunks</span><span class="s3">) {</span>
+					<span class="s4">let </span><span class="s1">mask </span><span class="s3">= </span><span class="s1">ZERO_BIGINT</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">m of chunkGraph</span><span class="s3">.</span><span class="s1">getChunkModulesIterable</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">)) {</span>
+						<span class="s4">const </span><span class="s1">id </span><span class="s3">= </span><span class="s1">getOrCreateModuleMask</span><span class="s3">(</span><span class="s1">m</span><span class="s3">);</span>
+						<span class="s1">mask </span><span class="s3">|= </span><span class="s1">id</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s1">chunkMasks</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">mask</span><span class="s3">);</span>
+				<span class="s3">}</span>
+
+				<span class="s4">const </span><span class="s1">chunkGroupMasks </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkGroup of chunkGroups</span><span class="s3">) {</span>
+					<span class="s4">let </span><span class="s1">mask </span><span class="s3">= </span><span class="s1">ZERO_BIGINT</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunkGroup</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">chunkMask </span><span class="s3">= </span><span class="s1">chunkMasks</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkMask </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s1">mask </span><span class="s3">|= </span><span class="s1">chunkMask</span><span class="s3">;</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+					<span class="s1">chunkGroupMasks</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">mask</span><span class="s3">);</span>
+				<span class="s3">}</span>
+
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkGroup of compilation</span><span class="s3">.</span><span class="s1">entrypoints</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()) {</span>
+					<span class="s0">// initialize available modules for chunks without parents</span>
+					<span class="s1">availableModulesMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">ZERO_BIGINT</span><span class="s3">);</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">child of chunkGroup</span><span class="s3">.</span><span class="s1">childrenIterable</span><span class="s3">) {</span>
+						<span class="s1">queue</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">child</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkGroup of compilation</span><span class="s3">.</span><span class="s1">asyncEntrypoints</span><span class="s3">) {</span>
+					<span class="s0">// initialize available modules for chunks without parents</span>
+					<span class="s1">availableModulesMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">ZERO_BIGINT</span><span class="s3">);</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">child of chunkGroup</span><span class="s3">.</span><span class="s1">childrenIterable</span><span class="s3">) {</span>
+						<span class="s1">queue</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">child</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunkGroup of queue</span><span class="s3">) {</span>
+					<span class="s4">let </span><span class="s1">availableModulesMask </span><span class="s3">= </span><span class="s1">availableModulesMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">);</span>
+					<span class="s4">let </span><span class="s1">changed </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">parent of chunkGroup</span><span class="s3">.</span><span class="s1">parentsIterable</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">availableModulesInParent </span><span class="s3">= </span><span class="s1">availableModulesMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">parent</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">availableModulesInParent </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">parentMask </span><span class="s3">=</span>
+								<span class="s1">availableModulesInParent </span><span class="s3">| </span><span class="s1">chunkGroupMasks</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">parent</span><span class="s3">);</span>
+							<span class="s0">// If we know the available modules in parent: process these</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">availableModulesMask </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s0">// if we have not own info yet: create new entry</span>
+								<span class="s1">availableModulesMask </span><span class="s3">= </span><span class="s1">parentMask</span><span class="s3">;</span>
+								<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">const </span><span class="s1">newMask </span><span class="s3">= </span><span class="s1">availableModulesMask </span><span class="s3">&amp; </span><span class="s1">parentMask</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">newMask </span><span class="s3">!== </span><span class="s1">availableModulesMask</span><span class="s3">) {</span>
+									<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+									<span class="s1">availableModulesMask </span><span class="s3">= </span><span class="s1">newMask</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">changed</span><span class="s3">) {</span>
+						<span class="s1">availableModulesMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">, </span><span class="s1">availableModulesMask</span><span class="s3">);</span>
+						<span class="s0">// if something changed: enqueue our children</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">child of chunkGroup</span><span class="s3">.</span><span class="s1">childrenIterable</span><span class="s3">) {</span>
+							<span class="s0">// Push the child to the end of the queue</span>
+							<span class="s1">queue</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">child</span><span class="s3">);</span>
+							<span class="s1">queue</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">child</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+
+				<span class="s0">// now we have available modules for every chunk</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunks</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">chunkMask </span><span class="s3">= </span><span class="s1">chunkMasks</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkMask </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">; </span><span class="s0">// No info about this chunk</span>
+
+					<span class="s4">const </span><span class="s1">availableModulesSets </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+						<span class="s1">chunk</span><span class="s3">.</span><span class="s1">groupsIterable</span><span class="s3">,</span>
+						<span class="s1">chunkGroup </span><span class="s3">=&gt; </span><span class="s1">availableModulesMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunkGroup</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">availableModulesSets</span><span class="s3">.</span><span class="s1">includes</span><span class="s3">(</span><span class="s1">undefined</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">; </span><span class="s0">// No info about this chunk group</span>
+
+					<span class="s4">const </span><span class="s1">availableModulesMask </span><span class="s3">= </span><span class="s1">intersectMasks</span><span class="s3">(</span><span class="s1">availableModulesSets</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">toRemoveMask </span><span class="s3">= </span><span class="s1">chunkMask </span><span class="s3">&amp; </span><span class="s1">availableModulesMask</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">toRemoveMask </span><span class="s3">!== </span><span class="s1">ZERO_BIGINT</span><span class="s3">) {</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of getModulesFromMask</span><span class="s3">(</span>
+							<span class="s1">toRemoveMask</span><span class="s3">,</span>
+							<span class="s1">ordinalModules</span>
+						<span class="s3">)) {</span>
+							<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">disconnectChunkAndModule</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">};</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">optimizeChunks</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+				<span class="s3">{</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;RemoveParentModulesPlugin&quot;</span><span class="s3">,</span>
+					<span class="s1">stage</span><span class="s3">: </span><span class="s1">STAGE_BASIC</span>
+				<span class="s3">},</span>
+				<span class="s1">handler</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">RemoveParentModulesPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,1103 @@
+<html>
+<head>
+<title>cli-engine.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+.s8 { color: #42c3d4;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+cli-engine.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Main CLI object.</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Nicholas C. Zakas</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">/* 
+ * The CLI object should *not* call process.exit() directly. It should only return 
+ * exit codes. This allows other programs to use the CLI object and still control 
+ * when the program exits. 
+ */</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">fs </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;fs&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">path </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;path&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">defaultOptions </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../../conf/default-cli-options&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">pkg </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../../package.json&quot;</span><span class="s4">);</span>
+
+
+<span class="s6">const </span><span class="s4">{</span>
+    <span class="s2">Legacy</span><span class="s4">: {</span>
+        <span class="s2">ConfigOps</span><span class="s4">,</span>
+        <span class="s2">naming</span><span class="s4">,</span>
+        <span class="s2">CascadingConfigArrayFactory</span><span class="s4">,</span>
+        <span class="s2">IgnorePattern</span><span class="s4">,</span>
+        <span class="s2">getUsedExtractedConfigs</span><span class="s4">,</span>
+        <span class="s2">ModuleResolver</span>
+    <span class="s4">}</span>
+<span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint/eslintrc&quot;</span><span class="s4">);</span>
+
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">FileEnumerator </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./file-enumerator&quot;</span><span class="s4">);</span>
+
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">Linter </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../linter&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">builtInRules </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../rules&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">loadRules </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./load-rules&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">hash </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./hash&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">LintResultCache </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./lint-result-cache&quot;</span><span class="s4">);</span>
+
+<span class="s6">const </span><span class="s2">debug </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;debug&quot;</span><span class="s4">)(</span><span class="s3">&quot;eslint:cli-engine&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">validFixTypes </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">([</span><span class="s3">&quot;directive&quot;</span><span class="s4">, </span><span class="s3">&quot;problem&quot;</span><span class="s4">, </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">, </span><span class="s3">&quot;layout&quot;</span><span class="s4">]);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Typedefs</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s5">// For VSCode IntelliSense</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).ConfigData} ConfigData */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).DeprecatedRuleInfo} DeprecatedRuleInfo */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).LintMessage} LintMessage */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).SuppressedLintMessage} SuppressedLintMessage */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).ParserOptions} ParserOptions */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).Plugin} Plugin */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).RuleConf} RuleConf */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).Rule} Rule */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).FormatterFunction} FormatterFunction */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{ReturnType&lt;CascadingConfigArrayFactory.getConfigArrayForFile&gt;} ConfigArray */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{ReturnType&lt;ConfigArray.extractConfig&gt;} ExtractedConfig */</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The options to configure a CLI engine with.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} CLIEngineOptions</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [allowInlineConfig] Enable or disable inline configuration comments.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ConfigData} [baseConfig] Base config object, extended by all configs used with this CLIEngine instance</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [cache] Enable result caching.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [cacheLocation] The cache file to use instead of .eslintcache.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [configFile] The configuration file to use.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [cwd] The value to use for the current working directory.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [envs] An array of environments to load.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]|null} [extensions] An array of file extensions to check.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean|Function} [fix] Execute in autofix mode. If a function, should return a boolean.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [fixTypes] Array of rule types to apply fixes for.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [globals] An array of global variables to declare.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [ignore] False disables use of .eslintignore.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [ignorePath] The ignore file to use instead of .eslintignore.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string|string[]} [ignorePattern] One or more glob patterns to ignore.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [useEslintrc] False disables looking for .eslintrc</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [parser] The name of the parser to use.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ParserOptions} [parserOptions] An object of parserOption settings to use.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [plugins] An array of plugins to load.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Record&lt;string,RuleConf&gt;} [rules] An object of rules to use.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [rulePaths] An array of directories to load custom rules from.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean|string} [reportUnusedDisableDirectives] `true`, `&quot;error&quot;` or '&quot;warn&quot;' adds reports for unused eslint-disable directives</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [globInputPaths] Set to false to skip glob resolution of input file paths to lint (default: true). If false, each input file paths is assumed to be a non-glob path to an existing file.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [resolvePluginsRelativeTo] The folder where plugins should be resolved from, defaulting to the CWD</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* A linting result.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} LintResult</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} filePath The path to the file that was linted.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{LintMessage[]} messages All of the messages for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{SuppressedLintMessage[]} suppressedMessages All of the suppressed messages for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} errorCount Number of errors for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} fatalErrorCount Number of fatal errors for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} warningCount Number of warnings for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} fixableErrorCount Number of fixable errors for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} fixableWarningCount Number of fixable warnings for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [source] The source code of the file that was linted.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [output] The source code of the file that was linted, with as many fixes applied as possible.</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Linting results.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} LintReport</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{LintResult[]} results All of the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} errorCount Number of errors for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} fatalErrorCount Number of fatal errors for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} warningCount Number of warnings for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} fixableErrorCount Number of fixable errors for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{number} fixableWarningCount Number of fixable warnings for the result.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{DeprecatedRuleInfo[]} usedDeprecatedRules The list of used deprecated rules.</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Private data for CLIEngine.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} CLIEngineInternalSlots</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Map&lt;string, Plugin&gt;} additionalPluginPool The map for additional plugins.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} cacheFilePath The path to the cache of lint results.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{CascadingConfigArrayFactory} configArrayFactory The factory of configs.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{(filePath: string) =&gt; boolean} defaultIgnores The default predicate function to check if a file ignored or not.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{FileEnumerator} fileEnumerator The file enumerator.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ConfigArray[]} lastConfigArrays The list of config arrays that the last `executeOnFiles` or `executeOnText` used.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{LintResultCache|null} lintResultCache The cache of lint results.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Linter} linter The linter instance which has loaded rules.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{CLIEngineOptions} options The normalized options of this instance.</span>
+ <span class="s0">*/</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{WeakMap&lt;CLIEngine, CLIEngineInternalSlots&gt;} */</span>
+<span class="s6">const </span><span class="s2">internalSlotsMap </span><span class="s4">= </span><span class="s6">new </span><span class="s2">WeakMap</span><span class="s4">();</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Determines if each fix type in an array is supported by ESLint and throws</span>
+ <span class="s0">* an error if not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string[]} fixTypes An array of fix types to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{Error} If an invalid fix type is found.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">validateFixTypes</span><span class="s4">(</span><span class="s2">fixTypes</span><span class="s4">) {</span>
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">fixType of fixTypes</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">validFixTypes</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">fixType</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">`Invalid fix type &quot;</span><span class="s2">$</span><span class="s4">{</span><span class="s2">fixType</span><span class="s4">}</span><span class="s3">&quot; found.`</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* It will calculate the error and warning count for collection of messages per file</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintMessage[]} messages Collection of messages</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} Contains the stats</span>
+ <span class="s0">* </span><span class="s1">@private</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">calculateStatsPerFile</span><span class="s4">(</span><span class="s2">messages</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">stat </span><span class="s4">= {</span>
+        <span class="s2">errorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fatalErrorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">warningCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fixableErrorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fixableWarningCount</span><span class="s4">: </span><span class="s7">0</span>
+    <span class="s4">};</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">messages</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; </span><span class="s2">i</span><span class="s4">++) {</span>
+        <span class="s6">const </span><span class="s2">message </span><span class="s4">= </span><span class="s2">messages</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">message</span><span class="s4">.</span><span class="s2">fatal </span><span class="s4">|| </span><span class="s2">message</span><span class="s4">.</span><span class="s2">severity </span><span class="s4">=== </span><span class="s7">2</span><span class="s4">) {</span>
+            <span class="s2">stat</span><span class="s4">.</span><span class="s2">errorCount</span><span class="s4">++;</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">message</span><span class="s4">.</span><span class="s2">fatal</span><span class="s4">) {</span>
+                <span class="s2">stat</span><span class="s4">.</span><span class="s2">fatalErrorCount</span><span class="s4">++;</span>
+            <span class="s4">}</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">message</span><span class="s4">.</span><span class="s2">fix</span><span class="s4">) {</span>
+                <span class="s2">stat</span><span class="s4">.</span><span class="s2">fixableErrorCount</span><span class="s4">++;</span>
+            <span class="s4">}</span>
+        <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+            <span class="s2">stat</span><span class="s4">.</span><span class="s2">warningCount</span><span class="s4">++;</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">message</span><span class="s4">.</span><span class="s2">fix</span><span class="s4">) {</span>
+                <span class="s2">stat</span><span class="s4">.</span><span class="s2">fixableWarningCount</span><span class="s4">++;</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s2">stat</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* It will calculate the error and warning count for collection of results from all files</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult[]} results Collection of messages from all the files</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} Contains the stats</span>
+ <span class="s0">* </span><span class="s1">@private</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">calculateStatsPerRun</span><span class="s4">(</span><span class="s2">results</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">stat </span><span class="s4">= {</span>
+        <span class="s2">errorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fatalErrorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">warningCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fixableErrorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fixableWarningCount</span><span class="s4">: </span><span class="s7">0</span>
+    <span class="s4">};</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">results</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; </span><span class="s2">i</span><span class="s4">++) {</span>
+        <span class="s6">const </span><span class="s2">result </span><span class="s4">= </span><span class="s2">results</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+        <span class="s2">stat</span><span class="s4">.</span><span class="s2">errorCount </span><span class="s4">+= </span><span class="s2">result</span><span class="s4">.</span><span class="s2">errorCount</span><span class="s4">;</span>
+        <span class="s2">stat</span><span class="s4">.</span><span class="s2">fatalErrorCount </span><span class="s4">+= </span><span class="s2">result</span><span class="s4">.</span><span class="s2">fatalErrorCount</span><span class="s4">;</span>
+        <span class="s2">stat</span><span class="s4">.</span><span class="s2">warningCount </span><span class="s4">+= </span><span class="s2">result</span><span class="s4">.</span><span class="s2">warningCount</span><span class="s4">;</span>
+        <span class="s2">stat</span><span class="s4">.</span><span class="s2">fixableErrorCount </span><span class="s4">+= </span><span class="s2">result</span><span class="s4">.</span><span class="s2">fixableErrorCount</span><span class="s4">;</span>
+        <span class="s2">stat</span><span class="s4">.</span><span class="s2">fixableWarningCount </span><span class="s4">+= </span><span class="s2">result</span><span class="s4">.</span><span class="s2">fixableWarningCount</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">stat</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Processes an source code using ESLint.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} config The config object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} config.text The source code to verify.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} config.cwd The path to the current working directory.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string|undefined} config.filePath The path to the file of `text`. If this is undefined, it uses `&lt;text&gt;`.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ConfigArray} config.config The config.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} config.fix If `true` then it does fix.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} config.allowInlineConfig If `true` then it uses directive comments.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean|string} config.reportUnusedDisableDirectives If `true`, `&quot;error&quot;` or '&quot;warn&quot;', then it reports unused `eslint-disable` comments.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{FileEnumerator} config.fileEnumerator The file enumerator to check if a path is a target or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Linter} config.linter The linter instance to verify.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintResult} The result of linting.</span>
+ <span class="s0">* </span><span class="s1">@private</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">verifyText</span><span class="s4">({</span>
+    <span class="s2">text</span><span class="s4">,</span>
+    <span class="s2">cwd</span><span class="s4">,</span>
+    <span class="s2">filePath</span><span class="s4">: </span><span class="s2">providedFilePath</span><span class="s4">,</span>
+    <span class="s2">config</span><span class="s4">,</span>
+    <span class="s2">fix</span><span class="s4">,</span>
+    <span class="s2">allowInlineConfig</span><span class="s4">,</span>
+    <span class="s2">reportUnusedDisableDirectives</span><span class="s4">,</span>
+    <span class="s2">fileEnumerator</span><span class="s4">,</span>
+    <span class="s2">linter</span>
+<span class="s4">}) {</span>
+    <span class="s6">const </span><span class="s2">filePath </span><span class="s4">= </span><span class="s2">providedFilePath </span><span class="s4">|| </span><span class="s3">&quot;&lt;text&gt;&quot;</span><span class="s4">;</span>
+
+    <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Lint </span><span class="s2">$</span><span class="s4">{</span><span class="s2">filePath</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+
+    <span class="s5">/* 
+     * Verify. 
+     * `config.extractConfig(filePath)` requires an absolute path, but `linter` 
+     * doesn't know CWD, so it gives `linter` an absolute path always. 
+     */</span>
+    <span class="s6">const </span><span class="s2">filePathToVerify </span><span class="s4">= </span><span class="s2">filePath </span><span class="s4">=== </span><span class="s3">&quot;&lt;text&gt;&quot; </span><span class="s4">? </span><span class="s2">path</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">filePath</span><span class="s4">) : </span><span class="s2">filePath</span><span class="s4">;</span>
+    <span class="s6">const </span><span class="s4">{ </span><span class="s2">fixed</span><span class="s4">, </span><span class="s2">messages</span><span class="s4">, </span><span class="s2">output </span><span class="s4">} = </span><span class="s2">linter</span><span class="s4">.</span><span class="s2">verifyAndFix</span><span class="s4">(</span>
+        <span class="s2">text</span><span class="s4">,</span>
+        <span class="s2">config</span><span class="s4">,</span>
+        <span class="s4">{</span>
+            <span class="s2">allowInlineConfig</span><span class="s4">,</span>
+            <span class="s2">filename</span><span class="s4">: </span><span class="s2">filePathToVerify</span><span class="s4">,</span>
+            <span class="s2">fix</span><span class="s4">,</span>
+            <span class="s2">reportUnusedDisableDirectives</span><span class="s4">,</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Check if the linter should adopt a given code block or not.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} blockFilename The virtual filename of a code block.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the linter should adopt the code block.</span>
+             <span class="s0">*/</span>
+            <span class="s2">filterCodeBlock</span><span class="s4">(</span><span class="s2">blockFilename</span><span class="s4">) {</span>
+                <span class="s6">return </span><span class="s2">fileEnumerator</span><span class="s4">.</span><span class="s2">isTargetPath</span><span class="s4">(</span><span class="s2">blockFilename</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">);</span>
+
+    <span class="s5">// Tweak and return.</span>
+    <span class="s6">const </span><span class="s2">result </span><span class="s4">= {</span>
+        <span class="s2">filePath</span><span class="s4">,</span>
+        <span class="s2">messages</span><span class="s4">,</span>
+        <span class="s2">suppressedMessages</span><span class="s4">: </span><span class="s2">linter</span><span class="s4">.</span><span class="s2">getSuppressedMessages</span><span class="s4">(),</span>
+        <span class="s2">...calculateStatsPerFile</span><span class="s4">(</span><span class="s2">messages</span><span class="s4">)</span>
+    <span class="s4">};</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">fixed</span><span class="s4">) {</span>
+        <span class="s2">result</span><span class="s4">.</span><span class="s2">output </span><span class="s4">= </span><span class="s2">output</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span>
+        <span class="s2">result</span><span class="s4">.</span><span class="s2">errorCount </span><span class="s4">+ </span><span class="s2">result</span><span class="s4">.</span><span class="s2">warningCount </span><span class="s4">&gt; </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+        <span class="s6">typeof </span><span class="s2">result</span><span class="s4">.</span><span class="s2">output </span><span class="s4">=== </span><span class="s3">&quot;undefined&quot;</span>
+    <span class="s4">) {</span>
+        <span class="s2">result</span><span class="s4">.</span><span class="s2">source </span><span class="s4">= </span><span class="s2">text</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">result</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Returns result with warning by ignore settings</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} filePath File path of checked code</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} baseDir Absolute path of base directory</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintResult} Result with single warning</span>
+ <span class="s0">* </span><span class="s1">@private</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createIgnoreResult</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">baseDir</span><span class="s4">) {</span>
+    <span class="s6">let </span><span class="s2">message</span><span class="s4">;</span>
+    <span class="s6">const </span><span class="s2">isHidden </span><span class="s4">= </span><span class="s2">filePath</span><span class="s4">.</span><span class="s2">split</span><span class="s4">(</span><span class="s2">path</span><span class="s4">.</span><span class="s2">sep</span><span class="s4">)</span>
+        <span class="s4">.</span><span class="s2">find</span><span class="s4">(</span><span class="s2">segment </span><span class="s4">=&gt; </span><span class="s8">/^\./u</span><span class="s4">.</span><span class="s2">test</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">));</span>
+    <span class="s6">const </span><span class="s2">isInNodeModules </span><span class="s4">= </span><span class="s2">baseDir </span><span class="s4">&amp;&amp; </span><span class="s2">path</span><span class="s4">.</span><span class="s2">relative</span><span class="s4">(</span><span class="s2">baseDir</span><span class="s4">, </span><span class="s2">filePath</span><span class="s4">).</span><span class="s2">startsWith</span><span class="s4">(</span><span class="s3">&quot;node_modules&quot;</span><span class="s4">);</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">isHidden</span><span class="s4">) {</span>
+        <span class="s2">message </span><span class="s4">= </span><span class="s3">&quot;File ignored by default.  Use a negated ignore pattern (like </span><span class="s6">\&quot;</span><span class="s3">--ignore-pattern '!&lt;relative/path/to/filename&gt;'</span><span class="s6">\&quot;</span><span class="s3">) to override.&quot;</span><span class="s4">;</span>
+    <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">isInNodeModules</span><span class="s4">) {</span>
+        <span class="s2">message </span><span class="s4">= </span><span class="s3">&quot;File ignored by default. Use </span><span class="s6">\&quot;</span><span class="s3">--ignore-pattern '!node_modules/*'</span><span class="s6">\&quot; </span><span class="s3">to override.&quot;</span><span class="s4">;</span>
+    <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+        <span class="s2">message </span><span class="s4">= </span><span class="s3">&quot;File ignored because of a matching ignore pattern. Use </span><span class="s6">\&quot;</span><span class="s3">--no-ignore</span><span class="s6">\&quot; </span><span class="s3">to override.&quot;</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">filePath</span><span class="s4">: </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">),</span>
+        <span class="s2">messages</span><span class="s4">: [</span>
+            <span class="s4">{</span>
+                <span class="s2">ruleId</span><span class="s4">: </span><span class="s6">null</span><span class="s4">,</span>
+                <span class="s2">fatal</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+                <span class="s2">severity</span><span class="s4">: </span><span class="s7">1</span><span class="s4">,</span>
+                <span class="s2">message</span><span class="s4">,</span>
+                <span class="s2">nodeType</span><span class="s4">: </span><span class="s6">null</span>
+            <span class="s4">}</span>
+        <span class="s4">],</span>
+        <span class="s2">suppressedMessages</span><span class="s4">: [],</span>
+        <span class="s2">errorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fatalErrorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">warningCount</span><span class="s4">: </span><span class="s7">1</span><span class="s4">,</span>
+        <span class="s2">fixableErrorCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+        <span class="s2">fixableWarningCount</span><span class="s4">: </span><span class="s7">0</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Get a rule.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} ruleId The rule ID to get.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ConfigArray[]} configArrays The config arrays that have plugin rules.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Rule|null} The rule or null.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getRule</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">configArrays</span><span class="s4">) {</span>
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">configArray of configArrays</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">rule </span><span class="s4">= </span><span class="s2">configArray</span><span class="s4">.</span><span class="s2">pluginRules</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">rule</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">rule</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s2">builtInRules</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">) || </span><span class="s6">null</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a message's rule type should be fixed.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintMessage} message The message to check.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ConfigArray[]} lastConfigArrays The list of config arrays that the last `executeOnFiles` or `executeOnText` used.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string[]} fixTypes An array of fix types to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether the message should be fixed.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">shouldMessageBeFixed</span><span class="s4">(</span><span class="s2">message</span><span class="s4">, </span><span class="s2">lastConfigArrays</span><span class="s4">, </span><span class="s2">fixTypes</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">message</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">fixTypes</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s3">&quot;directive&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">const </span><span class="s2">rule </span><span class="s4">= </span><span class="s2">message</span><span class="s4">.</span><span class="s2">ruleId </span><span class="s4">&amp;&amp; </span><span class="s2">getRule</span><span class="s4">(</span><span class="s2">message</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">lastConfigArrays</span><span class="s4">);</span>
+
+    <span class="s6">return </span><span class="s2">Boolean</span><span class="s4">(</span><span class="s2">rule </span><span class="s4">&amp;&amp; </span><span class="s2">rule</span><span class="s4">.</span><span class="s2">meta </span><span class="s4">&amp;&amp; </span><span class="s2">fixTypes</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">rule</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">.</span><span class="s2">type</span><span class="s4">));</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Collect used deprecated rules.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ConfigArray[]} usedConfigArrays The config arrays which were used.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{IterableIterator&lt;DeprecatedRuleInfo&gt;} Used deprecated rules.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s4">*</span><span class="s2">iterateRuleDeprecationWarnings</span><span class="s4">(</span><span class="s2">usedConfigArrays</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">processedRuleIds </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">();</span>
+
+    <span class="s5">// Flatten used configs.</span>
+    <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ExtractedConfig[]} */</span>
+    <span class="s6">const </span><span class="s2">configs </span><span class="s4">= </span><span class="s2">usedConfigArrays</span><span class="s4">.</span><span class="s2">flatMap</span><span class="s4">(</span><span class="s2">getUsedExtractedConfigs</span><span class="s4">);</span>
+
+    <span class="s5">// Traverse rule configs.</span>
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">config of configs</span><span class="s4">) {</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">ruleConfig</span><span class="s4">] </span><span class="s2">of Object</span><span class="s4">.</span><span class="s2">entries</span><span class="s4">(</span><span class="s2">config</span><span class="s4">.</span><span class="s2">rules</span><span class="s4">)) {</span>
+
+            <span class="s5">// Skip if it was processed.</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">processedRuleIds</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">)) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s2">processedRuleIds</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">);</span>
+
+            <span class="s5">// Skip if it's not used.</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">ConfigOps</span><span class="s4">.</span><span class="s2">getRuleSeverity</span><span class="s4">(</span><span class="s2">ruleConfig</span><span class="s4">)) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">const </span><span class="s2">rule </span><span class="s4">= </span><span class="s2">getRule</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">usedConfigArrays</span><span class="s4">);</span>
+
+            <span class="s5">// Skip if it's not deprecated.</span>
+            <span class="s6">if </span><span class="s4">(!(</span><span class="s2">rule </span><span class="s4">&amp;&amp; </span><span class="s2">rule</span><span class="s4">.</span><span class="s2">meta </span><span class="s4">&amp;&amp; </span><span class="s2">rule</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">.</span><span class="s2">deprecated</span><span class="s4">)) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// This rule was used and deprecated.</span>
+            <span class="s6">yield </span><span class="s4">{</span>
+                <span class="s2">ruleId</span><span class="s4">,</span>
+                <span class="s2">replacedBy</span><span class="s4">: </span><span class="s2">rule</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">.</span><span class="s2">replacedBy </span><span class="s4">|| []</span>
+            <span class="s4">};</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks if the given message is an error message.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintMessage} message The message to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the message is an error message.</span>
+ <span class="s0">* </span><span class="s1">@private</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isErrorMessage</span><span class="s4">(</span><span class="s2">message</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">message</span><span class="s4">.</span><span class="s2">severity </span><span class="s4">=== </span><span class="s7">2</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+
+<span class="s0">/**</span>
+ <span class="s0">* return the cacheFile to be used by eslint, based on whether the provided parameter is</span>
+ <span class="s0">* a directory or looks like a directory (ends in `path.sep`), in which case the file</span>
+ <span class="s0">* name will be the `cacheFile/.cache_hashOfCWD`</span>
+ <span class="s0">*</span>
+ <span class="s0">* if cacheFile points to a file or looks like a file then it will just use that file</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} cacheFile The name of file to be used to store the cache</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} cwd Current working directory</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{string} the resolved path to the cache file</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getCacheFile</span><span class="s4">(</span><span class="s2">cacheFile</span><span class="s4">, </span><span class="s2">cwd</span><span class="s4">) {</span>
+
+    <span class="s5">/* 
+     * make sure the path separators are normalized for the environment/os 
+     * keeping the trailing path separator if present 
+     */</span>
+    <span class="s6">const </span><span class="s2">normalizedCacheFile </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">normalize</span><span class="s4">(</span><span class="s2">cacheFile</span><span class="s4">);</span>
+
+    <span class="s6">const </span><span class="s2">resolvedCacheFile </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">normalizedCacheFile</span><span class="s4">);</span>
+    <span class="s6">const </span><span class="s2">looksLikeADirectory </span><span class="s4">= </span><span class="s2">normalizedCacheFile</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(-</span><span class="s7">1</span><span class="s4">) === </span><span class="s2">path</span><span class="s4">.</span><span class="s2">sep</span><span class="s4">;</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* return the name for the cache file in case the provided parameter is a directory</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{string} the resolved path to the cacheFile</span>
+     <span class="s0">*/</span>
+    <span class="s6">function </span><span class="s2">getCacheFileForDirectory</span><span class="s4">() {</span>
+        <span class="s6">return </span><span class="s2">path</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s2">resolvedCacheFile</span><span class="s4">, </span><span class="s3">`.cache_</span><span class="s2">$</span><span class="s4">{</span><span class="s2">hash</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">let </span><span class="s2">fileStats</span><span class="s4">;</span>
+
+    <span class="s6">try </span><span class="s4">{</span>
+        <span class="s2">fileStats </span><span class="s4">= </span><span class="s2">fs</span><span class="s4">.</span><span class="s2">lstatSync</span><span class="s4">(</span><span class="s2">resolvedCacheFile</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s6">catch </span><span class="s4">{</span>
+        <span class="s2">fileStats </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+
+    <span class="s5">/* 
+     * in case the file exists we need to verify if the provided path 
+     * is a directory or a file. If it is a directory we want to create a file 
+     * inside that directory 
+     */</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">fileStats</span><span class="s4">) {</span>
+
+        <span class="s5">/* 
+         * is a directory or is a file, but the original file the user provided 
+         * looks like a directory but `path.resolve` removed the `last path.sep` 
+         * so we need to still treat this like a directory 
+         */</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">fileStats</span><span class="s4">.</span><span class="s2">isDirectory</span><span class="s4">() || </span><span class="s2">looksLikeADirectory</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">getCacheFileForDirectory</span><span class="s4">();</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// is file so just use that file</span>
+        <span class="s6">return </span><span class="s2">resolvedCacheFile</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s5">/* 
+     * here we known the file or directory doesn't exist, 
+     * so we will try to infer if its a directory if it looks like a directory 
+     * for the current operating system. 
+     */</span>
+
+    <span class="s5">// if the last character passed is a path separator we assume is a directory</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">looksLikeADirectory</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">getCacheFileForDirectory</span><span class="s4">();</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">resolvedCacheFile</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Convert a string array to a boolean map.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string[]|null} keys The keys to assign true.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} defaultValue The default value for each property.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} displayName The property name which is used in error message.</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{Error} Requires array.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Record&lt;string,boolean&gt;} The boolean map.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">toBooleanMap</span><span class="s4">(</span><span class="s2">keys</span><span class="s4">, </span><span class="s2">defaultValue</span><span class="s4">, </span><span class="s2">displayName</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">keys </span><span class="s4">&amp;&amp; !</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">keys</span><span class="s4">)) {</span>
+        <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">`</span><span class="s2">$</span><span class="s4">{</span><span class="s2">displayName</span><span class="s4">} </span><span class="s3">must be an array.`</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">keys </span><span class="s4">&amp;&amp; </span><span class="s2">keys</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">keys</span><span class="s4">.</span><span class="s2">reduce</span><span class="s4">((</span><span class="s2">map</span><span class="s4">, </span><span class="s2">def</span><span class="s4">) =&gt; {</span>
+            <span class="s6">const </span><span class="s4">[</span><span class="s2">key</span><span class="s4">, </span><span class="s2">value</span><span class="s4">] = </span><span class="s2">def</span><span class="s4">.</span><span class="s2">split</span><span class="s4">(</span><span class="s3">&quot;:&quot;</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">key </span><span class="s4">!== </span><span class="s3">&quot;__proto__&quot;</span><span class="s4">) {</span>
+                <span class="s2">map</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] = </span><span class="s2">value </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0</span>
+                    <span class="s4">? </span><span class="s2">defaultValue</span>
+                    <span class="s4">: </span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;true&quot;</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s6">return </span><span class="s2">map</span><span class="s4">;</span>
+        <span class="s4">}, {});</span>
+    <span class="s4">}</span>
+    <span class="s6">return void </span><span class="s7">0</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Create a config data from CLI options.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CLIEngineOptions} options The options</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ConfigData|null} The created config data.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createConfigDataFromOptions</span><span class="s4">(</span><span class="s2">options</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s4">{</span>
+        <span class="s2">ignorePattern</span><span class="s4">,</span>
+        <span class="s2">parser</span><span class="s4">,</span>
+        <span class="s2">parserOptions</span><span class="s4">,</span>
+        <span class="s2">plugins</span><span class="s4">,</span>
+        <span class="s2">rules</span>
+    <span class="s4">} = </span><span class="s2">options</span><span class="s4">;</span>
+    <span class="s6">const </span><span class="s2">env </span><span class="s4">= </span><span class="s2">toBooleanMap</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">envs</span><span class="s4">, </span><span class="s6">true</span><span class="s4">, </span><span class="s3">&quot;envs&quot;</span><span class="s4">);</span>
+    <span class="s6">const </span><span class="s2">globals </span><span class="s4">= </span><span class="s2">toBooleanMap</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">globals</span><span class="s4">, </span><span class="s6">false</span><span class="s4">, </span><span class="s3">&quot;globals&quot;</span><span class="s4">);</span>
+
+    <span class="s6">if </span><span class="s4">(</span>
+        <span class="s2">env </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">globals </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+        <span class="s4">(</span><span class="s2">ignorePattern </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">|| </span><span class="s2">ignorePattern</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) &amp;&amp;</span>
+        <span class="s2">parser </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">parserOptions </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">plugins </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">rules </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0</span>
+    <span class="s4">) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">env</span><span class="s4">,</span>
+        <span class="s2">globals</span><span class="s4">,</span>
+        <span class="s2">ignorePatterns</span><span class="s4">: </span><span class="s2">ignorePattern</span><span class="s4">,</span>
+        <span class="s2">parser</span><span class="s4">,</span>
+        <span class="s2">parserOptions</span><span class="s4">,</span>
+        <span class="s2">plugins</span><span class="s4">,</span>
+        <span class="s2">rules</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether a directory exists at the given location</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} resolvedPath A path from the CWD</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{Error} As thrown by `fs.statSync` or `fs.isDirectory`.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if a directory exists</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">directoryExists</span><span class="s4">(</span><span class="s2">resolvedPath</span><span class="s4">) {</span>
+    <span class="s6">try </span><span class="s4">{</span>
+        <span class="s6">return </span><span class="s2">fs</span><span class="s4">.</span><span class="s2">statSync</span><span class="s4">(</span><span class="s2">resolvedPath</span><span class="s4">).</span><span class="s2">isDirectory</span><span class="s4">();</span>
+    <span class="s4">} </span><span class="s6">catch </span><span class="s4">(</span><span class="s2">error</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">error </span><span class="s4">&amp;&amp; (</span><span class="s2">error</span><span class="s4">.</span><span class="s2">code </span><span class="s4">=== </span><span class="s3">&quot;ENOENT&quot; </span><span class="s4">|| </span><span class="s2">error</span><span class="s4">.</span><span class="s2">code </span><span class="s4">=== </span><span class="s3">&quot;ENOTDIR&quot;</span><span class="s4">)) {</span>
+            <span class="s6">return false</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s6">throw </span><span class="s2">error</span><span class="s4">;</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Public Interface</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Core CLI.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">CLIEngine </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates a new instance of the core CLI engine.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CLIEngineOptions} providedOptions The options for this instance.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} [additionalData] Additional settings that are not CLIEngineOptions.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Record&lt;string,Plugin&gt;|null} [additionalData.preloadedPlugins] Preloaded plugins.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">providedOptions</span><span class="s4">, { </span><span class="s2">preloadedPlugins </span><span class="s4">} = {}) {</span>
+        <span class="s6">const </span><span class="s2">options </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">assign</span><span class="s4">(</span>
+            <span class="s2">Object</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s6">null</span><span class="s4">),</span>
+            <span class="s2">defaultOptions</span><span class="s4">,</span>
+            <span class="s4">{ </span><span class="s2">cwd</span><span class="s4">: </span><span class="s2">process</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">() },</span>
+            <span class="s2">providedOptions</span>
+        <span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">=== </span><span class="s6">void </span><span class="s7">0</span><span class="s4">) {</span>
+            <span class="s2">options</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">= </span><span class="s6">false</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s2">additionalPluginPool </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">();</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">preloadedPlugins</span><span class="s4">) {</span>
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">[</span><span class="s2">id</span><span class="s4">, </span><span class="s2">plugin</span><span class="s4">] </span><span class="s2">of Object</span><span class="s4">.</span><span class="s2">entries</span><span class="s4">(</span><span class="s2">preloadedPlugins</span><span class="s4">)) {</span>
+                <span class="s2">additionalPluginPool</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">id</span><span class="s4">, </span><span class="s2">plugin</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s2">cacheFilePath </span><span class="s4">= </span><span class="s2">getCacheFile</span><span class="s4">(</span>
+            <span class="s2">options</span><span class="s4">.</span><span class="s2">cacheLocation </span><span class="s4">|| </span><span class="s2">options</span><span class="s4">.</span><span class="s2">cacheFile</span><span class="s4">,</span>
+            <span class="s2">options</span><span class="s4">.</span><span class="s2">cwd</span>
+        <span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">configArrayFactory </span><span class="s4">= </span><span class="s6">new </span><span class="s2">CascadingConfigArrayFactory</span><span class="s4">({</span>
+            <span class="s2">additionalPluginPool</span><span class="s4">,</span>
+            <span class="s2">baseConfig</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">baseConfig </span><span class="s4">|| </span><span class="s6">null</span><span class="s4">,</span>
+            <span class="s2">cliConfig</span><span class="s4">: </span><span class="s2">createConfigDataFromOptions</span><span class="s4">(</span><span class="s2">options</span><span class="s4">),</span>
+            <span class="s2">cwd</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">,</span>
+            <span class="s2">ignorePath</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignorePath</span><span class="s4">,</span>
+            <span class="s2">resolvePluginsRelativeTo</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">resolvePluginsRelativeTo</span><span class="s4">,</span>
+            <span class="s2">rulePaths</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">rulePaths</span><span class="s4">,</span>
+            <span class="s2">specificConfigPath</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">configFile</span><span class="s4">,</span>
+            <span class="s2">useEslintrc</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">useEslintrc</span><span class="s4">,</span>
+            <span class="s2">builtInRules</span><span class="s4">,</span>
+            <span class="s2">loadRules</span><span class="s4">,</span>
+            <span class="s2">getEslintRecommendedConfig</span><span class="s4">: () =&gt; </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint/js&quot;</span><span class="s4">).</span><span class="s2">configs</span><span class="s4">.</span><span class="s2">recommended</span><span class="s4">,</span>
+            <span class="s2">getEslintAllConfig</span><span class="s4">: () =&gt; </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint/js&quot;</span><span class="s4">).</span><span class="s2">configs</span><span class="s4">.</span><span class="s2">all</span>
+        <span class="s4">});</span>
+        <span class="s6">const </span><span class="s2">fileEnumerator </span><span class="s4">= </span><span class="s6">new </span><span class="s2">FileEnumerator</span><span class="s4">({</span>
+            <span class="s2">configArrayFactory</span><span class="s4">,</span>
+            <span class="s2">cwd</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">,</span>
+            <span class="s2">extensions</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">extensions</span><span class="s4">,</span>
+            <span class="s2">globInputPaths</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">globInputPaths</span><span class="s4">,</span>
+            <span class="s2">errorOnUnmatchedPattern</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">errorOnUnmatchedPattern</span><span class="s4">,</span>
+            <span class="s2">ignore</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">ignore</span>
+        <span class="s4">});</span>
+        <span class="s6">const </span><span class="s2">lintResultCache </span><span class="s4">=</span>
+            <span class="s2">options</span><span class="s4">.</span><span class="s2">cache </span><span class="s4">? </span><span class="s6">new </span><span class="s2">LintResultCache</span><span class="s4">(</span><span class="s2">cacheFilePath</span><span class="s4">, </span><span class="s2">options</span><span class="s4">.</span><span class="s2">cacheStrategy</span><span class="s4">) : </span><span class="s6">null</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">linter </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Linter</span><span class="s4">({ </span><span class="s2">cwd</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd </span><span class="s4">});</span>
+
+        <span class="s0">/** </span><span class="s1">@type </span><span class="s0">{ConfigArray[]} */</span>
+        <span class="s6">const </span><span class="s2">lastConfigArrays </span><span class="s4">= [</span><span class="s2">configArrayFactory</span><span class="s4">.</span><span class="s2">getConfigArrayForFile</span><span class="s4">()];</span>
+
+        <span class="s5">// Store private data.</span>
+        <span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, {</span>
+            <span class="s2">additionalPluginPool</span><span class="s4">,</span>
+            <span class="s2">cacheFilePath</span><span class="s4">,</span>
+            <span class="s2">configArrayFactory</span><span class="s4">,</span>
+            <span class="s2">defaultIgnores</span><span class="s4">: </span><span class="s2">IgnorePattern</span><span class="s4">.</span><span class="s2">createDefaultIgnore</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">),</span>
+            <span class="s2">fileEnumerator</span><span class="s4">,</span>
+            <span class="s2">lastConfigArrays</span><span class="s4">,</span>
+            <span class="s2">lintResultCache</span><span class="s4">,</span>
+            <span class="s2">linter</span><span class="s4">,</span>
+            <span class="s2">options</span>
+        <span class="s4">});</span>
+
+        <span class="s5">// setup special filter for fixes</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">&amp;&amp; </span><span class="s2">options</span><span class="s4">.</span><span class="s2">fixTypes </span><span class="s4">&amp;&amp; </span><span class="s2">options</span><span class="s4">.</span><span class="s2">fixTypes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+            <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Using fix types </span><span class="s2">$</span><span class="s4">{</span><span class="s2">options</span><span class="s4">.</span><span class="s2">fixTypes</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+
+            <span class="s5">// throw an error if any invalid fix types are found</span>
+            <span class="s2">validateFixTypes</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">fixTypes</span><span class="s4">);</span>
+
+            <span class="s5">// convert to Set for faster lookup</span>
+            <span class="s6">const </span><span class="s2">fixTypes </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">fixTypes</span><span class="s4">);</span>
+
+            <span class="s5">// save original value of options.fix in case it's a function</span>
+            <span class="s6">const </span><span class="s2">originalFix </span><span class="s4">= (</span><span class="s6">typeof </span><span class="s2">options</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">=== </span><span class="s3">&quot;function&quot;</span><span class="s4">)</span>
+                <span class="s4">? </span><span class="s2">options</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">: () =&gt; </span><span class="s6">true</span><span class="s4">;</span>
+
+            <span class="s2">options</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">= </span><span class="s2">message </span><span class="s4">=&gt; </span><span class="s2">shouldMessageBeFixed</span><span class="s4">(</span><span class="s2">message</span><span class="s4">, </span><span class="s2">lastConfigArrays</span><span class="s4">, </span><span class="s2">fixTypes</span><span class="s4">) &amp;&amp; </span><span class="s2">originalFix</span><span class="s4">(</span><span class="s2">message</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s2">getRules</span><span class="s4">() {</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">lastConfigArrays </span><span class="s4">} = </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+
+        <span class="s6">return new </span><span class="s2">Map</span><span class="s4">(</span><span class="s6">function </span><span class="s4">*() {</span>
+            <span class="s6">yield</span><span class="s4">* </span><span class="s2">builtInRules</span><span class="s4">;</span>
+
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">configArray of lastConfigArrays</span><span class="s4">) {</span>
+                <span class="s6">yield</span><span class="s4">* </span><span class="s2">configArray</span><span class="s4">.</span><span class="s2">pluginRules</span><span class="s4">;</span>
+            <span class="s4">}</span>
+        <span class="s4">}());</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Returns results that only contains errors.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult[]} results The results to filter.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintResult[]} The filtered results.</span>
+     <span class="s0">*/</span>
+    <span class="s6">static </span><span class="s2">getErrorResults</span><span class="s4">(</span><span class="s2">results</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">filtered </span><span class="s4">= [];</span>
+
+        <span class="s2">results</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">result </span><span class="s4">=&gt; {</span>
+            <span class="s6">const </span><span class="s2">filteredMessages </span><span class="s4">= </span><span class="s2">result</span><span class="s4">.</span><span class="s2">messages</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">isErrorMessage</span><span class="s4">);</span>
+            <span class="s6">const </span><span class="s2">filteredSuppressedMessages </span><span class="s4">= </span><span class="s2">result</span><span class="s4">.</span><span class="s2">suppressedMessages</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">isErrorMessage</span><span class="s4">);</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">filteredMessages</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+                <span class="s2">filtered</span><span class="s4">.</span><span class="s2">push</span><span class="s4">({</span>
+                    <span class="s2">...result</span><span class="s4">,</span>
+                    <span class="s2">messages</span><span class="s4">: </span><span class="s2">filteredMessages</span><span class="s4">,</span>
+                    <span class="s2">suppressedMessages</span><span class="s4">: </span><span class="s2">filteredSuppressedMessages</span><span class="s4">,</span>
+                    <span class="s2">errorCount</span><span class="s4">: </span><span class="s2">filteredMessages</span><span class="s4">.</span><span class="s2">length</span><span class="s4">,</span>
+                    <span class="s2">warningCount</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+                    <span class="s2">fixableErrorCount</span><span class="s4">: </span><span class="s2">result</span><span class="s4">.</span><span class="s2">fixableErrorCount</span><span class="s4">,</span>
+                    <span class="s2">fixableWarningCount</span><span class="s4">: </span><span class="s7">0</span>
+                <span class="s4">});</span>
+            <span class="s4">}</span>
+        <span class="s4">});</span>
+
+        <span class="s6">return </span><span class="s2">filtered</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Outputs fixes from the given results to files.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintReport} report The report object created by CLIEngine.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+     <span class="s0">*/</span>
+    <span class="s6">static </span><span class="s2">outputFixes</span><span class="s4">(</span><span class="s2">report</span><span class="s4">) {</span>
+        <span class="s2">report</span><span class="s4">.</span><span class="s2">results</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">result </span><span class="s4">=&gt; </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">hasOwnProperty</span><span class="s4">.</span><span class="s2">call</span><span class="s4">(</span><span class="s2">result</span><span class="s4">, </span><span class="s3">&quot;output&quot;</span><span class="s4">)).</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">result </span><span class="s4">=&gt; {</span>
+            <span class="s2">fs</span><span class="s4">.</span><span class="s2">writeFileSync</span><span class="s4">(</span><span class="s2">result</span><span class="s4">.</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">result</span><span class="s4">.</span><span class="s2">output</span><span class="s4">);</span>
+        <span class="s4">});</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Resolves the patterns passed into executeOnFiles() into glob-based patterns</span>
+     <span class="s0">* for easier handling.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string[]} patterns The file patterns passed on the command line.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{string[]} The equivalent glob patterns.</span>
+     <span class="s0">*/</span>
+    <span class="s2">resolveFileGlobPatterns</span><span class="s4">(</span><span class="s2">patterns</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">options </span><span class="s4">} = </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">globInputPaths </span><span class="s4">=== </span><span class="s6">false</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">patterns</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">Boolean</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s2">extensions </span><span class="s4">= (</span><span class="s2">options</span><span class="s4">.</span><span class="s2">extensions </span><span class="s4">|| [</span><span class="s3">&quot;.js&quot;</span><span class="s4">]).</span><span class="s2">map</span><span class="s4">(</span><span class="s2">ext </span><span class="s4">=&gt; </span><span class="s2">ext</span><span class="s4">.</span><span class="s2">replace</span><span class="s4">(</span><span class="s8">/^\./u</span><span class="s4">, </span><span class="s3">&quot;&quot;</span><span class="s4">));</span>
+        <span class="s6">const </span><span class="s2">dirSuffix </span><span class="s4">= </span><span class="s3">`/**/*.{</span><span class="s2">$</span><span class="s4">{</span><span class="s2">extensions</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s3">&quot;,&quot;</span><span class="s4">)}</span><span class="s3">}`</span><span class="s4">;</span>
+
+        <span class="s6">return </span><span class="s2">patterns</span><span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">Boolean</span><span class="s4">).</span><span class="s2">map</span><span class="s4">(</span><span class="s2">pathname </span><span class="s4">=&gt; {</span>
+            <span class="s6">const </span><span class="s2">resolvedPath </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">pathname</span><span class="s4">);</span>
+            <span class="s6">const </span><span class="s2">newPath </span><span class="s4">= </span><span class="s2">directoryExists</span><span class="s4">(</span><span class="s2">resolvedPath</span><span class="s4">)</span>
+                <span class="s4">? </span><span class="s2">pathname</span><span class="s4">.</span><span class="s2">replace</span><span class="s4">(</span><span class="s8">/[/\\]$/u</span><span class="s4">, </span><span class="s3">&quot;&quot;</span><span class="s4">) + </span><span class="s2">dirSuffix</span>
+                <span class="s4">: </span><span class="s2">pathname</span><span class="s4">;</span>
+
+            <span class="s6">return </span><span class="s2">path</span><span class="s4">.</span><span class="s2">normalize</span><span class="s4">(</span><span class="s2">newPath</span><span class="s4">).</span><span class="s2">replace</span><span class="s4">(</span><span class="s8">/\\/gu</span><span class="s4">, </span><span class="s3">&quot;/&quot;</span><span class="s4">);</span>
+        <span class="s4">});</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Executes the current configuration on an array of file and directory names.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string[]} patterns An array of file and directory names.</span>
+     <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{Error} As may be thrown by `fs.unlinkSync`.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintReport} The results for all files that were linted.</span>
+     <span class="s0">*/</span>
+    <span class="s2">executeOnFiles</span><span class="s4">(</span><span class="s2">patterns</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s4">{</span>
+            <span class="s2">cacheFilePath</span><span class="s4">,</span>
+            <span class="s2">fileEnumerator</span><span class="s4">,</span>
+            <span class="s2">lastConfigArrays</span><span class="s4">,</span>
+            <span class="s2">lintResultCache</span><span class="s4">,</span>
+            <span class="s2">linter</span><span class="s4">,</span>
+            <span class="s2">options</span><span class="s4">: {</span>
+                <span class="s2">allowInlineConfig</span><span class="s4">,</span>
+                <span class="s2">cache</span><span class="s4">,</span>
+                <span class="s2">cwd</span><span class="s4">,</span>
+                <span class="s2">fix</span><span class="s4">,</span>
+                <span class="s2">reportUnusedDisableDirectives</span>
+            <span class="s4">}</span>
+        <span class="s4">} = </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">results </span><span class="s4">= [];</span>
+        <span class="s6">const </span><span class="s2">startTime </span><span class="s4">= </span><span class="s2">Date</span><span class="s4">.</span><span class="s2">now</span><span class="s4">();</span>
+
+        <span class="s5">// Clear the last used config arrays.</span>
+        <span class="s2">lastConfigArrays</span><span class="s4">.</span><span class="s2">length </span><span class="s4">= </span><span class="s7">0</span><span class="s4">;</span>
+
+        <span class="s5">// Delete cache file; should this do here?</span>
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">cache</span><span class="s4">) {</span>
+            <span class="s6">try </span><span class="s4">{</span>
+                <span class="s2">fs</span><span class="s4">.</span><span class="s2">unlinkSync</span><span class="s4">(</span><span class="s2">cacheFilePath</span><span class="s4">);</span>
+            <span class="s4">} </span><span class="s6">catch </span><span class="s4">(</span><span class="s2">error</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">errorCode </span><span class="s4">= </span><span class="s2">error </span><span class="s4">&amp;&amp; </span><span class="s2">error</span><span class="s4">.</span><span class="s2">code</span><span class="s4">;</span>
+
+                <span class="s5">// Ignore errors when no such file exists or file system is read only (and cache file does not exist)</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">errorCode </span><span class="s4">!== </span><span class="s3">&quot;ENOENT&quot; </span><span class="s4">&amp;&amp; !(</span><span class="s2">errorCode </span><span class="s4">=== </span><span class="s3">&quot;EROFS&quot; </span><span class="s4">&amp;&amp; !</span><span class="s2">fs</span><span class="s4">.</span><span class="s2">existsSync</span><span class="s4">(</span><span class="s2">cacheFilePath</span><span class="s4">))) {</span>
+                    <span class="s6">throw </span><span class="s2">error</span><span class="s4">;</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// Iterate source code files.</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">{ </span><span class="s2">config</span><span class="s4">, </span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">ignored </span><span class="s4">} </span><span class="s2">of fileEnumerator</span><span class="s4">.</span><span class="s2">iterateFiles</span><span class="s4">(</span><span class="s2">patterns</span><span class="s4">)) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">ignored</span><span class="s4">) {</span>
+                <span class="s2">results</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">createIgnoreResult</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">cwd</span><span class="s4">));</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">/* 
+             * Store used configs for: 
+             * - this method uses to collect used deprecated rules. 
+             * - `getRules()` method uses to collect all loaded rules. 
+             * - `--fix-type` option uses to get the loaded rule's meta data. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">lastConfigArrays</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s2">config</span><span class="s4">)) {</span>
+                <span class="s2">lastConfigArrays</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">config</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// Skip if there is cached result.</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">lintResultCache</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">cachedResult </span><span class="s4">=</span>
+                    <span class="s2">lintResultCache</span><span class="s4">.</span><span class="s2">getCachedLintResults</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">config</span><span class="s4">);</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">cachedResult</span><span class="s4">) {</span>
+                    <span class="s6">const </span><span class="s2">hadMessages </span><span class="s4">=</span>
+                        <span class="s2">cachedResult</span><span class="s4">.</span><span class="s2">messages </span><span class="s4">&amp;&amp;</span>
+                        <span class="s2">cachedResult</span><span class="s4">.</span><span class="s2">messages</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">;</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">hadMessages </span><span class="s4">&amp;&amp; </span><span class="s2">fix</span><span class="s4">) {</span>
+                        <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Reprocessing cached file to allow autofix: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">filePath</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+                    <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                        <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Skipping file since it hasn't changed: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">filePath</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+                        <span class="s2">results</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">cachedResult</span><span class="s4">);</span>
+                        <span class="s6">continue</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// Do lint.</span>
+            <span class="s6">const </span><span class="s2">result </span><span class="s4">= </span><span class="s2">verifyText</span><span class="s4">({</span>
+                <span class="s2">text</span><span class="s4">: </span><span class="s2">fs</span><span class="s4">.</span><span class="s2">readFileSync</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s3">&quot;utf8&quot;</span><span class="s4">),</span>
+                <span class="s2">filePath</span><span class="s4">,</span>
+                <span class="s2">config</span><span class="s4">,</span>
+                <span class="s2">cwd</span><span class="s4">,</span>
+                <span class="s2">fix</span><span class="s4">,</span>
+                <span class="s2">allowInlineConfig</span><span class="s4">,</span>
+                <span class="s2">reportUnusedDisableDirectives</span><span class="s4">,</span>
+                <span class="s2">fileEnumerator</span><span class="s4">,</span>
+                <span class="s2">linter</span>
+            <span class="s4">});</span>
+
+            <span class="s2">results</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">result</span><span class="s4">);</span>
+
+            <span class="s5">/* 
+             * Store the lint result in the LintResultCache. 
+             * NOTE: The LintResultCache will remove the file source and any 
+             * other properties that are difficult to serialize, and will 
+             * hydrate those properties back in on future lint runs. 
+             */</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">lintResultCache</span><span class="s4">) {</span>
+                <span class="s2">lintResultCache</span><span class="s4">.</span><span class="s2">setCachedLintResults</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">config</span><span class="s4">, </span><span class="s2">result</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// Persist the cache to disk.</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">lintResultCache</span><span class="s4">) {</span>
+            <span class="s2">lintResultCache</span><span class="s4">.</span><span class="s2">reconcile</span><span class="s4">();</span>
+        <span class="s4">}</span>
+
+        <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Linting complete in: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">Date</span><span class="s4">.</span><span class="s2">now</span><span class="s4">() - </span><span class="s2">startTime</span><span class="s4">}</span><span class="s3">ms`</span><span class="s4">);</span>
+        <span class="s6">let </span><span class="s2">usedDeprecatedRules</span><span class="s4">;</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">results</span><span class="s4">,</span>
+            <span class="s2">...calculateStatsPerRun</span><span class="s4">(</span><span class="s2">results</span><span class="s4">),</span>
+
+            <span class="s5">// Initialize it lazily because CLI and `ESLint` API don't use it.</span>
+            <span class="s2">get usedDeprecatedRules</span><span class="s4">() {</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">usedDeprecatedRules</span><span class="s4">) {</span>
+                    <span class="s2">usedDeprecatedRules </span><span class="s4">= </span><span class="s2">Array</span><span class="s4">.</span><span class="s2">from</span><span class="s4">(</span>
+                        <span class="s2">iterateRuleDeprecationWarnings</span><span class="s4">(</span><span class="s2">lastConfigArrays</span><span class="s4">)</span>
+                    <span class="s4">);</span>
+                <span class="s4">}</span>
+                <span class="s6">return </span><span class="s2">usedDeprecatedRules</span><span class="s4">;</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Executes the current configuration on text.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} text A string of JavaScript code to lint.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} [filename] An optional string representing the texts filename.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} [warnIgnored] Always warn when a file is ignored</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintReport} The results for the linting.</span>
+     <span class="s0">*/</span>
+    <span class="s2">executeOnText</span><span class="s4">(</span><span class="s2">text</span><span class="s4">, </span><span class="s2">filename</span><span class="s4">, </span><span class="s2">warnIgnored</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s4">{</span>
+            <span class="s2">configArrayFactory</span><span class="s4">,</span>
+            <span class="s2">fileEnumerator</span><span class="s4">,</span>
+            <span class="s2">lastConfigArrays</span><span class="s4">,</span>
+            <span class="s2">linter</span><span class="s4">,</span>
+            <span class="s2">options</span><span class="s4">: {</span>
+                <span class="s2">allowInlineConfig</span><span class="s4">,</span>
+                <span class="s2">cwd</span><span class="s4">,</span>
+                <span class="s2">fix</span><span class="s4">,</span>
+                <span class="s2">reportUnusedDisableDirectives</span>
+            <span class="s4">}</span>
+        <span class="s4">} = </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">results </span><span class="s4">= [];</span>
+        <span class="s6">const </span><span class="s2">startTime </span><span class="s4">= </span><span class="s2">Date</span><span class="s4">.</span><span class="s2">now</span><span class="s4">();</span>
+        <span class="s6">const </span><span class="s2">resolvedFilename </span><span class="s4">= </span><span class="s2">filename </span><span class="s4">&amp;&amp; </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">filename</span><span class="s4">);</span>
+
+
+        <span class="s5">// Clear the last used config arrays.</span>
+        <span class="s2">lastConfigArrays</span><span class="s4">.</span><span class="s2">length </span><span class="s4">= </span><span class="s7">0</span><span class="s4">;</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">resolvedFilename </span><span class="s4">&amp;&amp; </span><span class="s6">this</span><span class="s4">.</span><span class="s2">isPathIgnored</span><span class="s4">(</span><span class="s2">resolvedFilename</span><span class="s4">)) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">warnIgnored</span><span class="s4">) {</span>
+                <span class="s2">results</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">createIgnoreResult</span><span class="s4">(</span><span class="s2">resolvedFilename</span><span class="s4">, </span><span class="s2">cwd</span><span class="s4">));</span>
+            <span class="s4">}</span>
+        <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+            <span class="s6">const </span><span class="s2">config </span><span class="s4">= </span><span class="s2">configArrayFactory</span><span class="s4">.</span><span class="s2">getConfigArrayForFile</span><span class="s4">(</span>
+                <span class="s2">resolvedFilename </span><span class="s4">|| </span><span class="s3">&quot;__placeholder__.js&quot;</span>
+            <span class="s4">);</span>
+
+            <span class="s5">/* 
+             * Store used configs for: 
+             * - this method uses to collect used deprecated rules. 
+             * - `getRules()` method uses to collect all loaded rules. 
+             * - `--fix-type` option uses to get the loaded rule's meta data. 
+             */</span>
+            <span class="s2">lastConfigArrays</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">config</span><span class="s4">);</span>
+
+            <span class="s5">// Do lint.</span>
+            <span class="s2">results</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">verifyText</span><span class="s4">({</span>
+                <span class="s2">text</span><span class="s4">,</span>
+                <span class="s2">filePath</span><span class="s4">: </span><span class="s2">resolvedFilename</span><span class="s4">,</span>
+                <span class="s2">config</span><span class="s4">,</span>
+                <span class="s2">cwd</span><span class="s4">,</span>
+                <span class="s2">fix</span><span class="s4">,</span>
+                <span class="s2">allowInlineConfig</span><span class="s4">,</span>
+                <span class="s2">reportUnusedDisableDirectives</span><span class="s4">,</span>
+                <span class="s2">fileEnumerator</span><span class="s4">,</span>
+                <span class="s2">linter</span>
+            <span class="s4">}));</span>
+        <span class="s4">}</span>
+
+        <span class="s2">debug</span><span class="s4">(</span><span class="s3">`Linting complete in: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">Date</span><span class="s4">.</span><span class="s2">now</span><span class="s4">() - </span><span class="s2">startTime</span><span class="s4">}</span><span class="s3">ms`</span><span class="s4">);</span>
+        <span class="s6">let </span><span class="s2">usedDeprecatedRules</span><span class="s4">;</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">results</span><span class="s4">,</span>
+            <span class="s2">...calculateStatsPerRun</span><span class="s4">(</span><span class="s2">results</span><span class="s4">),</span>
+
+            <span class="s5">// Initialize it lazily because CLI and `ESLint` API don't use it.</span>
+            <span class="s2">get usedDeprecatedRules</span><span class="s4">() {</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">usedDeprecatedRules</span><span class="s4">) {</span>
+                    <span class="s2">usedDeprecatedRules </span><span class="s4">= </span><span class="s2">Array</span><span class="s4">.</span><span class="s2">from</span><span class="s4">(</span>
+                        <span class="s2">iterateRuleDeprecationWarnings</span><span class="s4">(</span><span class="s2">lastConfigArrays</span><span class="s4">)</span>
+                    <span class="s4">);</span>
+                <span class="s4">}</span>
+                <span class="s6">return </span><span class="s2">usedDeprecatedRules</span><span class="s4">;</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Returns a configuration object for the given file based on the CLI options.</span>
+     <span class="s0">* This is the same logic used by the ESLint CLI executable to determine</span>
+     <span class="s0">* configuration for each file it processes.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} filePath The path of the file to retrieve a config object for.</span>
+     <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{Error} If filepath a directory path.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ConfigData} A configuration object for the file.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getConfigForFile</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">configArrayFactory</span><span class="s4">, </span><span class="s2">options </span><span class="s4">} = </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">absolutePath </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">filePath</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">directoryExists</span><span class="s4">(</span><span class="s2">absolutePath</span><span class="s4">)) {</span>
+            <span class="s6">throw </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">assign</span><span class="s4">(</span>
+                <span class="s6">new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'filePath' should not be a directory path.&quot;</span><span class="s4">),</span>
+                <span class="s4">{ </span><span class="s2">messageTemplate</span><span class="s4">: </span><span class="s3">&quot;print-config-with-directory-path&quot; </span><span class="s4">}</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s2">configArrayFactory</span>
+            <span class="s4">.</span><span class="s2">getConfigArrayForFile</span><span class="s4">(</span><span class="s2">absolutePath</span><span class="s4">)</span>
+            <span class="s4">.</span><span class="s2">extractConfig</span><span class="s4">(</span><span class="s2">absolutePath</span><span class="s4">)</span>
+            <span class="s4">.</span><span class="s2">toCompatibleObjectAsConfigFileContent</span><span class="s4">();</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Checks if a given path is ignored by ESLint.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} filePath The path of the file to check.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} Whether or not the given path is ignored.</span>
+     <span class="s0">*/</span>
+    <span class="s2">isPathIgnored</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s4">{</span>
+            <span class="s2">configArrayFactory</span><span class="s4">,</span>
+            <span class="s2">defaultIgnores</span><span class="s4">,</span>
+            <span class="s2">options</span><span class="s4">: { </span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">ignore </span><span class="s4">}</span>
+        <span class="s4">} = </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">absolutePath </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">filePath</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">ignore</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">config </span><span class="s4">= </span><span class="s2">configArrayFactory</span>
+                <span class="s4">.</span><span class="s2">getConfigArrayForFile</span><span class="s4">(</span><span class="s2">absolutePath</span><span class="s4">)</span>
+                <span class="s4">.</span><span class="s2">extractConfig</span><span class="s4">(</span><span class="s2">absolutePath</span><span class="s4">);</span>
+            <span class="s6">const </span><span class="s2">ignores </span><span class="s4">= </span><span class="s2">config</span><span class="s4">.</span><span class="s2">ignores </span><span class="s4">|| </span><span class="s2">defaultIgnores</span><span class="s4">;</span>
+
+            <span class="s6">return </span><span class="s2">ignores</span><span class="s4">(</span><span class="s2">absolutePath</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s2">defaultIgnores</span><span class="s4">(</span><span class="s2">absolutePath</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Returns the formatter representing the given format or null if the `format` is not a string.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} [format] The name of the format to load or the path to a</span>
+     <span class="s0">*      custom formatter.</span>
+     <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{any} As may be thrown by requiring of formatter</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{(FormatterFunction|null)} The formatter function or null if the `format` is not a string.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getFormatter</span><span class="s4">(</span><span class="s2">format</span><span class="s4">) {</span>
+
+        <span class="s5">// default is stylish</span>
+        <span class="s6">const </span><span class="s2">resolvedFormatName </span><span class="s4">= </span><span class="s2">format </span><span class="s4">|| </span><span class="s3">&quot;stylish&quot;</span><span class="s4">;</span>
+
+        <span class="s5">// only strings are valid formatters</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">resolvedFormatName </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">) {</span>
+
+            <span class="s5">// replace \ with / for Windows compatibility</span>
+            <span class="s6">const </span><span class="s2">normalizedFormatName </span><span class="s4">= </span><span class="s2">resolvedFormatName</span><span class="s4">.</span><span class="s2">replace</span><span class="s4">(</span><span class="s8">/\\/gu</span><span class="s4">, </span><span class="s3">&quot;/&quot;</span><span class="s4">);</span>
+
+            <span class="s6">const </span><span class="s2">slots </span><span class="s4">= </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+            <span class="s6">const </span><span class="s2">cwd </span><span class="s4">= </span><span class="s2">slots </span><span class="s4">? </span><span class="s2">slots</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd </span><span class="s4">: </span><span class="s2">process</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">();</span>
+            <span class="s6">const </span><span class="s2">namespace </span><span class="s4">= </span><span class="s2">naming</span><span class="s4">.</span><span class="s2">getNamespaceFromTerm</span><span class="s4">(</span><span class="s2">normalizedFormatName</span><span class="s4">);</span>
+
+            <span class="s6">let </span><span class="s2">formatterPath</span><span class="s4">;</span>
+
+            <span class="s5">// if there's a slash, then it's a file (TODO: this check seems dubious for scoped npm packages)</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">namespace </span><span class="s4">&amp;&amp; </span><span class="s2">normalizedFormatName</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;/&quot;</span><span class="s4">)) {</span>
+                <span class="s2">formatterPath </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">, </span><span class="s2">normalizedFormatName</span><span class="s4">);</span>
+            <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                <span class="s6">try </span><span class="s4">{</span>
+                    <span class="s6">const </span><span class="s2">npmFormat </span><span class="s4">= </span><span class="s2">naming</span><span class="s4">.</span><span class="s2">normalizePackageName</span><span class="s4">(</span><span class="s2">normalizedFormatName</span><span class="s4">, </span><span class="s3">&quot;eslint-formatter&quot;</span><span class="s4">);</span>
+
+                    <span class="s2">formatterPath </span><span class="s4">= </span><span class="s2">ModuleResolver</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">npmFormat</span><span class="s4">, </span><span class="s2">path</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">, </span><span class="s3">&quot;__placeholder__.js&quot;</span><span class="s4">));</span>
+                <span class="s4">} </span><span class="s6">catch </span><span class="s4">{</span>
+                    <span class="s2">formatterPath </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">resolve</span><span class="s4">(</span><span class="s2">__dirname</span><span class="s4">, </span><span class="s3">&quot;formatters&quot;</span><span class="s4">, </span><span class="s2">normalizedFormatName</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+
+            <span class="s6">try </span><span class="s4">{</span>
+                <span class="s6">return </span><span class="s2">require</span><span class="s4">(</span><span class="s2">formatterPath</span><span class="s4">);</span>
+            <span class="s4">} </span><span class="s6">catch </span><span class="s4">(</span><span class="s2">ex</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">format </span><span class="s4">=== </span><span class="s3">&quot;table&quot; </span><span class="s4">|| </span><span class="s2">format </span><span class="s4">=== </span><span class="s3">&quot;codeframe&quot;</span><span class="s4">) {</span>
+                    <span class="s2">ex</span><span class="s4">.</span><span class="s2">message </span><span class="s4">= </span><span class="s3">`The </span><span class="s2">$</span><span class="s4">{</span><span class="s2">format</span><span class="s4">} </span><span class="s3">formatter is no longer part of core ESLint. Install it manually with </span><span class="s6">\`</span><span class="s3">npm install -D eslint-formatter-</span><span class="s2">$</span><span class="s4">{</span><span class="s2">format</span><span class="s4">}</span><span class="s6">\`</span><span class="s3">`</span><span class="s4">;</span>
+                <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                    <span class="s2">ex</span><span class="s4">.</span><span class="s2">message </span><span class="s4">= </span><span class="s3">`There was a problem loading formatter: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">formatterPath</span><span class="s4">}</span><span class="s6">\n</span><span class="s3">Error: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">ex</span><span class="s4">.</span><span class="s2">message</span><span class="s4">}</span><span class="s3">`</span><span class="s4">;</span>
+                <span class="s4">}</span>
+                <span class="s6">throw </span><span class="s2">ex</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+        <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+            <span class="s6">return null</span><span class="s4">;</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s2">CLIEngine</span><span class="s4">.</span><span class="s2">version </span><span class="s4">= </span><span class="s2">pkg</span><span class="s4">.</span><span class="s2">version</span><span class="s4">;</span>
+<span class="s2">CLIEngine</span><span class="s4">.</span><span class="s2">getFormatter </span><span class="s4">= </span><span class="s2">CLIEngine</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">getFormatter</span><span class="s4">;</span>
+
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">CLIEngine</span><span class="s4">,</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Get the internal slots of a given CLIEngine instance for tests.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CLIEngine} instance The CLIEngine instance to get.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{CLIEngineInternalSlots} The internal slots.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getCLIEngineInternalSlots</span><span class="s4">(</span><span class="s2">instance</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">internalSlotsMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">instance</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

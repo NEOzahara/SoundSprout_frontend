@@ -1,0 +1,372 @@
+<html>
+<head>
+<title>AggressiveSplittingPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+AggressiveSplittingPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">STAGE_ADVANCED </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../OptimizationStages&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">intersect </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/SetHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">compareModulesByIdentifier</span><span class="s3">,</span>
+	<span class="s1">compareChunks</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createSchemaValidation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/create-schema-validation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">identifierUtils </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/identifier&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/plugins/optimize/AggressiveSplittingPlugin&quot;).AggressiveSplittingPluginOptions} AggressiveSplittingPluginOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+
+<span class="s4">const </span><span class="s1">validate </span><span class="s3">= </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/optimize/AggressiveSplittingPlugin.check.js&quot;</span><span class="s3">),</span>
+	<span class="s3">() =&gt;</span>
+		<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/optimize/AggressiveSplittingPlugin.json&quot;</span><span class="s3">),</span>
+	<span class="s3">{</span>
+		<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;Aggressive Splitting Plugin&quot;</span><span class="s3">,</span>
+		<span class="s1">baseDataPath</span><span class="s3">: </span><span class="s2">&quot;options&quot;</span>
+	<span class="s3">}</span>
+<span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} oldChunk the old chunk</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} newChunk the new chunk</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(module: Module) =&gt; void} function to move module between chunks</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">moveModuleBetween </span><span class="s3">= (</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">oldChunk</span><span class="s3">, </span><span class="s1">newChunk</span><span class="s3">) =&gt; </span><span class="s1">module </span><span class="s3">=&gt; {</span>
+	<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">disconnectChunkAndModule</span><span class="s3">(</span><span class="s1">oldChunk</span><span class="s3">, </span><span class="s1">module</span><span class="s3">);</span>
+	<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">connectChunkAndModule</span><span class="s3">(</span><span class="s1">newChunk</span><span class="s3">, </span><span class="s1">module</span><span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} chunk the chunk</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(module: Module) =&gt; boolean} filter for entry module</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">isNotAEntryModule </span><span class="s3">= (</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">) =&gt; </span><span class="s1">module </span><span class="s3">=&gt;</span>
+	<span class="s3">!</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">isEntryModuleInChunk</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakSet&lt;Chunk&gt;} */</span>
+<span class="s4">const </span><span class="s1">recordedChunks </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakSet</span><span class="s3">();</span>
+
+<span class="s4">class </span><span class="s1">AggressiveSplittingPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AggressiveSplittingPluginOptions=} options options object</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options </span><span class="s3">= {}) {</span>
+		<span class="s1">validate</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">minSize </span><span class="s3">!== </span><span class="s2">&quot;number&quot;</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">minSize </span><span class="s3">= </span><span class="s7">30 </span><span class="s3">* </span><span class="s7">1024</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">maxSize </span><span class="s3">!== </span><span class="s2">&quot;number&quot;</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">maxSize </span><span class="s3">= </span><span class="s7">50 </span><span class="s3">* </span><span class="s7">1024</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkOverhead </span><span class="s3">!== </span><span class="s2">&quot;number&quot;</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">chunkOverhead </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">entryChunkMultiplicator </span><span class="s3">!== </span><span class="s2">&quot;number&quot;</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">entryChunkMultiplicator </span><span class="s3">= </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} chunk the chunk to test</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true if the chunk was recorded</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">wasChunkRecorded</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">recordedChunks</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">thisCompilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s2">&quot;AggressiveSplittingPlugin&quot;</span><span class="s3">,</span>
+			<span class="s1">compilation </span><span class="s3">=&gt; {</span>
+				<span class="s4">let </span><span class="s1">needAdditionalSeal </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+				<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{{ id?: NonNullable&lt;Chunk[&quot;id&quot;]&gt;, hash?: NonNullable&lt;Chunk[&quot;hash&quot;]&gt;, modules: Module[], size: number }} SplitData */</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SplitData[]} */</span>
+				<span class="s4">let </span><span class="s1">newSplits</span><span class="s3">;</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;Chunk&gt;} */</span>
+				<span class="s4">let </span><span class="s1">fromAggressiveSplittingSet</span><span class="s3">;</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Chunk, SplitData&gt;} */</span>
+				<span class="s4">let </span><span class="s1">chunkSplitDataMap</span><span class="s3">;</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">optimize</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;AggressiveSplittingPlugin&quot;</span><span class="s3">, () =&gt; {</span>
+					<span class="s1">newSplits </span><span class="s3">= [];</span>
+					<span class="s1">fromAggressiveSplittingSet </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+					<span class="s1">chunkSplitDataMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+				<span class="s3">});</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">optimizeChunks</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s3">{</span>
+						<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;AggressiveSplittingPlugin&quot;</span><span class="s3">,</span>
+						<span class="s1">stage</span><span class="s3">: </span><span class="s1">STAGE_ADVANCED</span>
+					<span class="s3">},</span>
+					<span class="s1">chunks </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+						<span class="s0">// Precompute stuff</span>
+						<span class="s4">const </span><span class="s1">nameToModuleMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+						<span class="s4">const </span><span class="s1">moduleToNameMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+						<span class="s4">const </span><span class="s1">makePathsRelative </span><span class="s3">=</span>
+							<span class="s1">identifierUtils</span><span class="s3">.</span><span class="s1">makePathsRelative</span><span class="s3">.</span><span class="s1">bindContextCache</span><span class="s3">(</span>
+								<span class="s1">compiler</span><span class="s3">.</span><span class="s1">context</span><span class="s3">,</span>
+								<span class="s1">compiler</span><span class="s3">.</span><span class="s1">root</span>
+							<span class="s3">);</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">m of compilation</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">name </span><span class="s3">= </span><span class="s1">makePathsRelative</span><span class="s3">(</span><span class="s1">m</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">());</span>
+							<span class="s1">nameToModuleMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">name</span><span class="s3">, </span><span class="s1">m</span><span class="s3">);</span>
+							<span class="s1">moduleToNameMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">m</span><span class="s3">, </span><span class="s1">name</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Check used chunk ids</span>
+						<span class="s4">const </span><span class="s1">usedIds </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunks</span><span class="s3">) {</span>
+							<span class="s1">usedIds</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s4">const </span><span class="s1">recordedSplits </span><span class="s3">=</span>
+							<span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">records </span><span class="s3">&amp;&amp; </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">records</span><span class="s3">.</span><span class="s1">aggressiveSplits</span><span class="s3">) ||</span>
+							<span class="s3">[];</span>
+						<span class="s4">const </span><span class="s1">usedSplits </span><span class="s3">= </span><span class="s1">newSplits</span>
+							<span class="s3">? </span><span class="s1">recordedSplits</span><span class="s3">.</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">newSplits</span><span class="s3">)</span>
+							<span class="s3">: </span><span class="s1">recordedSplits</span><span class="s3">;</span>
+
+						<span class="s4">const </span><span class="s1">minSize </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">minSize</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">maxSize </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">maxSize</span><span class="s3">);</span>
+
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{SplitData} splitData split data</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true when applied, otherwise false</span>
+						 <span class="s5">*/</span>
+						<span class="s4">const </span><span class="s1">applySplit </span><span class="s3">= </span><span class="s1">splitData </span><span class="s3">=&gt; {</span>
+							<span class="s0">// Cannot split if id is already taken</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">id </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s1">usedIds</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">id</span><span class="s3">)) {</span>
+								<span class="s4">return false</span><span class="s3">;</span>
+							<span class="s3">}</span>
+
+							<span class="s0">// Get module objects from names</span>
+							<span class="s4">const </span><span class="s1">selectedModules </span><span class="s3">= </span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">name </span><span class="s3">=&gt;</span>
+								<span class="s1">nameToModuleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">name</span><span class="s3">)</span>
+							<span class="s3">);</span>
+
+							<span class="s0">// Does the modules exist at all?</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">selectedModules</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(</span><span class="s1">Boolean</span><span class="s3">)) </span><span class="s4">return false</span><span class="s3">;</span>
+
+							<span class="s0">// Check if size matches (faster than waiting for hash)</span>
+							<span class="s4">let </span><span class="s1">size </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">m of selectedModules</span><span class="s3">) </span><span class="s1">size </span><span class="s3">+= </span><span class="s1">m</span><span class="s3">.</span><span class="s1">size</span><span class="s3">();</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">size </span><span class="s3">!== </span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">size</span><span class="s3">) </span><span class="s4">return false</span><span class="s3">;</span>
+
+							<span class="s0">// get chunks with all modules</span>
+							<span class="s4">const </span><span class="s1">selectedChunks </span><span class="s3">= </span><span class="s1">intersect</span><span class="s3">(</span>
+								<span class="s1">selectedModules</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span>
+									<span class="s1">m </span><span class="s3">=&gt; </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleChunksIterable</span><span class="s3">(</span><span class="s1">m</span><span class="s3">))</span>
+								<span class="s3">)</span>
+							<span class="s3">);</span>
+
+							<span class="s0">// No relevant chunks found</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">selectedChunks</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return false</span><span class="s3">;</span>
+
+							<span class="s0">// The found chunk is already the split or similar</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">selectedChunks</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">1 </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getNumberOfChunkModules</span><span class="s3">(</span>
+									<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">selectedChunks</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">]</span>
+								<span class="s3">) === </span><span class="s1">selectedModules</span><span class="s3">.</span><span class="s1">length</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">chunk </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">selectedChunks</span><span class="s3">)[</span><span class="s7">0</span><span class="s3">];</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">fromAggressiveSplittingSet</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">)) </span><span class="s4">return false</span><span class="s3">;</span>
+								<span class="s1">fromAggressiveSplittingSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+								<span class="s1">chunkSplitDataMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">splitData</span><span class="s3">);</span>
+								<span class="s4">return true</span><span class="s3">;</span>
+							<span class="s3">}</span>
+
+							<span class="s0">// split the chunk into two parts</span>
+							<span class="s4">const </span><span class="s1">newChunk </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">addChunk</span><span class="s3">();</span>
+							<span class="s1">newChunk</span><span class="s3">.</span><span class="s1">chunkReason </span><span class="s3">= </span><span class="s2">&quot;aggressive splitted&quot;</span><span class="s3">;</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of selectedChunks</span><span class="s3">) {</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of selectedModules</span><span class="s3">) {</span>
+									<span class="s1">moveModuleBetween</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">newChunk</span><span class="s3">)(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s1">chunk</span><span class="s3">.</span><span class="s1">split</span><span class="s3">(</span><span class="s1">newChunk</span><span class="s3">);</span>
+								<span class="s1">chunk</span><span class="s3">.</span><span class="s1">name </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */ </span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s1">fromAggressiveSplittingSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newChunk</span><span class="s3">);</span>
+							<span class="s1">chunkSplitDataMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">newChunk</span><span class="s3">, </span><span class="s1">splitData</span><span class="s3">);</span>
+
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">id </span><span class="s3">!== </span><span class="s4">null </span><span class="s3">&amp;&amp; </span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">id </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+								<span class="s1">newChunk</span><span class="s3">.</span><span class="s1">id </span><span class="s3">= </span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">id</span><span class="s3">;</span>
+								<span class="s1">newChunk</span><span class="s3">.</span><span class="s1">ids </span><span class="s3">= [</span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">id</span><span class="s3">];</span>
+							<span class="s3">}</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">};</span>
+
+						<span class="s0">// try to restore to recorded splitting</span>
+						<span class="s4">let </span><span class="s1">changed </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">j </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">j </span><span class="s3">&lt; </span><span class="s1">usedSplits</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">j</span><span class="s3">++) {</span>
+							<span class="s4">const </span><span class="s1">splitData </span><span class="s3">= </span><span class="s1">usedSplits</span><span class="s3">[</span><span class="s1">j</span><span class="s3">];</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">applySplit</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">)) </span><span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// for any chunk which isn't splitted yet, split it and create a new entry</span>
+						<span class="s0">// start with the biggest chunk</span>
+						<span class="s4">const </span><span class="s1">cmpFn </span><span class="s3">= </span><span class="s1">compareChunks</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">sortedChunks </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">chunks</span><span class="s3">).</span><span class="s1">sort</span><span class="s3">((</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+							<span class="s4">const </span><span class="s1">diff1 </span><span class="s3">=</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkModulesSize</span><span class="s3">(</span><span class="s1">b</span><span class="s3">) -</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkModulesSize</span><span class="s3">(</span><span class="s1">a</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">diff1</span><span class="s3">) </span><span class="s4">return </span><span class="s1">diff1</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">diff2 </span><span class="s3">=</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getNumberOfChunkModules</span><span class="s3">(</span><span class="s1">a</span><span class="s3">) -</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getNumberOfChunkModules</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">diff2</span><span class="s3">) </span><span class="s4">return </span><span class="s1">diff2</span><span class="s3">;</span>
+							<span class="s4">return </span><span class="s1">cmpFn</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">);</span>
+						<span class="s3">});</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of sortedChunks</span><span class="s3">) {</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">fromAggressiveSplittingSet</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+							<span class="s4">const </span><span class="s1">size </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkModulesSize</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">size </span><span class="s3">&gt; </span><span class="s1">maxSize </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getNumberOfChunkModules</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">) &gt; </span><span class="s7">1</span>
+							<span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">chunkGraph</span>
+									<span class="s3">.</span><span class="s1">getOrderedChunkModules</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">compareModulesByIdentifier</span><span class="s3">)</span>
+									<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">isNotAEntryModule</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">));</span>
+								<span class="s4">const </span><span class="s1">selectedModules </span><span class="s3">= [];</span>
+								<span class="s4">let </span><span class="s1">selectedModulesSize </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">k </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">k </span><span class="s3">&lt; </span><span class="s1">modules</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">k</span><span class="s3">++) {</span>
+									<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s1">modules</span><span class="s3">[</span><span class="s1">k</span><span class="s3">];</span>
+									<span class="s4">const </span><span class="s1">newSize </span><span class="s3">= </span><span class="s1">selectedModulesSize </span><span class="s3">+ </span><span class="s1">module</span><span class="s3">.</span><span class="s1">size</span><span class="s3">();</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">newSize </span><span class="s3">&gt; </span><span class="s1">maxSize </span><span class="s3">&amp;&amp; </span><span class="s1">selectedModulesSize </span><span class="s3">&gt;= </span><span class="s1">minSize</span><span class="s3">) {</span>
+										<span class="s4">break</span><span class="s3">;</span>
+									<span class="s3">}</span>
+									<span class="s1">selectedModulesSize </span><span class="s3">= </span><span class="s1">newSize</span><span class="s3">;</span>
+									<span class="s1">selectedModules</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s3">}</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">selectedModules</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SplitData} */</span>
+								<span class="s4">const </span><span class="s1">splitData </span><span class="s3">= {</span>
+									<span class="s1">modules</span><span class="s3">: </span><span class="s1">selectedModules</span>
+										<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">m </span><span class="s3">=&gt; </span><span class="s1">moduleToNameMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">m</span><span class="s3">))</span>
+										<span class="s3">.</span><span class="s1">sort</span><span class="s3">(),</span>
+									<span class="s1">size</span><span class="s3">: </span><span class="s1">selectedModulesSize</span>
+								<span class="s3">};</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">applySplit</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">)) {</span>
+									<span class="s1">newSplits </span><span class="s3">= (</span><span class="s1">newSplits </span><span class="s3">|| []).</span><span class="s1">concat</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">);</span>
+									<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">changed</span><span class="s3">) </span><span class="s4">return true</span><span class="s3">;</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">recordHash</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s2">&quot;AggressiveSplittingPlugin&quot;</span><span class="s3">,</span>
+					<span class="s1">records </span><span class="s3">=&gt; {</span>
+						<span class="s0">// 4. save made splittings to records</span>
+						<span class="s4">const </span><span class="s1">allSplits </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;SplitData&gt;} */</span>
+						<span class="s4">const </span><span class="s1">invalidSplits </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+						<span class="s0">// Check if some splittings are invalid</span>
+						<span class="s0">// We remove invalid splittings and try again</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">splitData </span><span class="s3">= </span><span class="s1">chunkSplitDataMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span>
+								<span class="s1">splitData </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">splitData</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">&amp;&amp;</span>
+								<span class="s1">chunk</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">!== </span><span class="s1">splitData</span><span class="s3">.</span><span class="s1">hash</span>
+							<span class="s3">) {</span>
+								<span class="s0">// Split was successful, but hash doesn't equal</span>
+								<span class="s0">// We can throw away the split since it's useless now</span>
+								<span class="s1">invalidSplits</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">invalidSplits</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+							<span class="s1">records</span><span class="s3">.</span><span class="s1">aggressiveSplits </span><span class="s3">=</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{SplitData[]} */</span>
+								<span class="s3">(</span><span class="s1">records</span><span class="s3">.</span><span class="s1">aggressiveSplits</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span>
+									<span class="s1">splitData </span><span class="s3">=&gt; !</span><span class="s1">invalidSplits</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">)</span>
+								<span class="s3">);</span>
+							<span class="s1">needAdditionalSeal </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s0">// set hash and id values on all (new) splittings</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">) {</span>
+								<span class="s4">const </span><span class="s1">splitData </span><span class="s3">= </span><span class="s1">chunkSplitDataMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">splitData </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+									<span class="s1">splitData</span><span class="s3">.</span><span class="s1">hash </span><span class="s3">=</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;Chunk[&quot;hash&quot;]&gt;} */</span>
+										<span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">hash</span><span class="s3">);</span>
+									<span class="s1">splitData</span><span class="s3">.</span><span class="s1">id </span><span class="s3">=</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;Chunk[&quot;id&quot;]&gt;} */</span>
+										<span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">id</span><span class="s3">);</span>
+									<span class="s1">allSplits</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">);</span>
+									<span class="s0">// set flag for stats</span>
+									<span class="s1">recordedChunks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+
+							<span class="s0">// Also add all unused historical splits (after the used ones)</span>
+							<span class="s0">// They can still be used in some future compilation</span>
+							<span class="s4">const </span><span class="s1">recordedSplits </span><span class="s3">=</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">records </span><span class="s3">&amp;&amp; </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">records</span><span class="s3">.</span><span class="s1">aggressiveSplits</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">recordedSplits</span><span class="s3">) {</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">splitData of recordedSplits</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">invalidSplits</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">)) </span><span class="s1">allSplits</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">splitData</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+
+							<span class="s0">// record all splits</span>
+							<span class="s1">records</span><span class="s3">.</span><span class="s1">aggressiveSplits </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">allSplits</span><span class="s3">);</span>
+
+							<span class="s1">needAdditionalSeal </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">needAdditionalSeal</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s2">&quot;AggressiveSplittingPlugin&quot;</span><span class="s3">,</span>
+					<span class="s3">() =&gt; {</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">needAdditionalSeal</span><span class="s3">) {</span>
+							<span class="s1">needAdditionalSeal </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+							<span class="s4">return true</span><span class="s3">;</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">AggressiveSplittingPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,321 @@
+<html>
+<head>
+<title>LimitChunkCountPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+LimitChunkCountPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">STAGE_ADVANCED </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../OptimizationStages&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">LazyBucketSortedSet </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/LazyBucketSortedSet&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareChunks </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createSchemaValidation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/create-schema-validation&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/plugins/optimize/LimitChunkCountPlugin&quot;).LimitChunkCountPluginOptions} LimitChunkCountPluginOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+
+<span class="s4">const </span><span class="s1">validate </span><span class="s3">= </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/optimize/LimitChunkCountPlugin.check.js&quot;</span><span class="s3">),</span>
+	<span class="s3">() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/optimize/LimitChunkCountPlugin.json&quot;</span><span class="s3">),</span>
+	<span class="s3">{</span>
+		<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;Limit Chunk Count Plugin&quot;</span><span class="s3">,</span>
+		<span class="s1">baseDataPath</span><span class="s3">: </span><span class="s2">&quot;options&quot;</span>
+	<span class="s3">}</span>
+<span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} ChunkCombination</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{boolean} deleted this is set to true when combination was removed</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} sizeDiff</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} integratedSize</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Chunk} a</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{Chunk} b</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} aIdx</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} bIdx</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} aSize</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} bSize</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">K, V</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Map&lt;K, Set&lt;V&gt;&gt;} map map</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{K} key key</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{V} value value</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">addToSetMap </span><span class="s3">= (</span><span class="s1">map</span><span class="s3">, </span><span class="s1">key</span><span class="s3">, </span><span class="s1">value</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">set </span><span class="s3">= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">set </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key</span><span class="s3">, </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">([</span><span class="s1">value</span><span class="s3">]));</span>
+	<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+		<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">value</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">LimitChunkCountPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{LimitChunkCountPluginOptions=} options options object</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">options</span><span class="s3">) {</span>
+		<span class="s1">validate</span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">options </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LimitChunkCountPluginOptions} */ </span><span class="s3">(</span><span class="s1">options</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the webpack compiler</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">options </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">options</span><span class="s3">;</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;LimitChunkCountPlugin&quot;</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">optimizeChunks</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+				<span class="s3">{</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;LimitChunkCountPlugin&quot;</span><span class="s3">,</span>
+					<span class="s1">stage</span><span class="s3">: </span><span class="s1">STAGE_ADVANCED</span>
+				<span class="s3">},</span>
+				<span class="s1">chunks </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">chunkGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunkGraph</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">maxChunks </span><span class="s3">= </span><span class="s1">options</span><span class="s3">.</span><span class="s1">maxChunks</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(!</span><span class="s1">maxChunks</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">maxChunks </span><span class="s3">&lt; </span><span class="s7">1</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&lt;= </span><span class="s1">maxChunks</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+
+					<span class="s4">let </span><span class="s1">remainingChunksToMerge </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">.</span><span class="s1">size </span><span class="s3">- </span><span class="s1">maxChunks</span><span class="s3">;</span>
+
+					<span class="s0">// order chunks in a deterministic way</span>
+					<span class="s4">const </span><span class="s1">compareChunksWithGraph </span><span class="s3">= </span><span class="s1">compareChunks</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">orderedChunks </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">chunks</span><span class="s3">).</span><span class="s1">sort</span><span class="s3">(</span><span class="s1">compareChunksWithGraph</span><span class="s3">);</span>
+
+					<span class="s0">// create a lazy sorted data structure to keep all combinations</span>
+					<span class="s0">// this is large. Size = chunks * (chunks - 1) / 2</span>
+					<span class="s0">// It uses a multi layer bucket sort plus normal sort in the last layer</span>
+					<span class="s0">// It's also lazy so only accessed buckets are sorted</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{LazyBucketSortedSet&lt;ChunkCombination, number&gt;} */</span>
+					<span class="s4">const </span><span class="s1">combinations </span><span class="s3">= </span><span class="s4">new </span><span class="s1">LazyBucketSortedSet</span><span class="s3">(</span>
+						<span class="s0">// Layer 1: ordered by largest size benefit</span>
+						<span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">sizeDiff</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; </span><span class="s1">b </span><span class="s3">- </span><span class="s1">a</span><span class="s3">,</span>
+
+						<span class="s0">// Layer 2: ordered by smallest combined size</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkCombination} c combination</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} integrated size</span>
+						 <span class="s5">*/</span>
+						<span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">integratedSize</span><span class="s3">,</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} a a</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} b b</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} result</span>
+						 <span class="s5">*/</span>
+						<span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; </span><span class="s1">a </span><span class="s3">- </span><span class="s1">b</span><span class="s3">,</span>
+
+						<span class="s0">// Layer 3: ordered by position difference in orderedChunk (-&gt; to be deterministic)</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkCombination} c combination</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} position difference</span>
+						 <span class="s5">*/</span>
+						<span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">bIdx </span><span class="s3">- </span><span class="s1">c</span><span class="s3">.</span><span class="s1">aIdx</span><span class="s3">,</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} a a</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} b b</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} result</span>
+						 <span class="s5">*/</span>
+						<span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; </span><span class="s1">a </span><span class="s3">- </span><span class="s1">b</span><span class="s3">,</span>
+
+						<span class="s0">// Layer 4: ordered by position in orderedChunk (-&gt; to be deterministic)</span>
+						<span class="s5">/**</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkCombination} a a</span>
+						 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkCombination} b b</span>
+						 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} result</span>
+						 <span class="s5">*/</span>
+						<span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; </span><span class="s1">a</span><span class="s3">.</span><span class="s1">bIdx </span><span class="s3">- </span><span class="s1">b</span><span class="s3">.</span><span class="s1">bIdx</span>
+					<span class="s3">);</span>
+
+					<span class="s0">// we keep a mapping from chunk to all combinations</span>
+					<span class="s0">// but this mapping is not kept up-to-date with deletions</span>
+					<span class="s0">// so `deleted` flag need to be considered when iterating this</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Chunk, Set&lt;ChunkCombination&gt;&gt;} */</span>
+					<span class="s4">const </span><span class="s1">combinationsByChunk </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">bIdx</span><span class="s3">, </span><span class="s1">b</span><span class="s3">] </span><span class="s1">of orderedChunks</span><span class="s3">.</span><span class="s1">entries</span><span class="s3">()) {</span>
+						<span class="s0">// create combination pairs with size and integrated size</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">aIdx </span><span class="s3">= </span><span class="s7">0</span><span class="s3">; </span><span class="s1">aIdx </span><span class="s3">&lt; </span><span class="s1">bIdx</span><span class="s3">; </span><span class="s1">aIdx</span><span class="s3">++) {</span>
+							<span class="s4">const </span><span class="s1">a </span><span class="s3">= </span><span class="s1">orderedChunks</span><span class="s3">[</span><span class="s1">aIdx</span><span class="s3">];</span>
+							<span class="s0">// filter pairs that can not be integrated!</span>
+							<span class="s4">if </span><span class="s3">(!</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">canChunksBeIntegrated</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+
+							<span class="s4">const </span><span class="s1">integratedSize </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getIntegratedChunksSize</span><span class="s3">(</span>
+								<span class="s1">a</span><span class="s3">,</span>
+								<span class="s1">b</span><span class="s3">,</span>
+								<span class="s1">options</span>
+							<span class="s3">);</span>
+
+							<span class="s4">const </span><span class="s1">aSize </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkSize</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">options</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">bSize </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkSize</span><span class="s3">(</span><span class="s1">b</span><span class="s3">, </span><span class="s1">options</span><span class="s3">);</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkCombination} */</span>
+							<span class="s4">const </span><span class="s1">c </span><span class="s3">= {</span>
+								<span class="s1">deleted</span><span class="s3">: </span><span class="s4">false</span><span class="s3">,</span>
+								<span class="s1">sizeDiff</span><span class="s3">: </span><span class="s1">aSize </span><span class="s3">+ </span><span class="s1">bSize </span><span class="s3">- </span><span class="s1">integratedSize</span><span class="s3">,</span>
+								<span class="s1">integratedSize</span><span class="s3">,</span>
+								<span class="s1">a</span><span class="s3">,</span>
+								<span class="s1">b</span><span class="s3">,</span>
+								<span class="s1">aIdx</span><span class="s3">,</span>
+								<span class="s1">bIdx</span><span class="s3">,</span>
+								<span class="s1">aSize</span><span class="s3">,</span>
+								<span class="s1">bSize</span>
+							<span class="s3">};</span>
+							<span class="s1">combinations</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">c</span><span class="s3">);</span>
+							<span class="s1">addToSetMap</span><span class="s3">(</span><span class="s1">combinationsByChunk</span><span class="s3">, </span><span class="s1">a</span><span class="s3">, </span><span class="s1">c</span><span class="s3">);</span>
+							<span class="s1">addToSetMap</span><span class="s3">(</span><span class="s1">combinationsByChunk</span><span class="s3">, </span><span class="s1">b</span><span class="s3">, </span><span class="s1">c</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+
+					<span class="s0">// list of modified chunks during this run</span>
+					<span class="s0">// combinations affected by this change are skipped to allow</span>
+					<span class="s0">// further optimizations</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;Chunk&gt;} */</span>
+					<span class="s4">const </span><span class="s1">modifiedChunks </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+					<span class="s4">let </span><span class="s1">changed </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+					<span class="s1">loop</span><span class="s3">: </span><span class="s4">while </span><span class="s3">(</span><span class="s4">true</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">combination </span><span class="s3">= </span><span class="s1">combinations</span><span class="s3">.</span><span class="s1">popFirst</span><span class="s3">();</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">combination </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">break</span><span class="s3">;</span>
+
+						<span class="s1">combination</span><span class="s3">.</span><span class="s1">deleted </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s3">{ </span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">, </span><span class="s1">integratedSize </span><span class="s3">} = </span><span class="s1">combination</span><span class="s3">;</span>
+
+						<span class="s0">// skip over pair when</span>
+						<span class="s0">// one of the already merged chunks is a parent of one of the chunks</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">modifiedChunks</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">queue </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">groupsIterable</span><span class="s3">);</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">group of b</span><span class="s3">.</span><span class="s1">groupsIterable</span><span class="s3">) {</span>
+								<span class="s1">queue</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">group</span><span class="s3">);</span>
+							<span class="s3">}</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">group of queue</span><span class="s3">) {</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">mChunk of modifiedChunks</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">mChunk </span><span class="s3">!== </span><span class="s1">a </span><span class="s3">&amp;&amp; </span><span class="s1">mChunk </span><span class="s3">!== </span><span class="s1">b </span><span class="s3">&amp;&amp; </span><span class="s1">mChunk</span><span class="s3">.</span><span class="s1">isInGroup</span><span class="s3">(</span><span class="s1">group</span><span class="s3">)) {</span>
+										<span class="s0">// This is a potential pair which needs recalculation</span>
+										<span class="s0">// We can't do that now, but it merge before following pairs</span>
+										<span class="s0">// so we leave space for it, and consider chunks as modified</span>
+										<span class="s0">// just for the worse case</span>
+										<span class="s1">remainingChunksToMerge</span><span class="s3">--;</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">remainingChunksToMerge </span><span class="s3">&lt;= </span><span class="s7">0</span><span class="s3">) </span><span class="s4">break </span><span class="s1">loop</span><span class="s3">;</span>
+										<span class="s1">modifiedChunks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">a</span><span class="s3">);</span>
+										<span class="s1">modifiedChunks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+										<span class="s4">continue </span><span class="s1">loop</span><span class="s3">;</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">parent of group</span><span class="s3">.</span><span class="s1">parentsIterable</span><span class="s3">) {</span>
+									<span class="s1">queue</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">parent</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// merge the chunks</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">canChunksBeIntegrated</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">)) {</span>
+							<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">integrateChunks</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">);</span>
+							<span class="s1">compilation</span><span class="s3">.</span><span class="s1">chunks</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+
+							<span class="s0">// flag chunk a as modified as further optimization are possible for all children here</span>
+							<span class="s1">modifiedChunks</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">a</span><span class="s3">);</span>
+
+							<span class="s1">changed </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+							<span class="s1">remainingChunksToMerge</span><span class="s3">--;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">remainingChunksToMerge </span><span class="s3">&lt;= </span><span class="s7">0</span><span class="s3">) </span><span class="s4">break</span><span class="s3">;</span>
+
+							<span class="s0">// Update all affected combinations</span>
+							<span class="s0">// delete all combination with the removed chunk</span>
+							<span class="s0">// we will use combinations with the kept chunk instead</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">combination of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkCombination&gt;} */ </span><span class="s3">(</span>
+								<span class="s1">combinationsByChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">a</span><span class="s3">)</span>
+							<span class="s3">)) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">combination</span><span class="s3">.</span><span class="s1">deleted</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s1">combination</span><span class="s3">.</span><span class="s1">deleted </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+								<span class="s1">combinations</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">combination</span><span class="s3">);</span>
+							<span class="s3">}</span>
+
+							<span class="s0">// Update combinations with the kept chunk with new sizes</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">combination of </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkCombination&gt;} */ </span><span class="s3">(</span>
+								<span class="s1">combinationsByChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">b</span><span class="s3">)</span>
+							<span class="s3">)) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">combination</span><span class="s3">.</span><span class="s1">deleted</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">combination</span><span class="s3">.</span><span class="s1">a </span><span class="s3">=== </span><span class="s1">b</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">canChunksBeIntegrated</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">combination</span><span class="s3">.</span><span class="s1">b</span><span class="s3">)) {</span>
+										<span class="s1">combination</span><span class="s3">.</span><span class="s1">deleted </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+										<span class="s1">combinations</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">combination</span><span class="s3">);</span>
+										<span class="s4">continue</span><span class="s3">;</span>
+									<span class="s3">}</span>
+									<span class="s0">// Update size</span>
+									<span class="s4">const </span><span class="s1">newIntegratedSize </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getIntegratedChunksSize</span><span class="s3">(</span>
+										<span class="s1">a</span><span class="s3">,</span>
+										<span class="s1">combination</span><span class="s3">.</span><span class="s1">b</span><span class="s3">,</span>
+										<span class="s1">options</span>
+									<span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">finishUpdate </span><span class="s3">= </span><span class="s1">combinations</span><span class="s3">.</span><span class="s1">startUpdate</span><span class="s3">(</span><span class="s1">combination</span><span class="s3">);</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">a </span><span class="s3">= </span><span class="s1">a</span><span class="s3">;</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">integratedSize </span><span class="s3">= </span><span class="s1">newIntegratedSize</span><span class="s3">;</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">aSize </span><span class="s3">= </span><span class="s1">integratedSize</span><span class="s3">;</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">sizeDiff </span><span class="s3">=</span>
+										<span class="s1">combination</span><span class="s3">.</span><span class="s1">bSize </span><span class="s3">+ </span><span class="s1">integratedSize </span><span class="s3">- </span><span class="s1">newIntegratedSize</span><span class="s3">;</span>
+									<span class="s1">finishUpdate</span><span class="s3">();</span>
+								<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">combination</span><span class="s3">.</span><span class="s1">b </span><span class="s3">=== </span><span class="s1">b</span><span class="s3">) {</span>
+									<span class="s4">if </span><span class="s3">(!</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">canChunksBeIntegrated</span><span class="s3">(</span><span class="s1">combination</span><span class="s3">.</span><span class="s1">a</span><span class="s3">, </span><span class="s1">a</span><span class="s3">)) {</span>
+										<span class="s1">combination</span><span class="s3">.</span><span class="s1">deleted </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+										<span class="s1">combinations</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">combination</span><span class="s3">);</span>
+										<span class="s4">continue</span><span class="s3">;</span>
+									<span class="s3">}</span>
+									<span class="s0">// Update size</span>
+									<span class="s4">const </span><span class="s1">newIntegratedSize </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getIntegratedChunksSize</span><span class="s3">(</span>
+										<span class="s1">combination</span><span class="s3">.</span><span class="s1">a</span><span class="s3">,</span>
+										<span class="s1">a</span><span class="s3">,</span>
+										<span class="s1">options</span>
+									<span class="s3">);</span>
+
+									<span class="s4">const </span><span class="s1">finishUpdate </span><span class="s3">= </span><span class="s1">combinations</span><span class="s3">.</span><span class="s1">startUpdate</span><span class="s3">(</span><span class="s1">combination</span><span class="s3">);</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">b </span><span class="s3">= </span><span class="s1">a</span><span class="s3">;</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">integratedSize </span><span class="s3">= </span><span class="s1">newIntegratedSize</span><span class="s3">;</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">bSize </span><span class="s3">= </span><span class="s1">integratedSize</span><span class="s3">;</span>
+									<span class="s1">combination</span><span class="s3">.</span><span class="s1">sizeDiff </span><span class="s3">=</span>
+										<span class="s1">integratedSize </span><span class="s3">+ </span><span class="s1">combination</span><span class="s3">.</span><span class="s1">aSize </span><span class="s3">- </span><span class="s1">newIntegratedSize</span><span class="s3">;</span>
+									<span class="s1">finishUpdate</span><span class="s3">();</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+							<span class="s1">combinationsByChunk</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+								<span class="s1">a</span><span class="s3">,</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;ChunkCombination&gt;} */ </span><span class="s3">(</span>
+									<span class="s1">combinationsByChunk</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">b</span><span class="s3">)</span>
+								<span class="s3">)</span>
+							<span class="s3">);</span>
+							<span class="s1">combinationsByChunk</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">changed</span><span class="s3">) </span><span class="s4">return true</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">LimitChunkCountPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

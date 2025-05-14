@@ -1,0 +1,157 @@
+<html>
+<head>
+<title>no-implied-eval.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #42c3d4;}
+.s8 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-implied-eval.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to flag use of implied eval via setTimeout and setInterval</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">James Allardice</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">getStaticValue </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint-community/eslint-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow the use of `eval()`-like methods&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-implied-eval&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">impliedEval</span><span class="s4">: </span><span class="s3">&quot;Implied eval. Consider passing a function instead of a string.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">GLOBAL_CANDIDATES </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">freeze</span><span class="s4">([</span><span class="s3">&quot;global&quot;</span><span class="s4">, </span><span class="s3">&quot;window&quot;</span><span class="s4">, </span><span class="s3">&quot;globalThis&quot;</span><span class="s4">]);</span>
+        <span class="s6">const </span><span class="s2">EVAL_LIKE_FUNC_PATTERN </span><span class="s4">= </span><span class="s7">/^(?:set(?:Interval|Timeout)|execScript)$/u</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether a node is evaluated as a string or not.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A node to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if the node is evaluated as a string.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isEvaluatedString</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span>
+                <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Literal&quot; </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">node</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">) ||</span>
+                <span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;TemplateLiteral&quot;</span>
+            <span class="s4">) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;BinaryExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;+&quot;</span><span class="s4">) {</span>
+                <span class="s6">return </span><span class="s2">isEvaluatedString</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">left</span><span class="s4">) || </span><span class="s2">isEvaluatedString</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">right</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s6">return false</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Reports if the `CallExpression` node has evaluated argument.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A CallExpression to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">reportImpliedEvalCallExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s4">[</span><span class="s2">firstArgument</span><span class="s4">] = </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">firstArgument</span><span class="s4">) {</span>
+
+                <span class="s6">const </span><span class="s2">staticValue </span><span class="s4">= </span><span class="s2">getStaticValue</span><span class="s4">(</span><span class="s2">firstArgument</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">));</span>
+                <span class="s6">const </span><span class="s2">isStaticString </span><span class="s4">= </span><span class="s2">staticValue </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">staticValue</span><span class="s4">.</span><span class="s2">value </span><span class="s4">=== </span><span class="s3">&quot;string&quot;</span><span class="s4">;</span>
+                <span class="s6">const </span><span class="s2">isString </span><span class="s4">= </span><span class="s2">isStaticString </span><span class="s4">|| </span><span class="s2">isEvaluatedString</span><span class="s4">(</span><span class="s2">firstArgument</span><span class="s4">);</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">isString</span><span class="s4">) {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                        <span class="s2">node</span><span class="s4">,</span>
+                        <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;impliedEval&quot;</span>
+                    <span class="s4">});</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Reports calls of `implied eval` via the global references.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Variable} globalVar A global variable to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">reportImpliedEvalViaGlobal</span><span class="s4">(</span><span class="s2">globalVar</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s4">{ </span><span class="s2">references</span><span class="s4">, </span><span class="s2">name </span><span class="s4">} = </span><span class="s2">globalVar</span><span class="s4">;</span>
+
+            <span class="s2">references</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">ref </span><span class="s4">=&gt; {</span>
+                <span class="s6">const </span><span class="s2">identifier </span><span class="s4">= </span><span class="s2">ref</span><span class="s4">.</span><span class="s2">identifier</span><span class="s4">;</span>
+                <span class="s6">let </span><span class="s2">node </span><span class="s4">= </span><span class="s2">identifier</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+                <span class="s6">while </span><span class="s4">(</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isSpecificMemberAccess</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s6">null</span><span class="s4">, </span><span class="s2">name</span><span class="s4">)) {</span>
+                    <span class="s2">node </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isSpecificMemberAccess</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s6">null</span><span class="s4">, </span><span class="s2">EVAL_LIKE_FUNC_PATTERN</span><span class="s4">)) {</span>
+                    <span class="s6">const </span><span class="s2">calleeNode </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ChainExpression&quot; </span><span class="s4">? </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent </span><span class="s4">: </span><span class="s2">node</span><span class="s4">;</span>
+                    <span class="s6">const </span><span class="s2">parent </span><span class="s4">= </span><span class="s2">calleeNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;CallExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">callee </span><span class="s4">=== </span><span class="s2">calleeNode</span><span class="s4">) {</span>
+                        <span class="s2">reportImpliedEvalCallExpression</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+                <span class="s4">}</span>
+            <span class="s4">});</span>
+        <span class="s4">}</span>
+
+        <span class="s5">//--------------------------------------------------------------------------</span>
+        <span class="s5">// Public</span>
+        <span class="s5">//--------------------------------------------------------------------------</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">CallExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isSpecificId</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">, </span><span class="s2">EVAL_LIKE_FUNC_PATTERN</span><span class="s4">)) {</span>
+                    <span class="s2">reportImpliedEvalCallExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+            <span class="s3">&quot;Program:exit&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">globalScope </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getScope</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+
+                <span class="s2">GLOBAL_CANDIDATES</span>
+                    <span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">candidate </span><span class="s4">=&gt; </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getVariableByName</span><span class="s4">(</span><span class="s2">globalScope</span><span class="s4">, </span><span class="s2">candidate</span><span class="s4">))</span>
+                    <span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">globalVar </span><span class="s4">=&gt; !!</span><span class="s2">globalVar </span><span class="s4">&amp;&amp; </span><span class="s2">globalVar</span><span class="s4">.</span><span class="s2">defs</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s8">0</span><span class="s4">)</span>
+                    <span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">reportImpliedEvalViaGlobal</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

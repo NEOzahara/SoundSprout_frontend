@@ -1,0 +1,435 @@
+<html>
+<head>
+<title>CommonJsExportsParserPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+CommonJsExportsParserPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">RuntimeGlobals </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../RuntimeGlobals&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">formatLocation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../formatLocation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">evaluateToString </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../javascript/JavascriptParserHelpers&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">propertyAccess </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/propertyAccess&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">CommonJsExportRequireDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./CommonJsExportRequireDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">CommonJsExportsDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./CommonJsExportsDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">CommonJsSelfReferenceDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./CommonJsSelfReferenceDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">DynamicExports </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./DynamicExports&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyExports </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./HarmonyExports&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleDecoratorDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleDecoratorDependency&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).AssignmentExpression} AssignmentExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).CallExpression} CallExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Expression} Expression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;estree&quot;).Super} Super */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).DependencyLocation} DependencyLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraph&quot;)} ModuleGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../NormalModule&quot;)} NormalModule */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/BasicEvaluatedExpression&quot;)} BasicEvaluatedExpression */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;)} JavascriptParser */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).Range} Range */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../javascript/JavascriptParser&quot;).StatementPath} StatementPath */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./CommonJsDependencyHelpers&quot;).CommonJSDependencyBaseKeywords} CommonJSDependencyBaseKeywords */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* This function takes a generic expression and detects whether it is an ObjectExpression.</span>
+ <span class="s5">* This is used in the context of parsing CommonJS exports to get the value of the property descriptor</span>
+ <span class="s5">* when the `exports` object is assigned to `Object.defineProperty`.</span>
+ <span class="s5">*</span>
+ <span class="s5">* In CommonJS modules, the `exports` object can be assigned to `Object.defineProperty` and therefore</span>
+ <span class="s5">* webpack has to detect this case and get the value key of the property descriptor. See the following example</span>
+ <span class="s5">* for more information: https://astexplorer.net/#/gist/83ce51a4e96e59d777df315a6d111da6/8058ead48a1bb53c097738225db0967ef7f70e57</span>
+ <span class="s5">*</span>
+ <span class="s5">* This would be an example of a CommonJS module that exports an object with a property descriptor:</span>
+ <span class="s5">* ```js</span>
+ <span class="s5">* Object.defineProperty(exports, &quot;__esModule&quot;, { value: true });</span>
+ <span class="s5">* exports.foo = void 0;</span>
+ <span class="s5">* exports.foo = &quot;bar&quot;;</span>
+ <span class="s5">* ```</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Expression} expr expression</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Expression | undefined} returns the value of property descriptor</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getValueOfPropertyDescription </span><span class="s3">= </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;ObjectExpression&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">property of expr</span><span class="s3">.</span><span class="s1">properties</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">property</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;SpreadElement&quot; </span><span class="s3">|| </span><span class="s1">property</span><span class="s3">.</span><span class="s1">computed</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">key </span><span class="s3">= </span><span class="s1">property</span><span class="s3">.</span><span class="s1">key</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">key</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;Identifier&quot; </span><span class="s3">|| </span><span class="s1">key</span><span class="s3">.</span><span class="s1">name </span><span class="s3">!== </span><span class="s2">&quot;value&quot;</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Expression} */ </span><span class="s3">(</span><span class="s1">property</span><span class="s3">.</span><span class="s1">value</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The purpose of this function is to check whether an expression is a truthy literal or not. This is</span>
+ <span class="s5">* useful when parsing CommonJS exports, because CommonJS modules can export any value, including falsy</span>
+ <span class="s5">* values like `null` and `false`. However, exports should only be created if the exported value is truthy.</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Expression} expr expression being checked</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, when the expression is a truthy literal</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">isTruthyLiteral </span><span class="s3">= </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+	<span class="s4">switch </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">type</span><span class="s3">) {</span>
+		<span class="s4">case </span><span class="s2">&quot;Literal&quot;</span><span class="s3">:</span>
+			<span class="s4">return </span><span class="s1">Boolean</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">value</span><span class="s3">);</span>
+		<span class="s4">case </span><span class="s2">&quot;UnaryExpression&quot;</span><span class="s3">:</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;!&quot;</span><span class="s3">) </span><span class="s4">return </span><span class="s1">isFalsyLiteral</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">argument</span><span class="s3">);</span>
+	<span class="s3">}</span>
+	<span class="s4">return false</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* The purpose of this function is to check whether an expression is a falsy literal or not. This is</span>
+ <span class="s5">* useful when parsing CommonJS exports, because CommonJS modules can export any value, including falsy</span>
+ <span class="s5">* values like `null` and `false`. However, exports should only be created if the exported value is truthy.</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Expression} expr expression being checked</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, when the expression is a falsy literal</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">isFalsyLiteral </span><span class="s3">= </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+	<span class="s4">switch </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">type</span><span class="s3">) {</span>
+		<span class="s4">case </span><span class="s2">&quot;Literal&quot;</span><span class="s3">:</span>
+			<span class="s4">return </span><span class="s3">!</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">value</span><span class="s3">;</span>
+		<span class="s4">case </span><span class="s2">&quot;UnaryExpression&quot;</span><span class="s3">:</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">operator </span><span class="s3">=== </span><span class="s2">&quot;!&quot;</span><span class="s3">) </span><span class="s4">return </span><span class="s1">isTruthyLiteral</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">argument</span><span class="s3">);</span>
+	<span class="s3">}</span>
+	<span class="s4">return false</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Expression} expr expression</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{{ argument: BasicEvaluatedExpression, ids: string[] } | undefined} parsed call</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">parseRequireCall </span><span class="s3">= (</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">expr</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">ids </span><span class="s3">= [];</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;MemberExpression&quot;</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">object</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;Super&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">property</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">prop </span><span class="s3">= </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">property</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">computed</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">prop</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;Literal&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s1">ids</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">prop</span><span class="s3">.</span><span class="s1">value</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">prop</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;Identifier&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s1">ids</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">prop</span><span class="s3">.</span><span class="s1">name</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">expr </span><span class="s3">= </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">object</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;CallExpression&quot; </span><span class="s3">|| </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">.</span><span class="s1">length </span><span class="s3">!== </span><span class="s7">1</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">callee </span><span class="s3">= </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span>
+		<span class="s1">callee</span><span class="s3">.</span><span class="s1">type </span><span class="s3">!== </span><span class="s2">&quot;Identifier&quot; </span><span class="s3">||</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">getVariableInfo</span><span class="s3">(</span><span class="s1">callee</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) !== </span><span class="s2">&quot;require&quot;</span>
+	<span class="s3">) {</span>
+		<span class="s4">return</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">const </span><span class="s1">arg </span><span class="s3">= </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">0</span><span class="s3">];</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">arg</span><span class="s3">.</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;SpreadElement&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">argValue </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">arg</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s3">{ </span><span class="s1">argument</span><span class="s3">: </span><span class="s1">argValue</span><span class="s3">, </span><span class="s1">ids</span><span class="s3">: </span><span class="s1">ids</span><span class="s3">.</span><span class="s1">reverse</span><span class="s3">() };</span>
+<span class="s3">};</span>
+
+<span class="s4">class </span><span class="s1">CommonJsExportsParserPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph module graph</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{JavascriptParser} parser the parser</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">enableStructuredExports </span><span class="s3">= () =&gt; {</span>
+			<span class="s1">DynamicExports</span><span class="s3">.</span><span class="s1">enable</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+		<span class="s3">};</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} topLevel true, when the export is on top level</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} members members of the export</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Expression | undefined} valueExpr expression for the value</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">checkNamespace </span><span class="s3">= (</span><span class="s1">topLevel</span><span class="s3">, </span><span class="s1">members</span><span class="s3">, </span><span class="s1">valueExpr</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(!</span><span class="s1">DynamicExports</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">&amp;&amp; </span><span class="s1">members</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] === </span><span class="s2">&quot;__esModule&quot;</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">valueExpr </span><span class="s3">&amp;&amp; </span><span class="s1">isTruthyLiteral</span><span class="s3">(</span><span class="s1">valueExpr</span><span class="s3">) &amp;&amp; </span><span class="s1">topLevel</span><span class="s3">) {</span>
+					<span class="s1">DynamicExports</span><span class="s3">.</span><span class="s1">setFlagged</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">DynamicExports</span><span class="s3">.</span><span class="s1">setDynamic</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">};</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string=} reason reason</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">bailout </span><span class="s3">= </span><span class="s1">reason </span><span class="s3">=&gt; {</span>
+			<span class="s1">DynamicExports</span><span class="s3">.</span><span class="s1">bailout</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">reason</span><span class="s3">) </span><span class="s1">bailoutHint</span><span class="s3">(</span><span class="s1">reason</span><span class="s3">);</span>
+		<span class="s3">};</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} reason reason</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">bailoutHint </span><span class="s3">= </span><span class="s1">reason </span><span class="s3">=&gt; {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">moduleGraph</span>
+				<span class="s3">.</span><span class="s1">getOptimizationBailout</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">)</span>
+				<span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s2">`CommonJS bailout: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">reason</span><span class="s3">}</span><span class="s2">`</span><span class="s3">);</span>
+		<span class="s3">};</span>
+
+		<span class="s0">// metadata //</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateTypeof</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, </span><span class="s1">evaluateToString</span><span class="s3">(</span><span class="s2">&quot;object&quot;</span><span class="s3">));</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">evaluateTypeof</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;exports&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsPlugin&quot;</span><span class="s3">, </span><span class="s1">evaluateToString</span><span class="s3">(</span><span class="s2">&quot;object&quot;</span><span class="s3">));</span>
+
+		<span class="s0">// exporting //</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{AssignmentExpression} expr expression</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CommonJSDependencyBaseKeywords} base commonjs base keywords</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} members members of the export</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean | undefined} true, when the expression was handled</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">handleAssignExport </span><span class="s3">= (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">base</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">HarmonyExports</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s0">// Handle reexporting</span>
+			<span class="s4">const </span><span class="s1">requireCall </span><span class="s3">= </span><span class="s1">parseRequireCall</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">, </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">right</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span>
+				<span class="s1">requireCall </span><span class="s3">&amp;&amp;</span>
+				<span class="s1">requireCall</span><span class="s3">.</span><span class="s1">argument</span><span class="s3">.</span><span class="s1">isString</span><span class="s3">() &amp;&amp;</span>
+				<span class="s3">(</span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0 </span><span class="s3">|| </span><span class="s1">members</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] !== </span><span class="s2">&quot;__esModule&quot;</span><span class="s3">)</span>
+			<span class="s3">) {</span>
+				<span class="s1">enableStructuredExports</span><span class="s3">();</span>
+				<span class="s0">// It's possible to reexport __esModule, so we must convert to a dynamic module</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s1">DynamicExports</span><span class="s3">.</span><span class="s1">setDynamic</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">CommonJsExportRequireDependency</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+					<span class="s4">null</span><span class="s3">,</span>
+					<span class="s1">base</span><span class="s3">,</span>
+					<span class="s1">members</span><span class="s3">,</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */ </span><span class="s3">(</span><span class="s1">requireCall</span><span class="s3">.</span><span class="s1">argument</span><span class="s3">.</span><span class="s1">string</span><span class="s3">),</span>
+					<span class="s1">requireCall</span><span class="s3">.</span><span class="s1">ids</span><span class="s3">,</span>
+					<span class="s3">!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isStatementLevelExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">optional </span><span class="s3">= </span><span class="s1">Boolean</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">inTry</span><span class="s3">);</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+				<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s1">enableStructuredExports</span><span class="s3">();</span>
+			<span class="s4">const </span><span class="s1">remainingMembers </span><span class="s3">= </span><span class="s1">members</span><span class="s3">;</span>
+			<span class="s1">checkNamespace</span><span class="s3">(</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{StatementPath} */</span>
+				<span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">statementPath</span><span class="s3">).</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">1 </span><span class="s3">&amp;&amp;</span>
+					<span class="s1">parser</span><span class="s3">.</span><span class="s1">isStatementLevelExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">),</span>
+				<span class="s1">remainingMembers</span><span class="s3">,</span>
+				<span class="s1">expr</span><span class="s3">.</span><span class="s1">right</span>
+			<span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">CommonJsExportsDependency</span><span class="s3">(</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">left</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+				<span class="s4">null</span><span class="s3">,</span>
+				<span class="s1">base</span><span class="s3">,</span>
+				<span class="s1">remainingMembers</span>
+			<span class="s3">);</span>
+			<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">right</span><span class="s3">);</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">};</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">assignMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;exports&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt;</span>
+				<span class="s1">handleAssignExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;exports&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">assignMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;this&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">handleAssignExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;this&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">assignMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">members</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] !== </span><span class="s2">&quot;exports&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">handleAssignExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;module.exports&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">1</span><span class="s3">));</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">call</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;Object.defineProperty&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, </span><span class="s1">expression </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">expr </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{CallExpression} */ </span><span class="s3">(</span><span class="s1">expression</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">isStatementLevelExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">.</span><span class="s1">length </span><span class="s3">!== </span><span class="s7">3</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;SpreadElement&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">1</span><span class="s3">].</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;SpreadElement&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">2</span><span class="s3">].</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">&quot;SpreadElement&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">const </span><span class="s1">exportsArg </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">0</span><span class="s3">]);</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">exportsArg</span><span class="s3">.</span><span class="s1">isIdentifier</span><span class="s3">()) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span>
+					<span class="s1">exportsArg</span><span class="s3">.</span><span class="s1">identifier </span><span class="s3">!== </span><span class="s2">&quot;exports&quot; </span><span class="s3">&amp;&amp;</span>
+					<span class="s1">exportsArg</span><span class="s3">.</span><span class="s1">identifier </span><span class="s3">!== </span><span class="s2">&quot;module.exports&quot; </span><span class="s3">&amp;&amp;</span>
+					<span class="s3">(</span><span class="s1">exportsArg</span><span class="s3">.</span><span class="s1">identifier </span><span class="s3">!== </span><span class="s2">&quot;this&quot; </span><span class="s3">|| !</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope</span><span class="s3">)</span>
+				<span class="s3">) {</span>
+					<span class="s4">return</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">const </span><span class="s1">propertyArg </span><span class="s3">= </span><span class="s1">parser</span><span class="s3">.</span><span class="s1">evaluateExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">1</span><span class="s3">]);</span>
+				<span class="s4">const </span><span class="s1">property </span><span class="s3">= </span><span class="s1">propertyArg</span><span class="s3">.</span><span class="s1">asString</span><span class="s3">();</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">property </span><span class="s3">!== </span><span class="s2">&quot;string&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s1">enableStructuredExports</span><span class="s3">();</span>
+				<span class="s4">const </span><span class="s1">descArg </span><span class="s3">= </span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">2</span><span class="s3">];</span>
+				<span class="s1">checkNamespace</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{StatementPath} */</span>
+					<span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">statementPath</span><span class="s3">).</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">1</span><span class="s3">,</span>
+					<span class="s3">[</span><span class="s1">property</span><span class="s3">],</span>
+					<span class="s1">getValueOfPropertyDescription</span><span class="s3">(</span><span class="s1">descArg</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">CommonJsExportsDependency</span><span class="s3">(</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">2</span><span class="s3">].</span><span class="s1">range</span><span class="s3">),</span>
+					<span class="s2">`Object.defineProperty(</span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportsArg</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">}</span><span class="s2">)`</span><span class="s3">,</span>
+					<span class="s3">[</span><span class="s1">property</span><span class="s3">]</span>
+				<span class="s3">);</span>
+				<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpression</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">[</span><span class="s7">2</span><span class="s3">]);</span>
+				<span class="s4">return true</span><span class="s3">;</span>
+			<span class="s3">});</span>
+
+		<span class="s0">// Self reference //</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Expression | Super} expr expression</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CommonJSDependencyBaseKeywords} base commonjs base keywords</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string[]} members members of the export</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallExpression=} call call expression</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean | void} true, when the expression was handled</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">handleAccessExport </span><span class="s3">= (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">base</span><span class="s3">, </span><span class="s1">members</span><span class="s3">, </span><span class="s1">call</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">HarmonyExports</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">)) </span><span class="s4">return</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s1">bailout</span><span class="s3">(</span>
+					<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">} </span><span class="s2">is used directly at </span><span class="s1">$</span><span class="s3">{</span><span class="s1">formatLocation</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">)</span>
+					<span class="s3">)}</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">call </span><span class="s3">&amp;&amp; </span><span class="s1">members</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">1</span><span class="s3">) {</span>
+				<span class="s1">bailoutHint</span><span class="s3">(</span>
+					<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">propertyAccess</span><span class="s3">(</span>
+						<span class="s1">members</span>
+					<span class="s3">)}</span><span class="s2">(...) prevents optimization as </span><span class="s1">$</span><span class="s3">{</span><span class="s1">base</span><span class="s3">} </span><span class="s2">is passed as call context at </span><span class="s1">$</span><span class="s3">{</span><span class="s1">formatLocation</span><span class="s3">(</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">)</span>
+					<span class="s3">)}</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">CommonJsSelfReferenceDependency</span><span class="s3">(</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Range} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">range</span><span class="s3">),</span>
+				<span class="s1">base</span><span class="s3">,</span>
+				<span class="s1">members</span><span class="s3">,</span>
+				<span class="s1">Boolean</span><span class="s3">(</span><span class="s1">call</span><span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">call</span><span class="s3">) {</span>
+				<span class="s1">parser</span><span class="s3">.</span><span class="s1">walkExpressions</span><span class="s3">(</span><span class="s1">call</span><span class="s3">.</span><span class="s1">arguments</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">};</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">callMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;exports&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt;</span>
+				<span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">, </span><span class="s2">&quot;exports&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">, </span><span class="s1">expr</span><span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expressionMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;exports&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt;</span>
+				<span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;exports&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">)</span>
+			<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;exports&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt;</span>
+				<span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;exports&quot;</span><span class="s3">, [])</span>
+			<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">callMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">members</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] !== </span><span class="s2">&quot;exports&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">handleAccessExport</span><span class="s3">(</span>
+					<span class="s1">expr</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">,</span>
+					<span class="s2">&quot;module.exports&quot;</span><span class="s3">,</span>
+					<span class="s1">members</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">1</span><span class="s3">),</span>
+					<span class="s1">expr</span>
+				<span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expressionMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">members</span><span class="s3">[</span><span class="s7">0</span><span class="s3">] !== </span><span class="s2">&quot;exports&quot;</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;module.exports&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s7">1</span><span class="s3">));</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module.exports&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt;</span>
+				<span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;module.exports&quot;</span><span class="s3">, [])</span>
+			<span class="s3">);</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">callMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;this&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">callee</span><span class="s3">, </span><span class="s2">&quot;this&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">, </span><span class="s1">expr</span><span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expressionMemberChain</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;this&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, (</span><span class="s1">expr</span><span class="s3">, </span><span class="s1">members</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;this&quot;</span><span class="s3">, </span><span class="s1">members</span><span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span>
+			<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;this&quot;</span><span class="s3">)</span>
+			<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsExportsParserPlugin&quot;</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">scope</span><span class="s3">.</span><span class="s1">topLevelScope</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s1">handleAccessExport</span><span class="s3">(</span><span class="s1">expr</span><span class="s3">, </span><span class="s2">&quot;this&quot;</span><span class="s3">, []);</span>
+			<span class="s3">});</span>
+
+		<span class="s0">// Bailouts //</span>
+		<span class="s1">parser</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">expression</span><span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s2">&quot;module&quot;</span><span class="s3">).</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;CommonJsPlugin&quot;</span><span class="s3">, </span><span class="s1">expr </span><span class="s3">=&gt; {</span>
+			<span class="s1">bailout</span><span class="s3">();</span>
+			<span class="s4">const </span><span class="s1">isHarmony </span><span class="s3">= </span><span class="s1">HarmonyExports</span><span class="s3">.</span><span class="s1">isEnabled</span><span class="s3">(</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">dep </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ModuleDecoratorDependency</span><span class="s3">(</span>
+				<span class="s1">isHarmony</span>
+					<span class="s3">? </span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">harmonyModuleDecorator</span>
+					<span class="s3">: </span><span class="s1">RuntimeGlobals</span><span class="s3">.</span><span class="s1">nodeModuleDecorator</span><span class="s3">,</span>
+				<span class="s3">!</span><span class="s1">isHarmony</span>
+			<span class="s3">);</span>
+			<span class="s1">dep</span><span class="s3">.</span><span class="s1">loc </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{DependencyLocation} */ </span><span class="s3">(</span><span class="s1">expr</span><span class="s3">.</span><span class="s1">loc</span><span class="s3">);</span>
+			<span class="s1">parser</span><span class="s3">.</span><span class="s1">state</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">addDependency</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">CommonJsExportsParserPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

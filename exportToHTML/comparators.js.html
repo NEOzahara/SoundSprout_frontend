@@ -1,0 +1,547 @@
+<html>
+<head>
+<title>comparators.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+comparators.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareRuntime </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./runtime&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;).ChunkId} ChunkId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGraph&quot;)} ChunkGraph */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGraph&quot;).ModuleId} ModuleId */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ChunkGroup&quot;)} ChunkGroup */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Dependency&quot;).DependencyLocation} DependencyLocation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../ModuleGraph&quot;)} ModuleGraph */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(a: T, b: T) =&gt; -1 | 0 | 1} Comparator</span>
+ <span class="s5">*/</span>
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{object} TArg</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(tArg: TArg, a: T, b: T) =&gt; -1 | 0 | 1} RawParameterizedComparator</span>
+ <span class="s5">*/</span>
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{object} TArg</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(tArg: TArg) =&gt; Comparator&lt;T&gt;} ParameterizedComparator</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{object} TArg</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{object} T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RawParameterizedComparator&lt;TArg, T&gt;} fn comparator with argument</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ParameterizedComparator&lt;TArg, T&gt;} comparator</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">createCachedParameterizedComparator </span><span class="s3">= </span><span class="s1">fn </span><span class="s3">=&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;EXPECTED_OBJECT, Comparator&lt;T&gt;&gt;} */</span>
+	<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+	<span class="s4">return </span><span class="s1">arg </span><span class="s3">=&gt; {</span>
+		<span class="s4">const </span><span class="s1">cachedResult </span><span class="s3">= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{EXPECTED_OBJECT} */ </span><span class="s3">(</span><span class="s1">arg</span><span class="s3">));</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cachedResult </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cachedResult</span><span class="s3">;</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} a first item</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} b second item</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">fn</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">arg</span><span class="s3">);</span>
+		<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{EXPECTED_OBJECT} */ </span><span class="s3">(</span><span class="s1">arg</span><span class="s3">), </span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+	<span class="s3">};</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} a chunk</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} b chunk</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareChunksById </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt;</span>
+	<span class="s1">compareIds</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId} */ </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">id</span><span class="s3">), </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ChunkId} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">id</span><span class="s3">));</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} a module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} b module</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareModulesByIdentifier </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt;</span>
+	<span class="s1">compareIds</span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(), </span><span class="s1">b</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">());</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} a module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} b module</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareModulesById </span><span class="s3">= (</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt;</span>
+	<span class="s1">compareIds</span><span class="s3">(</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">a</span><span class="s3">)),</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">b</span><span class="s3">))</span>
+	<span class="s3">);</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ParameterizedComparator&lt;ChunkGraph, Module&gt;} */</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareModulesById </span><span class="s3">=</span>
+	<span class="s1">createCachedParameterizedComparator</span><span class="s3">(</span><span class="s1">compareModulesById</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} a number</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} b number</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareNumbers </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">a </span><span class="s3">!== </span><span class="s4">typeof </span><span class="s1">b</span><span class="s3">) {</span>
+		<span class="s4">return typeof </span><span class="s1">a </span><span class="s3">&lt; </span><span class="s4">typeof </span><span class="s1">b </span><span class="s3">? -</span><span class="s7">1 </span><span class="s3">: </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">&lt; </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">&gt; </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+<span class="s3">};</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareNumbers </span><span class="s3">= </span><span class="s1">compareNumbers</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} a string</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} b string</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareStringsNumeric </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">aLength </span><span class="s3">= </span><span class="s1">a</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">bLength </span><span class="s3">= </span><span class="s1">b</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+
+	<span class="s4">let </span><span class="s1">aChar </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">bChar </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+
+	<span class="s4">let </span><span class="s1">aIsDigit </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">bIsDigit </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">let </span><span class="s1">j </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">while </span><span class="s3">(</span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">aLength </span><span class="s3">&amp;&amp; </span><span class="s1">j </span><span class="s3">&lt; </span><span class="s1">bLength</span><span class="s3">) {</span>
+		<span class="s1">aChar </span><span class="s3">= </span><span class="s1">a</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">i</span><span class="s3">);</span>
+		<span class="s1">bChar </span><span class="s3">= </span><span class="s1">b</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">j</span><span class="s3">);</span>
+
+		<span class="s1">aIsDigit </span><span class="s3">= </span><span class="s1">aChar </span><span class="s3">&gt;= </span><span class="s7">48 </span><span class="s3">&amp;&amp; </span><span class="s1">aChar </span><span class="s3">&lt;= </span><span class="s7">57</span><span class="s3">;</span>
+		<span class="s1">bIsDigit </span><span class="s3">= </span><span class="s1">bChar </span><span class="s3">&gt;= </span><span class="s7">48 </span><span class="s3">&amp;&amp; </span><span class="s1">bChar </span><span class="s3">&lt;= </span><span class="s7">57</span><span class="s3">;</span>
+
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">aIsDigit </span><span class="s3">&amp;&amp; !</span><span class="s1">bIsDigit</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">aChar </span><span class="s3">&lt; </span><span class="s1">bChar</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">aChar </span><span class="s3">&gt; </span><span class="s1">bChar</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s1">i</span><span class="s3">++;</span>
+			<span class="s1">j</span><span class="s3">++;</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">aIsDigit </span><span class="s3">&amp;&amp; !</span><span class="s1">bIsDigit</span><span class="s3">) {</span>
+			<span class="s0">// This segment of a is shorter than in b</span>
+			<span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(!</span><span class="s1">aIsDigit </span><span class="s3">&amp;&amp; </span><span class="s1">bIsDigit</span><span class="s3">) {</span>
+			<span class="s0">// This segment of b is shorter than in a</span>
+			<span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">let </span><span class="s1">aNumber </span><span class="s3">= </span><span class="s1">aChar </span><span class="s3">- </span><span class="s7">48</span><span class="s3">;</span>
+			<span class="s4">let </span><span class="s1">bNumber </span><span class="s3">= </span><span class="s1">bChar </span><span class="s3">- </span><span class="s7">48</span><span class="s3">;</span>
+
+			<span class="s4">while </span><span class="s3">(++</span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">aLength</span><span class="s3">) {</span>
+				<span class="s1">aChar </span><span class="s3">= </span><span class="s1">a</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">i</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">aChar </span><span class="s3">&lt; </span><span class="s7">48 </span><span class="s3">|| </span><span class="s1">aChar </span><span class="s3">&gt; </span><span class="s7">57</span><span class="s3">) </span><span class="s4">break</span><span class="s3">;</span>
+				<span class="s1">aNumber </span><span class="s3">= </span><span class="s1">aNumber </span><span class="s3">* </span><span class="s7">10 </span><span class="s3">+ </span><span class="s1">aChar </span><span class="s3">- </span><span class="s7">48</span><span class="s3">;</span>
+			<span class="s3">}</span>
+
+			<span class="s4">while </span><span class="s3">(++</span><span class="s1">j </span><span class="s3">&lt; </span><span class="s1">bLength</span><span class="s3">) {</span>
+				<span class="s1">bChar </span><span class="s3">= </span><span class="s1">b</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">j</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">bChar </span><span class="s3">&lt; </span><span class="s7">48 </span><span class="s3">|| </span><span class="s1">bChar </span><span class="s3">&gt; </span><span class="s7">57</span><span class="s3">) </span><span class="s4">break</span><span class="s3">;</span>
+				<span class="s1">bNumber </span><span class="s3">= </span><span class="s1">bNumber </span><span class="s3">* </span><span class="s7">10 </span><span class="s3">+ </span><span class="s1">bChar </span><span class="s3">- </span><span class="s7">48</span><span class="s3">;</span>
+			<span class="s3">}</span>
+
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">aNumber </span><span class="s3">&lt; </span><span class="s1">bNumber</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">aNumber </span><span class="s3">&gt; </span><span class="s1">bNumber</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">j </span><span class="s3">&lt; </span><span class="s1">bLength</span><span class="s3">) {</span>
+		<span class="s0">// a is shorter than b</span>
+		<span class="s1">bChar </span><span class="s3">= </span><span class="s1">b</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">j</span><span class="s3">);</span>
+		<span class="s1">bIsDigit </span><span class="s3">= </span><span class="s1">bChar </span><span class="s3">&gt;= </span><span class="s7">48 </span><span class="s3">&amp;&amp; </span><span class="s1">bChar </span><span class="s3">&lt;= </span><span class="s7">57</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">bIsDigit </span><span class="s3">? -</span><span class="s7">1 </span><span class="s3">: </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">aLength</span><span class="s3">) {</span>
+		<span class="s0">// b is shorter than a</span>
+		<span class="s1">aChar </span><span class="s3">= </span><span class="s1">a</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">i</span><span class="s3">);</span>
+		<span class="s1">aIsDigit </span><span class="s3">= </span><span class="s1">aChar </span><span class="s3">&gt;= </span><span class="s7">48 </span><span class="s3">&amp;&amp; </span><span class="s1">aChar </span><span class="s3">&lt;= </span><span class="s7">57</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">aIsDigit </span><span class="s3">? </span><span class="s7">1 </span><span class="s3">: -</span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+<span class="s3">};</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareStringsNumeric </span><span class="s3">= </span><span class="s1">compareStringsNumeric</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph the module graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} a module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} b module</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareModulesByPostOrderIndexOrIdentifier </span><span class="s3">= (</span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">cmp </span><span class="s3">= </span><span class="s1">compareNumbers</span><span class="s3">(</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getPostOrderIndex</span><span class="s3">(</span><span class="s1">a</span><span class="s3">)),</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getPostOrderIndex</span><span class="s3">(</span><span class="s1">b</span><span class="s3">))</span>
+	<span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cmp </span><span class="s3">!== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cmp</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s1">compareIds</span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(), </span><span class="s1">b</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">());</span>
+<span class="s3">};</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ParameterizedComparator&lt;ModuleGraph, Module&gt;} */</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareModulesByPostOrderIndexOrIdentifier </span><span class="s3">=</span>
+	<span class="s1">createCachedParameterizedComparator</span><span class="s3">(</span>
+		<span class="s1">compareModulesByPostOrderIndexOrIdentifier</span>
+	<span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph the module graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} a module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} b module</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareModulesByPreOrderIndexOrIdentifier </span><span class="s3">= (</span><span class="s1">moduleGraph</span><span class="s3">, </span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">cmp </span><span class="s3">= </span><span class="s1">compareNumbers</span><span class="s3">(</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getPreOrderIndex</span><span class="s3">(</span><span class="s1">a</span><span class="s3">)),</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getPreOrderIndex</span><span class="s3">(</span><span class="s1">b</span><span class="s3">))</span>
+	<span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cmp </span><span class="s3">!== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cmp</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s1">compareIds</span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(), </span><span class="s1">b</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">());</span>
+<span class="s3">};</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ParameterizedComparator&lt;ModuleGraph, Module&gt;} */</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareModulesByPreOrderIndexOrIdentifier </span><span class="s3">=</span>
+	<span class="s1">createCachedParameterizedComparator</span><span class="s3">(</span>
+		<span class="s1">compareModulesByPreOrderIndexOrIdentifier</span>
+	<span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} a module</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} b module</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareModulesByIdOrIdentifier </span><span class="s3">= (</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">cmp </span><span class="s3">= </span><span class="s1">compareIds</span><span class="s3">(</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">a</span><span class="s3">)),</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleId} */ </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">b</span><span class="s3">))</span>
+	<span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cmp </span><span class="s3">!== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cmp</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s1">compareIds</span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">(), </span><span class="s1">b</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">());</span>
+<span class="s3">};</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ParameterizedComparator&lt;ChunkGraph, Module&gt;} */</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareModulesByIdOrIdentifier </span><span class="s3">=</span>
+	<span class="s1">createCachedParameterizedComparator</span><span class="s3">(</span><span class="s1">compareModulesByIdOrIdentifier</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} a chunk</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} b chunk</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1 | 0 | 1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareChunks </span><span class="s3">= (</span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">compareChunks</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">);</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ParameterizedComparator&lt;ChunkGraph, Chunk&gt;} */</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareChunks </span><span class="s3">=</span>
+	<span class="s1">createCachedParameterizedComparator</span><span class="s3">(</span><span class="s1">compareChunks</span><span class="s3">);</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | number} a first id</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | number} b second id</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1 | 0 | 1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareIds </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">a </span><span class="s3">!== </span><span class="s4">typeof </span><span class="s1">b</span><span class="s3">) {</span>
+		<span class="s4">return typeof </span><span class="s1">a </span><span class="s3">&lt; </span><span class="s4">typeof </span><span class="s1">b </span><span class="s3">? -</span><span class="s7">1 </span><span class="s3">: </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">&lt; </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">&gt; </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareIds </span><span class="s3">= </span><span class="s1">compareIds</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} a first string</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} b second string</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareStrings </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">&lt; </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">&gt; </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareStrings </span><span class="s3">= </span><span class="s1">compareStrings</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGroup} a first chunk group</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGroup} b second chunk group</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1 | 0 | 1} compare result</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareChunkGroupsByIndex </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">index</span><span class="s3">) &lt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">index</span><span class="s3">) ? -</span><span class="s7">1 </span><span class="s3">: </span><span class="s7">1</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareChunkGroupsByIndex </span><span class="s3">= </span><span class="s1">compareChunkGroupsByIndex</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{EXPECTED_OBJECT} K1</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">{EXPECTED_OBJECT} K2</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">*/</span>
+<span class="s4">class </span><span class="s1">TwoKeyWeakMap </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">() {</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@private</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;K1, WeakMap&lt;K2, T | undefined&gt;&gt;}</span>
+		 <span class="s5">*/</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{K1} key1 first key</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{K2} key2 second key</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{T | undefined} value</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get</span><span class="s3">(</span><span class="s1">key1</span><span class="s3">, </span><span class="s1">key2</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">childMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key1</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">childMap </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">childMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key2</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{K1} key1 first key</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{K2} key2 second key</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T | undefined} value new value</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">set</span><span class="s3">(</span><span class="s1">key1</span><span class="s3">, </span><span class="s1">key2</span><span class="s3">, </span><span class="s1">value</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">childMap </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">key1</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">childMap </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">childMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key1</span><span class="s3">, </span><span class="s1">childMap</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">childMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">key2</span><span class="s3">, </span><span class="s1">value</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TwoKeyWeakMap&lt;Comparator&lt;EXPECTED_ANY&gt;, Comparator&lt;EXPECTED_ANY&gt;, Comparator&lt;EXPECTED_ANY&gt;&gt;}} */</span>
+<span class="s4">const </span><span class="s1">concatComparatorsCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">TwoKeyWeakMap</span><span class="s3">();</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Comparator&lt;T&gt;} c1 comparator</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Comparator&lt;T&gt;} c2 comparator</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Comparator&lt;T&gt;[]} cRest comparators</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Comparator&lt;T&gt;} comparator</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">concatComparators </span><span class="s3">= (</span><span class="s1">c1</span><span class="s3">, </span><span class="s1">c2</span><span class="s3">, </span><span class="s1">...cRest</span><span class="s3">) =&gt; {</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cRest</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">[</span><span class="s1">c3</span><span class="s3">, </span><span class="s1">...cRest2</span><span class="s3">] = </span><span class="s1">cRest</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">concatComparators</span><span class="s3">(</span><span class="s1">c1</span><span class="s3">, </span><span class="s1">concatComparators</span><span class="s3">(</span><span class="s1">c2</span><span class="s3">, </span><span class="s1">c3</span><span class="s3">, </span><span class="s1">...cRest2</span><span class="s3">));</span>
+	<span class="s3">}</span>
+	<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Comparator&lt;T&gt;} */ </span><span class="s3">(</span>
+		<span class="s1">concatComparatorsCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">c1</span><span class="s3">, </span><span class="s1">c2</span><span class="s3">)</span>
+	<span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} a first value</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} b second value</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">result </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+		<span class="s4">const </span><span class="s1">res </span><span class="s3">= </span><span class="s1">c1</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">res </span><span class="s3">!== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return </span><span class="s1">res</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">c2</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">);</span>
+	<span class="s3">};</span>
+	<span class="s1">concatComparatorsCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">c1</span><span class="s3">, </span><span class="s1">c2</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+<span class="s3">};</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">concatComparators </span><span class="s3">= </span><span class="s1">concatComparators</span><span class="s3">;</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">A, B</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{(input: A) =&gt; B | undefined | null} Selector</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TwoKeyWeakMap&lt;Selector&lt;any, any&gt;, Comparator&lt;any&gt;, Comparator&lt;any&gt;&gt;}} */</span>
+<span class="s4">const </span><span class="s1">compareSelectCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">TwoKeyWeakMap</span><span class="s3">();</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">R</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Selector&lt;T, R&gt;} getter getter for value</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Comparator&lt;R&gt;} comparator comparator</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Comparator&lt;T&gt;} comparator</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareSelect </span><span class="s3">= (</span><span class="s1">getter</span><span class="s3">, </span><span class="s1">comparator</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">compareSelectCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">getter</span><span class="s3">, </span><span class="s1">comparator</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} a first value</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} b second value</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">result </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+		<span class="s4">const </span><span class="s1">aValue </span><span class="s3">= </span><span class="s1">getter</span><span class="s3">(</span><span class="s1">a</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">bValue </span><span class="s3">= </span><span class="s1">getter</span><span class="s3">(</span><span class="s1">b</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">aValue </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s1">aValue </span><span class="s3">!== </span><span class="s4">null</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">bValue </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s1">bValue </span><span class="s3">!== </span><span class="s4">null</span><span class="s3">) {</span>
+				<span class="s4">return </span><span class="s1">comparator</span><span class="s3">(</span><span class="s1">aValue</span><span class="s3">, </span><span class="s1">bValue</span><span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">bValue </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s1">bValue </span><span class="s3">!== </span><span class="s4">null</span><span class="s3">) {</span>
+			<span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s3">};</span>
+	<span class="s1">compareSelectCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">getter</span><span class="s3">, </span><span class="s1">comparator</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+<span class="s3">};</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareSelect </span><span class="s3">= </span><span class="s1">compareSelect</span><span class="s3">;</span>
+
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Comparator&lt;EXPECTED_ANY&gt;, Comparator&lt;Iterable&lt;EXPECTED_ANY&gt;&gt;&gt;} */</span>
+<span class="s4">const </span><span class="s1">compareIteratorsCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Comparator&lt;T&gt;} elementComparator comparator for elements</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Comparator&lt;Iterable&lt;T&gt;&gt;} comparator for iterables of elements</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">compareIterables </span><span class="s3">= </span><span class="s1">elementComparator </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">compareIteratorsCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">elementComparator</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Iterable&lt;T&gt;} a first value</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Iterable&lt;T&gt;} b second value</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} compare result</span>
+	 <span class="s5">*/</span>
+	<span class="s4">const </span><span class="s1">result </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+		<span class="s4">const </span><span class="s1">aI </span><span class="s3">= </span><span class="s1">a</span><span class="s3">[</span><span class="s1">Symbol</span><span class="s3">.</span><span class="s1">iterator</span><span class="s3">]();</span>
+		<span class="s4">const </span><span class="s1">bI </span><span class="s3">= </span><span class="s1">b</span><span class="s3">[</span><span class="s1">Symbol</span><span class="s3">.</span><span class="s1">iterator</span><span class="s3">]();</span>
+		<span class="s4">while </span><span class="s3">(</span><span class="s4">true</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">aItem </span><span class="s3">= </span><span class="s1">aI</span><span class="s3">.</span><span class="s1">next</span><span class="s3">();</span>
+			<span class="s4">const </span><span class="s1">bItem </span><span class="s3">= </span><span class="s1">bI</span><span class="s3">.</span><span class="s1">next</span><span class="s3">();</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">aItem</span><span class="s3">.</span><span class="s1">done</span><span class="s3">) {</span>
+				<span class="s4">return </span><span class="s1">bItem</span><span class="s3">.</span><span class="s1">done </span><span class="s3">? </span><span class="s7">0 </span><span class="s3">: -</span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">bItem</span><span class="s3">.</span><span class="s1">done</span><span class="s3">) {</span>
+				<span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s3">}</span>
+			<span class="s4">const </span><span class="s1">res </span><span class="s3">= </span><span class="s1">elementComparator</span><span class="s3">(</span><span class="s1">aItem</span><span class="s3">.</span><span class="s1">value</span><span class="s3">, </span><span class="s1">bItem</span><span class="s3">.</span><span class="s1">value</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">res </span><span class="s3">!== </span><span class="s7">0</span><span class="s3">) </span><span class="s4">return </span><span class="s1">res</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">};</span>
+	<span class="s1">compareIteratorsCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">elementComparator</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+<span class="s3">};</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareIterables </span><span class="s3">= </span><span class="s1">compareIterables</span><span class="s3">;</span>
+
+<span class="s0">// TODO this is no longer needed when minimum node.js version is &gt;= 12</span>
+<span class="s0">// since these versions ship with a stable sort function</span>
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Iterable&lt;T&gt;} iterable original ordered list</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Comparator&lt;T&gt;} comparator</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">keepOriginalOrder </span><span class="s3">= </span><span class="s1">iterable </span><span class="s3">=&gt; {</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;T, number&gt;} */</span>
+	<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of iterable</span><span class="s3">) {</span>
+		<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">i</span><span class="s3">++);</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt;</span>
+		<span class="s1">compareNumbers</span><span class="s3">(</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">a</span><span class="s3">)),</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">b</span><span class="s3">))</span>
+		<span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Comparator&lt;Chunk&gt;} comparator</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareChunksNatural </span><span class="s3">= </span><span class="s1">chunkGraph </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">cmpFn </span><span class="s3">= </span><span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareModulesById</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">);</span>
+	<span class="s4">const </span><span class="s1">cmpIterableFn </span><span class="s3">= </span><span class="s1">compareIterables</span><span class="s3">(</span><span class="s1">cmpFn</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">concatComparators</span><span class="s3">(</span>
+		<span class="s1">compareSelect</span><span class="s3">(</span>
+			<span class="s1">chunk </span><span class="s3">=&gt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string|number} */ </span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">name</span><span class="s3">),</span>
+			<span class="s1">compareIds</span>
+		<span class="s3">),</span>
+		<span class="s1">compareSelect</span><span class="s3">(</span><span class="s1">chunk </span><span class="s3">=&gt; </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">compareRuntime</span><span class="s3">),</span>
+		<span class="s1">compareSelect</span><span class="s3">(</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Chunk} chunk a chunk</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Iterable&lt;Module&gt;} modules</span>
+			 <span class="s5">*/</span>
+			<span class="s1">chunk </span><span class="s3">=&gt; </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getOrderedChunkModulesIterable</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">cmpFn</span><span class="s3">),</span>
+			<span class="s1">cmpIterableFn</span>
+		<span class="s3">)</span>
+	<span class="s3">);</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* Compare two locations</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependencyLocation} a A location node</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependencyLocation} b A location node</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{-1|0|1} sorting comparator value</span>
+ <span class="s5">*/</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">compareLocations </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s4">const </span><span class="s1">isObjectA </span><span class="s3">= </span><span class="s4">typeof </span><span class="s1">a </span><span class="s3">=== </span><span class="s2">&quot;object&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">a </span><span class="s3">!== </span><span class="s4">null</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">isObjectB </span><span class="s3">= </span><span class="s4">typeof </span><span class="s1">b </span><span class="s3">=== </span><span class="s2">&quot;object&quot; </span><span class="s3">&amp;&amp; </span><span class="s1">b </span><span class="s3">!== </span><span class="s4">null</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(!</span><span class="s1">isObjectA </span><span class="s3">|| !</span><span class="s1">isObjectB</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">isObjectA</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">isObjectB</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;start&quot; </span><span class="s4">in </span><span class="s1">a</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;start&quot; </span><span class="s4">in </span><span class="s1">b</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">ap </span><span class="s3">= </span><span class="s1">a</span><span class="s3">.</span><span class="s1">start</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">bp </span><span class="s3">= </span><span class="s1">b</span><span class="s3">.</span><span class="s1">start</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">ap</span><span class="s3">.</span><span class="s1">line </span><span class="s3">&lt; </span><span class="s1">bp</span><span class="s3">.</span><span class="s1">line</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">ap</span><span class="s3">.</span><span class="s1">line </span><span class="s3">&gt; </span><span class="s1">bp</span><span class="s3">.</span><span class="s1">line</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">ap</span><span class="s3">.</span><span class="s1">column</span><span class="s3">) &lt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">bp</span><span class="s3">.</span><span class="s1">column</span><span class="s3">))</span>
+				<span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">ap</span><span class="s3">.</span><span class="s1">column</span><span class="s3">) &gt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">bp</span><span class="s3">.</span><span class="s1">column</span><span class="s3">))</span>
+				<span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s2">&quot;start&quot; </span><span class="s4">in </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;name&quot; </span><span class="s4">in </span><span class="s1">a</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;name&quot; </span><span class="s4">in </span><span class="s1">b</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">name </span><span class="s3">&lt; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">name </span><span class="s3">&gt; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">name</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s2">&quot;name&quot; </span><span class="s4">in </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;index&quot; </span><span class="s4">in </span><span class="s1">a</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s2">&quot;index&quot; </span><span class="s4">in </span><span class="s1">b</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">index</span><span class="s3">) &lt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">index</span><span class="s3">))</span>
+				<span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">a</span><span class="s3">.</span><span class="s1">index</span><span class="s3">) &gt; </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">b</span><span class="s3">.</span><span class="s1">index</span><span class="s3">))</span>
+				<span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+		<span class="s3">} </span><span class="s4">else return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s2">&quot;index&quot; </span><span class="s4">in </span><span class="s1">b</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+<span class="s3">};</span>
+</pre>
+</body>
+</html>

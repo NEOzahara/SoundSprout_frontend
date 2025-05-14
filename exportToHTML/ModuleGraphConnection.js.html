@@ -1,0 +1,222 @@
+<html>
+<head>
+<title>ModuleGraphConnection.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #5f826b; font-style: italic;}
+.s5 { color: #67a37c; font-style: italic;}
+.s6 { color: #cf8e6d;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ModuleGraphConnection.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">/** </span><span class="s5">@typedef </span><span class="s4">{import(&quot;./Dependency&quot;)} Dependency */</span>
+<span class="s4">/** </span><span class="s5">@typedef </span><span class="s4">{import(&quot;./Dependency&quot;).GetConditionFn} GetConditionFn */</span>
+<span class="s4">/** </span><span class="s5">@typedef </span><span class="s4">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s4">/** </span><span class="s5">@typedef </span><span class="s4">{import(&quot;./util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s4">/**</span>
+ <span class="s4">* Module itself is not connected, but transitive modules are connected transitively.</span>
+ <span class="s4">*/</span>
+<span class="s6">const </span><span class="s1">TRANSITIVE_ONLY </span><span class="s3">= </span><span class="s1">Symbol</span><span class="s3">(</span><span class="s2">&quot;transitive only&quot;</span><span class="s3">);</span>
+
+<span class="s4">/**</span>
+ <span class="s4">* While determining the active state, this flag is used to signal a circular connection.</span>
+ <span class="s4">*/</span>
+<span class="s6">const </span><span class="s1">CIRCULAR_CONNECTION </span><span class="s3">= </span><span class="s1">Symbol</span><span class="s3">(</span><span class="s2">&quot;circular connection&quot;</span><span class="s3">);</span>
+
+<span class="s4">/** </span><span class="s5">@typedef </span><span class="s4">{boolean | typeof TRANSITIVE_ONLY | typeof CIRCULAR_CONNECTION} ConnectionState */</span>
+
+<span class="s4">/**</span>
+ <span class="s4">* </span><span class="s5">@param </span><span class="s4">{ConnectionState} a first</span>
+ <span class="s4">* </span><span class="s5">@param </span><span class="s4">{ConnectionState} b second</span>
+ <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{ConnectionState} merged</span>
+ <span class="s4">*/</span>
+<span class="s6">const </span><span class="s1">addConnectionStates </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">=== </span><span class="s6">true </span><span class="s3">|| </span><span class="s1">b </span><span class="s3">=== </span><span class="s6">true</span><span class="s3">) </span><span class="s6">return true</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">=== </span><span class="s6">false</span><span class="s3">) </span><span class="s6">return </span><span class="s1">b</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">b </span><span class="s3">=== </span><span class="s6">false</span><span class="s3">) </span><span class="s6">return </span><span class="s1">a</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">=== </span><span class="s1">TRANSITIVE_ONLY</span><span class="s3">) </span><span class="s6">return </span><span class="s1">b</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">b </span><span class="s3">=== </span><span class="s1">TRANSITIVE_ONLY</span><span class="s3">) </span><span class="s6">return </span><span class="s1">a</span><span class="s3">;</span>
+	<span class="s6">return </span><span class="s1">a</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">/**</span>
+ <span class="s4">* </span><span class="s5">@param </span><span class="s4">{ConnectionState} a first</span>
+ <span class="s4">* </span><span class="s5">@param </span><span class="s4">{ConnectionState} b second</span>
+ <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{ConnectionState} intersected</span>
+ <span class="s4">*/</span>
+<span class="s6">const </span><span class="s1">intersectConnectionStates </span><span class="s3">= (</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">=== </span><span class="s6">false </span><span class="s3">|| </span><span class="s1">b </span><span class="s3">=== </span><span class="s6">false</span><span class="s3">) </span><span class="s6">return false</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">=== </span><span class="s6">true</span><span class="s3">) </span><span class="s6">return </span><span class="s1">b</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">b </span><span class="s3">=== </span><span class="s6">true</span><span class="s3">) </span><span class="s6">return </span><span class="s1">a</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">a </span><span class="s3">=== </span><span class="s1">CIRCULAR_CONNECTION</span><span class="s3">) </span><span class="s6">return </span><span class="s1">b</span><span class="s3">;</span>
+	<span class="s6">if </span><span class="s3">(</span><span class="s1">b </span><span class="s3">=== </span><span class="s1">CIRCULAR_CONNECTION</span><span class="s3">) </span><span class="s6">return </span><span class="s1">a</span><span class="s3">;</span>
+	<span class="s6">return </span><span class="s1">a</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s6">class </span><span class="s1">ModuleGraphConnection </span><span class="s3">{</span>
+	<span class="s4">/**</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{Module|null} originModule the referencing module</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{Dependency|null} dependency the referencing dependency</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{Module} module the referenced module</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{string=} explanation some extra detail</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{boolean=} weak the reference is weak</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{false | null | GetConditionFn | undefined} condition condition for the connection</span>
+	 <span class="s4">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span>
+		<span class="s1">originModule</span><span class="s3">,</span>
+		<span class="s1">dependency</span><span class="s3">,</span>
+		<span class="s1">module</span><span class="s3">,</span>
+		<span class="s1">explanation</span><span class="s3">,</span>
+		<span class="s1">weak </span><span class="s3">= </span><span class="s6">false</span><span class="s3">,</span>
+		<span class="s1">condition </span><span class="s3">= </span><span class="s1">undefined</span>
+	<span class="s3">) {</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">originModule </span><span class="s3">= </span><span class="s1">originModule</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">resolvedOriginModule </span><span class="s3">= </span><span class="s1">originModule</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">dependency </span><span class="s3">= </span><span class="s1">dependency</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">resolvedModule </span><span class="s3">= </span><span class="s1">module</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">module </span><span class="s3">= </span><span class="s1">module</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">weak </span><span class="s3">= </span><span class="s1">weak</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">conditional </span><span class="s3">= </span><span class="s1">Boolean</span><span class="s3">(</span><span class="s1">condition</span><span class="s3">);</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">_active </span><span class="s3">= </span><span class="s1">condition </span><span class="s3">!== </span><span class="s6">false</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">condition </span><span class="s3">= </span><span class="s1">condition </span><span class="s3">|| </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">/** </span><span class="s5">@type </span><span class="s4">{Set&lt;string&gt; | undefined} */</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">explanations </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s6">if </span><span class="s3">(</span><span class="s1">explanation</span><span class="s3">) {</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">explanations </span><span class="s3">= </span><span class="s6">new </span><span class="s1">Set</span><span class="s3">();</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">explanations</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">explanation</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">clone</span><span class="s3">() {</span>
+		<span class="s6">const </span><span class="s1">clone </span><span class="s3">= </span><span class="s6">new </span><span class="s1">ModuleGraphConnection</span><span class="s3">(</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">resolvedOriginModule</span><span class="s3">,</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">dependency</span><span class="s3">,</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">resolvedModule</span><span class="s3">,</span>
+			<span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">weak</span><span class="s3">,</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">condition</span>
+		<span class="s3">);</span>
+		<span class="s1">clone</span><span class="s3">.</span><span class="s1">originModule </span><span class="s3">= </span><span class="s6">this</span><span class="s3">.</span><span class="s1">originModule</span><span class="s3">;</span>
+		<span class="s1">clone</span><span class="s3">.</span><span class="s1">module </span><span class="s3">= </span><span class="s6">this</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+		<span class="s1">clone</span><span class="s3">.</span><span class="s1">conditional </span><span class="s3">= </span><span class="s6">this</span><span class="s3">.</span><span class="s1">conditional</span><span class="s3">;</span>
+		<span class="s1">clone</span><span class="s3">.</span><span class="s1">_active </span><span class="s3">= </span><span class="s6">this</span><span class="s3">.</span><span class="s1">_active</span><span class="s3">;</span>
+		<span class="s6">if </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">explanations</span><span class="s3">) </span><span class="s1">clone</span><span class="s3">.</span><span class="s1">explanations </span><span class="s3">= </span><span class="s6">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">explanations</span><span class="s3">);</span>
+		<span class="s6">return </span><span class="s1">clone</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s4">/**</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{GetConditionFn} condition condition for the connection</span>
+	 <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{void}</span>
+	 <span class="s4">*/</span>
+	<span class="s1">addCondition</span><span class="s3">(</span><span class="s1">condition</span><span class="s3">) {</span>
+		<span class="s6">if </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">conditional</span><span class="s3">) {</span>
+			<span class="s6">const </span><span class="s1">old </span><span class="s3">=</span>
+				<span class="s4">/** </span><span class="s5">@type </span><span class="s4">{GetConditionFn} */</span>
+				<span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">condition</span><span class="s3">);</span>
+			<span class="s4">/** </span><span class="s5">@type </span><span class="s4">{GetConditionFn} */</span>
+			<span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">condition</span><span class="s3">) = (</span><span class="s1">c</span><span class="s3">, </span><span class="s1">r</span><span class="s3">) =&gt;</span>
+				<span class="s1">intersectConnectionStates</span><span class="s3">(</span><span class="s1">old</span><span class="s3">(</span><span class="s1">c</span><span class="s3">, </span><span class="s1">r</span><span class="s3">), </span><span class="s1">condition</span><span class="s3">(</span><span class="s1">c</span><span class="s3">, </span><span class="s1">r</span><span class="s3">));</span>
+		<span class="s3">} </span><span class="s6">else if </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">_active</span><span class="s3">) {</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">conditional </span><span class="s3">= </span><span class="s6">true</span><span class="s3">;</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">condition </span><span class="s3">= </span><span class="s1">condition</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s4">/**</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{string} explanation the explanation to add</span>
+	 <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{void}</span>
+	 <span class="s4">*/</span>
+	<span class="s1">addExplanation</span><span class="s3">(</span><span class="s1">explanation</span><span class="s3">) {</span>
+		<span class="s6">if </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">explanations </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s6">this</span><span class="s3">.</span><span class="s1">explanations </span><span class="s3">= </span><span class="s6">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s3">}</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">explanations</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">explanation</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">get explanation</span><span class="s3">() {</span>
+		<span class="s6">if </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">explanations </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s6">return </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+		<span class="s6">return </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">explanations</span><span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot; &quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s4">/**</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{RuntimeSpec} runtime the runtime</span>
+	 <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{boolean} true, if the connection is active</span>
+	 <span class="s4">*/</span>
+	<span class="s1">isActive</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s6">if </span><span class="s3">(!</span><span class="s6">this</span><span class="s3">.</span><span class="s1">conditional</span><span class="s3">) </span><span class="s6">return this</span><span class="s3">.</span><span class="s1">_active</span><span class="s3">;</span>
+
+		<span class="s6">return </span><span class="s3">(</span>
+			<span class="s4">/** </span><span class="s5">@type </span><span class="s4">{GetConditionFn} */ </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">condition</span><span class="s3">)(</span><span class="s6">this</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) !== </span><span class="s6">false</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s4">/**</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{RuntimeSpec} runtime the runtime</span>
+	 <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{boolean} true, if the connection is active</span>
+	 <span class="s4">*/</span>
+	<span class="s1">isTargetActive</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s6">if </span><span class="s3">(!</span><span class="s6">this</span><span class="s3">.</span><span class="s1">conditional</span><span class="s3">) </span><span class="s6">return this</span><span class="s3">.</span><span class="s1">_active</span><span class="s3">;</span>
+		<span class="s6">return </span><span class="s3">(</span>
+			<span class="s4">/** </span><span class="s5">@type </span><span class="s4">{GetConditionFn} */ </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">condition</span><span class="s3">)(</span><span class="s6">this</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) === </span><span class="s6">true</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s4">/**</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{RuntimeSpec} runtime the runtime</span>
+	 <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{ConnectionState} true: fully active, false: inactive, TRANSITIVE: direct module inactive, but transitive connection maybe active</span>
+	 <span class="s4">*/</span>
+	<span class="s1">getActiveState</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s6">if </span><span class="s3">(!</span><span class="s6">this</span><span class="s3">.</span><span class="s1">conditional</span><span class="s3">) </span><span class="s6">return this</span><span class="s3">.</span><span class="s1">_active</span><span class="s3">;</span>
+		<span class="s6">return </span><span class="s4">/** </span><span class="s5">@type </span><span class="s4">{GetConditionFn} */ </span><span class="s3">(</span><span class="s6">this</span><span class="s3">.</span><span class="s1">condition</span><span class="s3">)(</span><span class="s6">this</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s4">/**</span>
+	 <span class="s4">* </span><span class="s5">@param </span><span class="s4">{boolean} value active or not</span>
+	 <span class="s4">* </span><span class="s5">@returns </span><span class="s4">{void}</span>
+	 <span class="s4">*/</span>
+	<span class="s1">setActive</span><span class="s3">(</span><span class="s1">value</span><span class="s3">) {</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">conditional </span><span class="s3">= </span><span class="s6">false</span><span class="s3">;</span>
+		<span class="s6">this</span><span class="s3">.</span><span class="s1">_active </span><span class="s3">= </span><span class="s1">value</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// TODO webpack 5 remove</span>
+	<span class="s1">get active</span><span class="s3">() {</span>
+		<span class="s6">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;Use getActiveState instead&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">set active</span><span class="s3">(</span><span class="s1">value</span><span class="s3">) {</span>
+		<span class="s6">throw new </span><span class="s1">Error</span><span class="s3">(</span><span class="s2">&quot;Use setActive instead&quot;</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">/** </span><span class="s5">@typedef </span><span class="s4">{typeof TRANSITIVE_ONLY} TRANSITIVE_ONLY */</span>
+<span class="s4">/** </span><span class="s5">@typedef </span><span class="s4">{typeof CIRCULAR_CONNECTION} CIRCULAR_CONNECTION */</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ModuleGraphConnection</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">addConnectionStates </span><span class="s3">= </span><span class="s1">addConnectionStates</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">TRANSITIVE_ONLY </span><span class="s3">= </span><span class="s4">/** </span><span class="s5">@type </span><span class="s4">{typeof TRANSITIVE_ONLY} */ </span><span class="s3">(</span>
+	<span class="s1">TRANSITIVE_ONLY</span>
+<span class="s3">);</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">CIRCULAR_CONNECTION </span><span class="s3">= </span><span class="s4">/** </span><span class="s5">@type </span><span class="s4">{typeof CIRCULAR_CONNECTION} */ </span><span class="s3">(</span>
+	<span class="s1">CIRCULAR_CONNECTION</span>
+<span class="s3">);</span>
+</pre>
+</body>
+</html>

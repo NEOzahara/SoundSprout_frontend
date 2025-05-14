@@ -1,0 +1,355 @@
+<html>
+<head>
+<title>no-this-before-super.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-this-before-super.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">A rule to disallow using `this`/`super` before `super()`.</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Toru Nagashima</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Checks whether or not a given node is a constructor.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A node to check. This node type is one of</span>
+ <span class="s0">*   `Program`, `FunctionDeclaration`, `FunctionExpression`, and</span>
+ <span class="s0">*   `ArrowFunctionExpression`.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is a constructor.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isConstructorFunction</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s4">(</span>
+        <span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;FunctionExpression&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;MethodDefinition&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">kind </span><span class="s4">=== </span><span class="s3">&quot;constructor&quot;</span>
+    <span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;problem&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow `this`/`super` before calling `super()` in constructors&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-this-before-super&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [],</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">noBeforeSuper</span><span class="s4">: </span><span class="s3">&quot;'{{kind}}' is not allowed before 'super()'.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+
+        <span class="s5">/* 
+         * Information for each constructor. 
+         * - upper:      Information of the upper constructor. 
+         * - hasExtends: A flag which shows whether the owner class has a valid 
+         *   `extends` part. 
+         * - scope:      The scope of the owner class. 
+         * - codePath:   The code path of this constructor. 
+         */</span>
+        <span class="s6">let </span><span class="s2">funcInfo </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+
+        <span class="s5">/* 
+         * Information for each code path segment. 
+         * Each key is the id of a code path segment. 
+         * Each value is an object: 
+         * - superCalled:  The flag which shows `super()` called in all code paths. 
+         * - invalidNodes: The array of invalid ThisExpression and Super nodes. 
+         */</span>
+        <span class="s6">let </span><span class="s2">segInfoMap </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s6">null</span><span class="s4">);</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Gets whether or not `super()` is called in a given code path segment.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CodePathSegment} segment A code path segment to get.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if `super()` is called.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isCalled</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s4">!</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">reachable </span><span class="s4">|| </span><span class="s2">segInfoMap</span><span class="s4">[</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">id</span><span class="s4">].</span><span class="s2">superCalled</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether or not this is in a constructor.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if this is in a constructor.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isInConstructorOfDerivedClass</span><span class="s4">() {</span>
+            <span class="s6">return </span><span class="s2">Boolean</span><span class="s4">(</span><span class="s2">funcInfo </span><span class="s4">&amp;&amp; </span><span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">isConstructor </span><span class="s4">&amp;&amp; </span><span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">hasExtends</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Determines if every segment in a set has been called.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Set&lt;CodePathSegment&gt;} segments The segments to search.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} True if every segment has been called; false otherwise.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isEverySegmentCalled</span><span class="s4">(</span><span class="s2">segments</span><span class="s4">) {</span>
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">segment of segments</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">isCalled</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">)) {</span>
+                    <span class="s6">return false</span><span class="s4">;</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+
+            <span class="s6">return true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether or not this is before `super()` is called.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if this is before `super()` is called.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isBeforeCallOfSuper</span><span class="s4">() {</span>
+            <span class="s6">return </span><span class="s4">(</span>
+                <span class="s2">isInConstructorOfDerivedClass</span><span class="s4">() &amp;&amp;</span>
+                <span class="s4">!</span><span class="s2">isEverySegmentCalled</span><span class="s4">(</span><span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">)</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Sets a given node as invalid.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A node to set as invalid. This is one of</span>
+         <span class="s0">*      a ThisExpression and a Super.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">setInvalid</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">const </span><span class="s2">segments </span><span class="s4">= </span><span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">;</span>
+
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">segment of segments</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">reachable</span><span class="s4">) {</span>
+                    <span class="s2">segInfoMap</span><span class="s4">[</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">id</span><span class="s4">].</span><span class="s2">invalidNodes</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Sets the current segment as `super` was called.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">setSuperCalled</span><span class="s4">() {</span>
+            <span class="s6">const </span><span class="s2">segments </span><span class="s4">= </span><span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">;</span>
+
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">segment of segments</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">reachable</span><span class="s4">) {</span>
+                    <span class="s2">segInfoMap</span><span class="s4">[</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">id</span><span class="s4">].</span><span class="s2">superCalled </span><span class="s4">= </span><span class="s6">true</span><span class="s4">;</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Adds information of a constructor into the stack.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CodePath} codePath A code path which was started.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The current node.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s2">onCodePathStart</span><span class="s4">(</span><span class="s2">codePath</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">isConstructorFunction</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+
+                    <span class="s5">// Class &gt; ClassBody &gt; MethodDefinition &gt; FunctionExpression</span>
+                    <span class="s6">const </span><span class="s2">classNode </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+                    <span class="s2">funcInfo </span><span class="s4">= {</span>
+                        <span class="s2">upper</span><span class="s4">: </span><span class="s2">funcInfo</span><span class="s4">,</span>
+                        <span class="s2">isConstructor</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+                        <span class="s2">hasExtends</span><span class="s4">: </span><span class="s2">Boolean</span><span class="s4">(</span>
+                            <span class="s2">classNode</span><span class="s4">.</span><span class="s2">superClass </span><span class="s4">&amp;&amp;</span>
+                            <span class="s4">!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isNullOrUndefined</span><span class="s4">(</span><span class="s2">classNode</span><span class="s4">.</span><span class="s2">superClass</span><span class="s4">)</span>
+                        <span class="s4">),</span>
+                        <span class="s2">codePath</span><span class="s4">,</span>
+                        <span class="s2">currentSegments</span><span class="s4">: </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">()</span>
+                    <span class="s4">};</span>
+                <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+                    <span class="s2">funcInfo </span><span class="s4">= {</span>
+                        <span class="s2">upper</span><span class="s4">: </span><span class="s2">funcInfo</span><span class="s4">,</span>
+                        <span class="s2">isConstructor</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+                        <span class="s2">hasExtends</span><span class="s4">: </span><span class="s6">false</span><span class="s4">,</span>
+                        <span class="s2">codePath</span><span class="s4">,</span>
+                        <span class="s2">currentSegments</span><span class="s4">: </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">()</span>
+                    <span class="s4">};</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Removes the top of stack item.</span>
+             <span class="s0">*</span>
+             <span class="s0">* And this traverses all segments of this code path then reports every</span>
+             <span class="s0">* invalid node.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CodePath} codePath A code path which was ended.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s2">onCodePathEnd</span><span class="s4">(</span><span class="s2">codePath</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">isDerivedClass </span><span class="s4">= </span><span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">hasExtends</span><span class="s4">;</span>
+
+                <span class="s2">funcInfo </span><span class="s4">= </span><span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">upper</span><span class="s4">;</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">isDerivedClass</span><span class="s4">) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s2">codePath</span><span class="s4">.</span><span class="s2">traverseSegments</span><span class="s4">((</span><span class="s2">segment</span><span class="s4">, </span><span class="s2">controller</span><span class="s4">) =&gt; {</span>
+                    <span class="s6">const </span><span class="s2">info </span><span class="s4">= </span><span class="s2">segInfoMap</span><span class="s4">[</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">id</span><span class="s4">];</span>
+
+                    <span class="s6">for </span><span class="s4">(</span><span class="s6">let </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">info</span><span class="s4">.</span><span class="s2">invalidNodes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+                        <span class="s6">const </span><span class="s2">invalidNode </span><span class="s4">= </span><span class="s2">info</span><span class="s4">.</span><span class="s2">invalidNodes</span><span class="s4">[</span><span class="s2">i</span><span class="s4">];</span>
+
+                        <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                            <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;noBeforeSuper&quot;</span><span class="s4">,</span>
+                            <span class="s2">node</span><span class="s4">: </span><span class="s2">invalidNode</span><span class="s4">,</span>
+                            <span class="s2">data</span><span class="s4">: {</span>
+                                <span class="s2">kind</span><span class="s4">: </span><span class="s2">invalidNode</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Super&quot; </span><span class="s4">? </span><span class="s3">&quot;super&quot; </span><span class="s4">: </span><span class="s3">&quot;this&quot;</span>
+                            <span class="s4">}</span>
+                        <span class="s4">});</span>
+                    <span class="s4">}</span>
+
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">info</span><span class="s4">.</span><span class="s2">superCalled</span><span class="s4">) {</span>
+                        <span class="s2">controller</span><span class="s4">.</span><span class="s2">skip</span><span class="s4">();</span>
+                    <span class="s4">}</span>
+                <span class="s4">});</span>
+            <span class="s4">},</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Initialize information of a given code path segment.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CodePathSegment} segment A code path segment to initialize.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s2">onCodePathSegmentStart</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">isInConstructorOfDerivedClass</span><span class="s4">()) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s5">// Initialize info.</span>
+                <span class="s2">segInfoMap</span><span class="s4">[</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">id</span><span class="s4">] = {</span>
+                    <span class="s2">superCalled</span><span class="s4">: (</span>
+                        <span class="s2">segment</span><span class="s4">.</span><span class="s2">prevSegments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+                        <span class="s2">segment</span><span class="s4">.</span><span class="s2">prevSegments</span><span class="s4">.</span><span class="s2">every</span><span class="s4">(</span><span class="s2">isCalled</span><span class="s4">)</span>
+                    <span class="s4">),</span>
+                    <span class="s2">invalidNodes</span><span class="s4">: []</span>
+                <span class="s4">};</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onUnreachableCodePathSegmentStart</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onUnreachableCodePathSegmentEnd</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s2">onCodePathSegmentEnd</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">) {</span>
+                <span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">currentSegments</span><span class="s4">.</span><span class="s2">delete</span><span class="s4">(</span><span class="s2">segment</span><span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Update information of the code path segment when a code path was</span>
+             <span class="s0">* looped.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CodePathSegment} fromSegment The code path segment of the</span>
+             <span class="s0">*      end of a loop.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CodePathSegment} toSegment A code path segment of the head</span>
+             <span class="s0">*      of a loop.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s2">onCodePathSegmentLoop</span><span class="s4">(</span><span class="s2">fromSegment</span><span class="s4">, </span><span class="s2">toSegment</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">isInConstructorOfDerivedClass</span><span class="s4">()) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s5">// Update information inside of the loop.</span>
+                <span class="s2">funcInfo</span><span class="s4">.</span><span class="s2">codePath</span><span class="s4">.</span><span class="s2">traverseSegments</span><span class="s4">(</span>
+                    <span class="s4">{ </span><span class="s2">first</span><span class="s4">: </span><span class="s2">toSegment</span><span class="s4">, </span><span class="s2">last</span><span class="s4">: </span><span class="s2">fromSegment </span><span class="s4">},</span>
+                    <span class="s4">(</span><span class="s2">segment</span><span class="s4">, </span><span class="s2">controller</span><span class="s4">) =&gt; {</span>
+                        <span class="s6">const </span><span class="s2">info </span><span class="s4">= </span><span class="s2">segInfoMap</span><span class="s4">[</span><span class="s2">segment</span><span class="s4">.</span><span class="s2">id</span><span class="s4">];</span>
+
+                        <span class="s6">if </span><span class="s4">(</span><span class="s2">info</span><span class="s4">.</span><span class="s2">superCalled</span><span class="s4">) {</span>
+                            <span class="s2">info</span><span class="s4">.</span><span class="s2">invalidNodes </span><span class="s4">= [];</span>
+                            <span class="s2">controller</span><span class="s4">.</span><span class="s2">skip</span><span class="s4">();</span>
+                        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span>
+                            <span class="s2">segment</span><span class="s4">.</span><span class="s2">prevSegments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0 </span><span class="s4">&amp;&amp;</span>
+                            <span class="s2">segment</span><span class="s4">.</span><span class="s2">prevSegments</span><span class="s4">.</span><span class="s2">every</span><span class="s4">(</span><span class="s2">isCalled</span><span class="s4">)</span>
+                        <span class="s4">) {</span>
+                            <span class="s2">info</span><span class="s4">.</span><span class="s2">superCalled </span><span class="s4">= </span><span class="s6">true</span><span class="s4">;</span>
+                            <span class="s2">info</span><span class="s4">.</span><span class="s2">invalidNodes </span><span class="s4">= [];</span>
+                        <span class="s4">}</span>
+                    <span class="s4">}</span>
+                <span class="s4">);</span>
+            <span class="s4">},</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Reports if this is before `super()`.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A target node.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s2">ThisExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">isBeforeCallOfSuper</span><span class="s4">()) {</span>
+                    <span class="s2">setInvalid</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Reports if this is before `super()`.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A target node.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s2">Super</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isCallee</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) &amp;&amp; </span><span class="s2">isBeforeCallOfSuper</span><span class="s4">()) {</span>
+                    <span class="s2">setInvalid</span><span class="s4">(</span><span class="s2">node</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Marks `super()` called.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node A target node.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s3">&quot;CallExpression:exit&quot;</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Super&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">isBeforeCallOfSuper</span><span class="s4">()) {</span>
+                    <span class="s2">setSuperCalled</span><span class="s4">();</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* Resets state.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+             <span class="s0">*/</span>
+            <span class="s3">&quot;Program:exit&quot;</span><span class="s4">() {</span>
+                <span class="s2">segInfoMap </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">create</span><span class="s4">(</span><span class="s6">null</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,926 @@
+<html>
+<head>
+<title>ModuleGraph.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ModuleGraph.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">util </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;util&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ExportsInfo </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ExportsInfo&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleGraphConnection </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ModuleGraphConnection&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">SortableSet </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/SortableSet&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">WeakTupleMap </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./util/WeakTupleMap&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Compilation&quot;).ModuleMemCaches} ModuleMemCaches */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./DependenciesBlock&quot;)} DependenciesBlock */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Dependency&quot;)} Dependency */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ExportsInfo&quot;).ExportInfo} ExportInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./ModuleProfile&quot;)} ModuleProfile */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./RequestShortener&quot;)} RequestShortener */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">OptimizationBailoutFunction</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string}</span>
+ <span class="s5">*/</span>
+
+<span class="s4">const </span><span class="s1">EMPTY_SET </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{SortableSet&lt;ModuleGraphConnection&gt;} set input</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{readonly Map&lt;Module | undefined, readonly ModuleGraphConnection[]&gt;} mapped by origin module</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getConnectionsByOriginModule </span><span class="s3">= </span><span class="s1">set </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module | 0} */</span>
+	<span class="s4">let </span><span class="s1">lastModule </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[] | undefined} */</span>
+	<span class="s4">let </span><span class="s1">lastList</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of set</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">originModule </span><span class="s3">} = </span><span class="s1">connection</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">lastModule </span><span class="s3">=== </span><span class="s1">originModule</span><span class="s3">) {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[]} */</span>
+			<span class="s3">(</span><span class="s1">lastList</span><span class="s3">).</span><span class="s1">push</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">lastModule </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">);</span>
+			<span class="s4">const </span><span class="s1">list </span><span class="s3">= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">list </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">lastList </span><span class="s3">= </span><span class="s1">list</span><span class="s3">;</span>
+				<span class="s1">list</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s4">const </span><span class="s1">list </span><span class="s3">= [</span><span class="s1">connection</span><span class="s3">];</span>
+				<span class="s1">lastList </span><span class="s3">= </span><span class="s1">list</span><span class="s3">;</span>
+				<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">list</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">map</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{SortableSet&lt;ModuleGraphConnection&gt;} set input</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{readonly Map&lt;Module | undefined, readonly ModuleGraphConnection[]&gt;} mapped by module</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getConnectionsByModule </span><span class="s3">= </span><span class="s1">set </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module | 0} */</span>
+	<span class="s4">let </span><span class="s1">lastModule </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+	<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[] | undefined} */</span>
+	<span class="s4">let </span><span class="s1">lastList</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of set</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">module </span><span class="s3">} = </span><span class="s1">connection</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">lastModule </span><span class="s3">=== </span><span class="s1">module</span><span class="s3">) {</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[]} */</span>
+			<span class="s3">(</span><span class="s1">lastList</span><span class="s3">).</span><span class="s1">push</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">lastModule </span><span class="s3">= </span><span class="s1">module</span><span class="s3">;</span>
+			<span class="s4">const </span><span class="s1">list </span><span class="s3">= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">list </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">lastList </span><span class="s3">= </span><span class="s1">list</span><span class="s3">;</span>
+				<span class="s1">list</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s4">const </span><span class="s1">list </span><span class="s3">= [</span><span class="s1">connection</span><span class="s3">];</span>
+				<span class="s1">lastList </span><span class="s3">= </span><span class="s1">list</span><span class="s3">;</span>
+				<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">list</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s4">return </span><span class="s1">map</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{SortableSet&lt;ModuleGraphConnection&gt;} IncomingConnections */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{SortableSet&lt;ModuleGraphConnection&gt;} OutgoingConnections */</span>
+
+<span class="s4">class </span><span class="s1">ModuleGraphModule </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">() {</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{IncomingConnections} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">incomingConnections </span><span class="s3">= </span><span class="s4">new </span><span class="s1">SortableSet</span><span class="s3">();</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OutgoingConnections | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">outgoingConnections </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module | null | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">issuer </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{(string | OptimizationBailoutFunction)[]} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">optimizationBailout </span><span class="s3">= [];</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ExportsInfo} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ExportsInfo</span><span class="s3">();</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number | null} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">preOrderIndex </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number | null} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">postOrderIndex </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number | null} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleProfile | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">profile </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{boolean} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">async </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection[] | undefined} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_unassignedConnections </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{(moduleGraphConnection: ModuleGraphConnection) =&gt; boolean} FilterConnection */</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{EXPECTED_OBJECT} MetaKey */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{TODO} Meta */</span>
+
+<span class="s4">class </span><span class="s1">ModuleGraph </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">() {</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Dependency, ModuleGraphConnection | null&gt;}</span>
+		 <span class="s5">* </span><span class="s6">@private</span>
+		 <span class="s5">*/</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_dependencyMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, ModuleGraphModule&gt;}</span>
+		 <span class="s5">* </span><span class="s6">@private</span>
+		 <span class="s5">*/</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;MetaKey, Meta&gt;}</span>
+		 <span class="s5">* </span><span class="s6">@private</span>
+		 <span class="s5">*/</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_metaMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{WeakTupleMap&lt;any[], any&gt; | undefined}</span>
+		 <span class="s5">* </span><span class="s6">@private</span>
+		 <span class="s5">*/</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{ModuleMemCaches | undefined}</span>
+		 <span class="s5">* </span><span class="s6">@private</span>
+		 <span class="s5">*/</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMemCaches </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@type </span><span class="s5">{string | undefined}</span>
+		 <span class="s5">* </span><span class="s6">@private</span>
+		 <span class="s5">*/</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheStage </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ModuleGraphModule} the internal module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">mgm </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">mgm </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ModuleGraphModule</span><span class="s3">();</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">mgm</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{DependenciesBlock} block parent block</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module parent module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number=} indexInBlock position in block</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setParents</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">block</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">indexInBlock </span><span class="s3">= -</span><span class="s7">1</span><span class="s3">) {</span>
+		<span class="s1">dependency</span><span class="s3">.</span><span class="s1">_parentDependenciesBlockIndex </span><span class="s3">= </span><span class="s1">indexInBlock</span><span class="s3">;</span>
+		<span class="s1">dependency</span><span class="s3">.</span><span class="s1">_parentDependenciesBlock </span><span class="s3">= </span><span class="s1">block</span><span class="s3">;</span>
+		<span class="s1">dependency</span><span class="s3">.</span><span class="s1">_parentModule </span><span class="s3">= </span><span class="s1">module</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Module | undefined} parent module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getParentModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">dependency</span><span class="s3">.</span><span class="s1">_parentModule</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{DependenciesBlock | undefined} parent block</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getParentBlock</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">dependency</span><span class="s3">.</span><span class="s1">_parentDependenciesBlock</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number} index</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getParentBlockIndex</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">dependency</span><span class="s3">.</span><span class="s1">_parentDependenciesBlockIndex</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module | null} originModule the referencing module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the referencing dependency</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the referenced module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setResolvedModule</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ModuleGraphConnection</span><span class="s3">(</span>
+			<span class="s1">originModule</span><span class="s3">,</span>
+			<span class="s1">dependency</span><span class="s3">,</span>
+			<span class="s1">module</span><span class="s3">,</span>
+			<span class="s1">undefined</span><span class="s3">,</span>
+			<span class="s1">dependency</span><span class="s3">.</span><span class="s1">weak</span><span class="s3">,</span>
+			<span class="s1">dependency</span><span class="s3">.</span><span class="s1">getCondition</span><span class="s3">(</span><span class="s4">this</span><span class="s3">)</span>
+		<span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">connections </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">incomingConnections</span><span class="s3">;</span>
+		<span class="s1">connections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">_unassignedConnections </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">mgm</span><span class="s3">.</span><span class="s1">_unassignedConnections </span><span class="s3">= [];</span>
+			<span class="s3">}</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">_unassignedConnections</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">outgoingConnections </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">mgm</span><span class="s3">.</span><span class="s1">outgoingConnections </span><span class="s3">= </span><span class="s4">new </span><span class="s1">SortableSet</span><span class="s3">();</span>
+			<span class="s3">}</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">outgoingConnections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_dependencyMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">connection</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the referencing dependency</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the referenced module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">updateModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection} */</span>
+			<span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">));</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module </span><span class="s3">=== </span><span class="s1">module</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">newConnection </span><span class="s3">= </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">clone</span><span class="s3">();</span>
+		<span class="s1">newConnection</span><span class="s3">.</span><span class="s1">module </span><span class="s3">= </span><span class="s1">module</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_dependencyMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">newConnection</span><span class="s3">);</span>
+		<span class="s1">connection</span><span class="s3">.</span><span class="s1">setActive</span><span class="s3">(</span><span class="s4">false</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">originMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">originModule</span><span class="s3">)</span>
+		<span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OutgoingConnections} */</span>
+		<span class="s3">(</span><span class="s1">originMgm</span><span class="s3">.</span><span class="s1">outgoingConnections</span><span class="s3">).</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newConnection</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">targetMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">targetMgm</span><span class="s3">.</span><span class="s1">incomingConnections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newConnection</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the referencing dependency</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">removeConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection} */</span>
+			<span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">));</span>
+		<span class="s4">const </span><span class="s1">targetMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">targetMgm</span><span class="s3">.</span><span class="s1">incomingConnections</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">originMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">originModule</span><span class="s3">)</span>
+		<span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{OutgoingConnections} */</span>
+		<span class="s3">(</span><span class="s1">originMgm</span><span class="s3">.</span><span class="s1">outgoingConnections</span><span class="s3">).</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_dependencyMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s4">null</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the referencing dependency</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} explanation an explanation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">addExplanation</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">explanation</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">=</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{ModuleGraphConnection} */</span>
+			<span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">));</span>
+		<span class="s1">connection</span><span class="s3">.</span><span class="s1">addExplanation</span><span class="s3">(</span><span class="s1">explanation</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} sourceModule the source module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} targetModule the target module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">cloneModuleAttributes</span><span class="s3">(</span><span class="s1">sourceModule</span><span class="s3">, </span><span class="s1">targetModule</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">oldMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">sourceModule</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">newMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">targetModule</span><span class="s3">);</span>
+		<span class="s1">newMgm</span><span class="s3">.</span><span class="s1">postOrderIndex </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">postOrderIndex</span><span class="s3">;</span>
+		<span class="s1">newMgm</span><span class="s3">.</span><span class="s1">preOrderIndex </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">preOrderIndex</span><span class="s3">;</span>
+		<span class="s1">newMgm</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">depth</span><span class="s3">;</span>
+		<span class="s1">newMgm</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">;</span>
+		<span class="s1">newMgm</span><span class="s3">.</span><span class="s1">async </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">async</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">removeModuleAttributes</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">postOrderIndex </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">preOrderIndex </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">async </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">removeAllModuleAttributes</span><span class="s3">() {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">mgm of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMap</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()) {</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">postOrderIndex </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">preOrderIndex </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">= </span><span class="s4">null</span><span class="s3">;</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">async </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} oldModule the old referencing module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} newModule the new referencing module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FilterConnection} filterConnection filter predicate for replacement</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">moveModuleConnections</span><span class="s3">(</span><span class="s1">oldModule</span><span class="s3">, </span><span class="s1">newModule</span><span class="s3">, </span><span class="s1">filterConnection</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">oldModule </span><span class="s3">=== </span><span class="s1">newModule</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">oldMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">oldModule</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">newMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">newModule</span><span class="s3">);</span>
+		<span class="s0">// Outgoing connections</span>
+		<span class="s4">const </span><span class="s1">oldConnections </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">outgoingConnections</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">oldConnections </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">newMgm</span><span class="s3">.</span><span class="s1">outgoingConnections </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">newMgm</span><span class="s3">.</span><span class="s1">outgoingConnections </span><span class="s3">= </span><span class="s4">new </span><span class="s1">SortableSet</span><span class="s3">();</span>
+			<span class="s3">}</span>
+			<span class="s4">const </span><span class="s1">newConnections </span><span class="s3">= </span><span class="s1">newMgm</span><span class="s3">.</span><span class="s1">outgoingConnections</span><span class="s3">;</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of oldConnections</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filterConnection</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">)) {</span>
+					<span class="s1">connection</span><span class="s3">.</span><span class="s1">originModule </span><span class="s3">= </span><span class="s1">newModule</span><span class="s3">;</span>
+					<span class="s1">newConnections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+					<span class="s1">oldConnections</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s0">// Incoming connections</span>
+		<span class="s4">const </span><span class="s1">oldConnections2 </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">incomingConnections</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">newConnections2 </span><span class="s3">= </span><span class="s1">newMgm</span><span class="s3">.</span><span class="s1">incomingConnections</span><span class="s3">;</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of oldConnections2</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">filterConnection</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">)) {</span>
+				<span class="s1">connection</span><span class="s3">.</span><span class="s1">module </span><span class="s3">= </span><span class="s1">newModule</span><span class="s3">;</span>
+				<span class="s1">newConnections2</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+				<span class="s1">oldConnections2</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} oldModule the old referencing module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} newModule the new referencing module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{FilterConnection} filterConnection filter predicate for replacement</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">copyOutgoingModuleConnections</span><span class="s3">(</span><span class="s1">oldModule</span><span class="s3">, </span><span class="s1">newModule</span><span class="s3">, </span><span class="s1">filterConnection</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">oldModule </span><span class="s3">=== </span><span class="s1">newModule</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">oldMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">oldModule</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">newMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">newModule</span><span class="s3">);</span>
+		<span class="s0">// Outgoing connections</span>
+		<span class="s4">const </span><span class="s1">oldConnections </span><span class="s3">= </span><span class="s1">oldMgm</span><span class="s3">.</span><span class="s1">outgoingConnections</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">oldConnections </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">newMgm</span><span class="s3">.</span><span class="s1">outgoingConnections </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s1">newMgm</span><span class="s3">.</span><span class="s1">outgoingConnections </span><span class="s3">= </span><span class="s4">new </span><span class="s1">SortableSet</span><span class="s3">();</span>
+			<span class="s3">}</span>
+			<span class="s4">const </span><span class="s1">newConnections </span><span class="s3">= </span><span class="s1">newMgm</span><span class="s3">.</span><span class="s1">outgoingConnections</span><span class="s3">;</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of oldConnections</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">filterConnection</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">)) {</span>
+					<span class="s4">const </span><span class="s1">newConnection </span><span class="s3">= </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">clone</span><span class="s3">();</span>
+					<span class="s1">newConnection</span><span class="s3">.</span><span class="s1">originModule </span><span class="s3">= </span><span class="s1">newModule</span><span class="s3">;</span>
+					<span class="s1">newConnections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newConnection</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">newConnection</span><span class="s3">.</span><span class="s1">module </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+						<span class="s4">const </span><span class="s1">otherMgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">newConnection</span><span class="s3">.</span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s1">otherMgm</span><span class="s3">.</span><span class="s1">incomingConnections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newConnection</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the referenced module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} explanation an explanation why it's referenced</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">addExtraReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">explanation</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connections </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">incomingConnections</span><span class="s3">;</span>
+		<span class="s1">connections</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s4">new </span><span class="s1">ModuleGraphConnection</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s4">null</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">explanation</span><span class="s3">));</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency to look for a referenced module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Module | null} the referenced module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getResolvedModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">connection </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">resolvedModule </span><span class="s3">: </span><span class="s4">null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency to look for a referenced module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ModuleGraphConnection | undefined} the connection</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_dependencyMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">connection </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">module </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getParentModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">module </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span>
+					<span class="s1">mgm</span><span class="s3">.</span><span class="s1">_unassignedConnections </span><span class="s3">&amp;&amp;</span>
+					<span class="s1">mgm</span><span class="s3">.</span><span class="s1">_unassignedConnections</span><span class="s3">.</span><span class="s1">length </span><span class="s3">!== </span><span class="s7">0</span>
+				<span class="s3">) {</span>
+					<span class="s4">let </span><span class="s1">foundConnection</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of mgm</span><span class="s3">.</span><span class="s1">_unassignedConnections</span><span class="s3">) {</span>
+						<span class="s4">this</span><span class="s3">.</span><span class="s1">_dependencyMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Dependency} */ </span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">dependency</span><span class="s3">),</span>
+							<span class="s1">connection</span>
+						<span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">dependency </span><span class="s3">=== </span><span class="s1">dependency</span><span class="s3">)</span>
+							<span class="s1">foundConnection </span><span class="s3">= </span><span class="s1">connection</span><span class="s3">;</span>
+					<span class="s3">}</span>
+					<span class="s1">mgm</span><span class="s3">.</span><span class="s1">_unassignedConnections</span><span class="s3">.</span><span class="s1">length </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">foundConnection </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+						<span class="s4">return </span><span class="s1">foundConnection</span><span class="s3">;</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_dependencyMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s4">null</span><span class="s3">);</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">connection </span><span class="s3">=== </span><span class="s4">null </span><span class="s3">? </span><span class="s1">undefined </span><span class="s3">: </span><span class="s1">connection</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency to look for a referenced module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Module | null} the referenced module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">connection </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module </span><span class="s3">: </span><span class="s4">null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency to look for a referencing module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Module | null} the referencing module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getOrigin</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">connection </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">originModule </span><span class="s3">: </span><span class="s4">null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency the dependency to look for a referencing module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Module | null} the original referencing module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getResolvedOrigin</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">connection </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s1">connection</span><span class="s3">.</span><span class="s1">resolvedOriginModule </span><span class="s3">: </span><span class="s4">null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Iterable&lt;ModuleGraphConnection&gt;} reasons why a module is included</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getIncomingConnections</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connections </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">incomingConnections</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">connections</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Iterable&lt;ModuleGraphConnection&gt;} list of outgoing connections</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getOutgoingConnections</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connections </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">outgoingConnections</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">connections </span><span class="s3">=== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s1">EMPTY_SET </span><span class="s3">: </span><span class="s1">connections</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{readonly Map&lt;Module | undefined | null, readonly ModuleGraphConnection[]&gt;} reasons why a module is included, in a map by source module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getIncomingConnectionsByOriginModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connections </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">incomingConnections</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">connections</span><span class="s3">.</span><span class="s1">getFromUnorderedCache</span><span class="s3">(</span><span class="s1">getConnectionsByOriginModule</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{readonly Map&lt;Module | undefined, readonly ModuleGraphConnection[]&gt; | undefined} connections to modules, in a map by module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getOutgoingConnectionsByModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">connections </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">).</span><span class="s1">outgoingConnections</span><span class="s3">;</span>
+		<span class="s4">return </span><span class="s1">connections </span><span class="s3">=== </span><span class="s1">undefined</span>
+			<span class="s3">? </span><span class="s1">undefined</span>
+			<span class="s3">: </span><span class="s1">connections</span><span class="s3">.</span><span class="s1">getFromUnorderedCache</span><span class="s3">(</span><span class="s1">getConnectionsByModule</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ModuleProfile | undefined} the module profile</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getProfile</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">profile</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleProfile | undefined} profile the module profile</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setProfile</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">profile</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">profile </span><span class="s3">= </span><span class="s1">profile</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Module | null | undefined} the issuer module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getIssuer</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">issuer</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module | null} issuer the issuer module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setIssuer</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">issuer</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">issuer </span><span class="s3">= </span><span class="s1">issuer</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module | null} issuer the issuer module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setIssuerIfUnset</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">issuer</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">issuer </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">issuer </span><span class="s3">= </span><span class="s1">issuer</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(string | OptimizationBailoutFunction)[]} optimization bailouts</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getOptimizationBailout</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">optimizationBailout</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{true | string[] | null} the provided exports</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getProvidedExports</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">getProvidedExports</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | string[]} exportName a name of an export</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean | null} true, if the export is provided by the module.</span>
+	 <span class="s5">* null, if it's unknown.</span>
+	 <span class="s5">* false, if it's not provided.</span>
+	 <span class="s5">*/</span>
+	<span class="s1">isExportProvided</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">exportName</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">isExportProvided</span><span class="s3">(</span><span class="s1">exportName</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">result </span><span class="s3">=== </span><span class="s1">undefined </span><span class="s3">? </span><span class="s4">null </span><span class="s3">: </span><span class="s1">result</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ExportsInfo} info about the exports</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} exportName the export</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ExportInfo} info about the export</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getExportInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">exportName</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">getExportInfo</span><span class="s3">(</span><span class="s1">exportName</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} exportName the export</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ExportInfo} info about the export (do not modify)</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getReadOnlyExportInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">exportName</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">getReadOnlyExportInfo</span><span class="s3">(</span><span class="s1">exportName</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime the runtime</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{false | true | SortableSet&lt;string&gt; | null} the used exports</span>
+	 <span class="s5">* false: module is not used at all.</span>
+	 <span class="s5">* true: the module namespace/object export is used.</span>
+	 <span class="s5">* SortableSet&lt;string&gt;: these export names are used.</span>
+	 <span class="s5">* empty SortableSet&lt;string&gt;: module is used but no export.</span>
+	 <span class="s5">* null: unknown, worst case should be assumed.</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getUsedExports</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">getUsedExports</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number | null} the index of the module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getPreOrderIndex</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">preOrderIndex</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number | null} the index of the module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getPostOrderIndex</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">postOrderIndex</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} index the index of the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setPreOrderIndex</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">index</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">preOrderIndex </span><span class="s3">= </span><span class="s1">index</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} index the index of the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, if the index was set</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setPreOrderIndexIfUnset</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">index</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">preOrderIndex </span><span class="s3">=== </span><span class="s4">null</span><span class="s3">) {</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">preOrderIndex </span><span class="s3">= </span><span class="s1">index</span><span class="s3">;</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} index the index of the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setPostOrderIndex</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">index</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">postOrderIndex </span><span class="s3">= </span><span class="s1">index</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} index the index of the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, if the index was set</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setPostOrderIndexIfUnset</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">index</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">postOrderIndex </span><span class="s3">=== </span><span class="s4">null</span><span class="s3">) {</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">postOrderIndex </span><span class="s3">= </span><span class="s1">index</span><span class="s3">;</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{number | null} the depth of the module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getDepth</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">depth</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} depth the depth of the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setDepth</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">depth</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">= </span><span class="s1">depth</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} depth the depth of the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, if the depth was set</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setDepthIfLower</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">depth</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">=== </span><span class="s4">null </span><span class="s3">|| </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">&gt; </span><span class="s1">depth</span><span class="s3">) {</span>
+			<span class="s1">mgm</span><span class="s3">.</span><span class="s1">depth </span><span class="s3">= </span><span class="s1">depth</span><span class="s3">;</span>
+			<span class="s4">return true</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">return false</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, if the module is async</span>
+	 <span class="s5">*/</span>
+	<span class="s1">isAsync</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">mgm</span><span class="s3">.</span><span class="s1">async</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setAsync</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">mgm </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getModuleGraphModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s1">mgm</span><span class="s3">.</span><span class="s1">async </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{MetaKey} thing any thing</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Meta} metadata</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getMeta</span><span class="s3">(</span><span class="s1">thing</span><span class="s3">) {</span>
+		<span class="s4">let </span><span class="s1">meta </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_metaMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">thing</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">meta </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">meta </span><span class="s3">= </span><span class="s1">Object</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span><span class="s4">null</span><span class="s3">);</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_metaMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">thing</span><span class="s3">, </span><span class="s1">meta</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">meta</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{MetaKey} thing any thing</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Meta | undefined} metadata</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getMetaIfExisting</span><span class="s3">(</span><span class="s1">thing</span><span class="s3">) {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">_metaMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">thing</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string=} cacheStage a persistent stage name for caching</span>
+	 <span class="s5">*/</span>
+	<span class="s1">freeze</span><span class="s3">(</span><span class="s1">cacheStage</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakTupleMap</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheStage </span><span class="s3">= </span><span class="s1">cacheStage</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">unfreeze</span><span class="s3">() {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheStage </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">V</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(moduleGraph: ModuleGraph, ...args: T[]) =&gt; V} fn computer</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{...T} args arguments</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{V} computed value or cached</span>
+	 <span class="s5">*/</span>
+	<span class="s1">cached</span><span class="s3">(</span><span class="s1">fn</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_cache </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">fn</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">);</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">provide</span><span class="s3">(</span><span class="s1">fn</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">, () =&gt; </span><span class="s1">fn</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">));</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleMemCaches} moduleMemCaches mem caches for modules for better caching</span>
+	 <span class="s5">*/</span>
+	<span class="s1">setModuleMemCaches</span><span class="s3">(</span><span class="s1">moduleMemCaches</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMemCaches </span><span class="s3">= </span><span class="s1">moduleMemCaches</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Dependency} dependency dependency</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{...any} args arguments, last argument is a function called with moduleGraph, dependency, ...args</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{any} computed value or cached</span>
+	 <span class="s5">*/</span>
+	<span class="s1">dependencyCacheProvide</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">) {</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{(moduleGraph: ModuleGraph, dependency: Dependency, ...args: any[]) =&gt; any} */</span>
+		<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">args</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">();</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMemCaches </span><span class="s3">&amp;&amp; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheStage</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">memCache </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_moduleMemCaches</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">getParentModule</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">))</span>
+			<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">memCache </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+				<span class="s4">return </span><span class="s1">memCache</span><span class="s3">.</span><span class="s1">provide</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_cacheStage</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">, () =&gt;</span>
+					<span class="s1">fn</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_cache </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">fn</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">);</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">provide</span><span class="s3">(</span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">, () =&gt;</span>
+			<span class="s1">fn</span><span class="s3">(</span><span class="s4">this</span><span class="s3">, </span><span class="s1">dependency</span><span class="s3">, </span><span class="s1">...args</span><span class="s3">)</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// TODO remove in webpack 6</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} deprecateMessage message for the deprecation message</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} deprecationCode code for the deprecation</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ModuleGraph} the module graph</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">getModuleGraphForModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">deprecateMessage</span><span class="s3">, </span><span class="s1">deprecationCode</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">fn </span><span class="s3">= </span><span class="s1">deprecateMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">deprecateMessage</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">fn</span><span class="s3">) </span><span class="s4">return </span><span class="s1">fn</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">newFn </span><span class="s3">= </span><span class="s1">util</span><span class="s3">.</span><span class="s1">deprecate</span><span class="s3">(</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ModuleGraph} the module graph</span>
+			 <span class="s5">*/</span>
+			<span class="s1">module </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">moduleGraphForModuleMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">moduleGraph</span><span class="s3">)</span>
+					<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s1">deprecateMessage</span>
+						<span class="s3">}</span><span class="s2">There was no ModuleGraph assigned to the Module for backward-compat (Use the new API)`</span>
+					<span class="s3">);</span>
+				<span class="s4">return </span><span class="s1">moduleGraph</span><span class="s3">;</span>
+			<span class="s3">},</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">deprecateMessage</span><span class="s3">}</span><span class="s2">: Use new ModuleGraph API`</span><span class="s3">,</span>
+			<span class="s1">deprecationCode</span>
+		<span class="s3">);</span>
+		<span class="s1">deprecateMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">deprecateMessage</span><span class="s3">, </span><span class="s1">newFn</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">newFn</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// TODO remove in webpack 6</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ModuleGraph} moduleGraph the module graph</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">setModuleGraphForModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">) {</span>
+		<span class="s1">moduleGraphForModuleMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// TODO remove in webpack 6</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s4">static </span><span class="s1">clearModuleGraphForModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s1">moduleGraphForModuleMap</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s0">// TODO remove in webpack 6</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{WeakMap&lt;Module, ModuleGraph&gt;} */</span>
+<span class="s4">const </span><span class="s1">moduleGraphForModuleMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">WeakMap</span><span class="s3">();</span>
+
+<span class="s0">// TODO remove in webpack 6</span>
+<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;string, (module: Module) =&gt; ModuleGraph&gt;} */</span>
+<span class="s4">const </span><span class="s1">deprecateMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ModuleGraph</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">ModuleGraphConnection </span><span class="s3">= </span><span class="s1">ModuleGraphConnection</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

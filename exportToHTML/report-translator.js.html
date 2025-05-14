@@ -1,0 +1,393 @@
+<html>
+<head>
+<title>report-translator.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+report-translator.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">A helper that translates context.report() calls from the rule API into generic problem objects</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Teddy Katz</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">assert </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;assert&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">ruleFixer </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./rule-fixer&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">interpolate </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./interpolate&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Typedefs</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).LintMessage} LintMessage */</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* An error message description</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} MessageDescriptor</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ASTNode} [node] The reported node</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Location} loc The location of the problem.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} message The problem message.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Object} [data] Optional data to use to fill in placeholders in the</span>
+ <span class="s0">*      message.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Function} [fix] The function to call that creates a fix command.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Array&lt;{desc?: string, messageId?: string, fix: Function}&gt;} suggest Suggestion descriptions and functions to create a the associated fixes.</span>
+ <span class="s0">*/</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Module Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+
+<span class="s0">/**</span>
+ <span class="s0">* Translates a multi-argument context.report() call into a single object argument call</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{...*} args A list of arguments passed to `context.report`</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{MessageDescriptor} A normalized object containing report information</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">normalizeMultiArgReportCall</span><span class="s4">(</span><span class="s2">...args</span><span class="s4">) {</span>
+
+    <span class="s5">// If there is one argument, it is considered to be a new-style call already.</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">args</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">1</span><span class="s4">) {</span>
+
+        <span class="s5">// Shallow clone the object to avoid surprises if reusing the descriptor</span>
+        <span class="s6">return </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">assign</span><span class="s4">({}, </span><span class="s2">args</span><span class="s4">[</span><span class="s7">0</span><span class="s4">]);</span>
+    <span class="s4">}</span>
+
+    <span class="s5">// If the second argument is a string, the arguments are interpreted as [node, message, data, fix].</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">args</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] === </span><span class="s3">&quot;string&quot;</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">node</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">0</span><span class="s4">],</span>
+            <span class="s2">message</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">1</span><span class="s4">],</span>
+            <span class="s2">data</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">2</span><span class="s4">],</span>
+            <span class="s2">fix</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">3</span><span class="s4">]</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+
+    <span class="s5">// Otherwise, the arguments are interpreted as [node, loc, message, data, fix].</span>
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">node</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">0</span><span class="s4">],</span>
+        <span class="s2">loc</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">1</span><span class="s4">],</span>
+        <span class="s2">message</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">2</span><span class="s4">],</span>
+        <span class="s2">data</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">3</span><span class="s4">],</span>
+        <span class="s2">fix</span><span class="s4">: </span><span class="s2">args</span><span class="s4">[</span><span class="s7">4</span><span class="s4">]</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Asserts that either a loc or a node was provided, and the node is valid if it was provided.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{MessageDescriptor} descriptor A descriptor to validate</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">AssertionError if neither a node nor a loc was provided, or if the node is not an object</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">assertValidNodeInfo</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">node</span><span class="s4">) {</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">node </span><span class="s4">=== </span><span class="s3">&quot;object&quot;</span><span class="s4">, </span><span class="s3">&quot;Node must be an object&quot;</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">, </span><span class="s3">&quot;Node must be provided when reporting error if location is not provided&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Normalizes a MessageDescriptor to always have a `loc` with `start` and `end` properties</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{MessageDescriptor} descriptor A descriptor for the report from a rule.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{{start: Location, end: (Location|null)}} An updated location that infers the `start` and `end` properties</span>
+ <span class="s0">* from the `node` of the original descriptor, or infers the `start` from the `loc` of the original descriptor.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">normalizeReportLoc</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">;</span>
+        <span class="s4">}</span>
+        <span class="s6">return </span><span class="s4">{ </span><span class="s2">start</span><span class="s4">: </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">, </span><span class="s2">end</span><span class="s4">: </span><span class="s6">null </span><span class="s4">};</span>
+    <span class="s4">}</span>
+    <span class="s6">return </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">node</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Clones the given fix object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Fix|null} fix The fix to clone.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Fix|null} Deep cloned fix object or `null` if `null` or `undefined` was passed in.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">cloneFix</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">fix</span><span class="s4">) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">range</span><span class="s4">: [</span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">], </span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">]],</span>
+        <span class="s2">text</span><span class="s4">: </span><span class="s2">fix</span><span class="s4">.</span><span class="s2">text</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check that a fix has a valid range.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Fix|null} fix The fix to validate.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">assertValidFix</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">fix</span><span class="s4">) {</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] === </span><span class="s3">&quot;number&quot; </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] === </span><span class="s3">&quot;number&quot;</span><span class="s4">, </span><span class="s3">`Fix has invalid range: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">JSON</span><span class="s4">.</span><span class="s2">stringify</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">, </span><span class="s6">null</span><span class="s4">, </span><span class="s7">2</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Compares items in a fixes array by range.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Fix} a The first message.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Fix} b The second message.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{int} -1 if a comes before b, 1 if a comes after b, 0 if equal.</span>
+ <span class="s0">* </span><span class="s1">@private</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">compareFixesByRange</span><span class="s4">(</span><span class="s2">a</span><span class="s4">, </span><span class="s2">b</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">a</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] - </span><span class="s2">b</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] || </span><span class="s2">a</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] - </span><span class="s2">b</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">];</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Merges the given fixes array into one.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Fix[]} fixes The fixes to merge.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{SourceCode} sourceCode The source code object to get the text between fixes.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{{text: string, range: number[]}} The merged fixes</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">mergeFixes</span><span class="s4">(</span><span class="s2">fixes</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">) {</span>
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">fix of fixes</span><span class="s4">) {</span>
+        <span class="s2">assertValidFix</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">fixes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">fixes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">1</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">cloneFix</span><span class="s4">(</span><span class="s2">fixes</span><span class="s4">[</span><span class="s7">0</span><span class="s4">]);</span>
+    <span class="s4">}</span>
+
+    <span class="s2">fixes</span><span class="s4">.</span><span class="s2">sort</span><span class="s4">(</span><span class="s2">compareFixesByRange</span><span class="s4">);</span>
+
+    <span class="s6">const </span><span class="s2">originalText </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">text</span><span class="s4">;</span>
+    <span class="s6">const </span><span class="s2">start </span><span class="s4">= </span><span class="s2">fixes</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">];</span>
+    <span class="s6">const </span><span class="s2">end </span><span class="s4">= </span><span class="s2">fixes</span><span class="s4">[</span><span class="s2">fixes</span><span class="s4">.</span><span class="s2">length </span><span class="s4">- </span><span class="s7">1</span><span class="s4">].</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">];</span>
+    <span class="s6">let </span><span class="s2">text </span><span class="s4">= </span><span class="s3">&quot;&quot;</span><span class="s4">;</span>
+    <span class="s6">let </span><span class="s2">lastPos </span><span class="s4">= </span><span class="s2">Number</span><span class="s4">.</span><span class="s2">MIN_SAFE_INTEGER</span><span class="s4">;</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">fix of fixes</span><span class="s4">) {</span>
+        <span class="s2">assert</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &gt;= </span><span class="s2">lastPos</span><span class="s4">, </span><span class="s3">&quot;Fix objects must not be overlapped in a report.&quot;</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &gt;= </span><span class="s7">0</span><span class="s4">) {</span>
+            <span class="s2">text </span><span class="s4">+= </span><span class="s2">originalText</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s2">Math</span><span class="s4">.</span><span class="s2">max</span><span class="s4">(</span><span class="s7">0</span><span class="s4">, </span><span class="s2">start</span><span class="s4">, </span><span class="s2">lastPos</span><span class="s4">), </span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">]);</span>
+        <span class="s4">}</span>
+        <span class="s2">text </span><span class="s4">+= </span><span class="s2">fix</span><span class="s4">.</span><span class="s2">text</span><span class="s4">;</span>
+        <span class="s2">lastPos </span><span class="s4">= </span><span class="s2">fix</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">];</span>
+    <span class="s4">}</span>
+    <span class="s2">text </span><span class="s4">+= </span><span class="s2">originalText</span><span class="s4">.</span><span class="s2">slice</span><span class="s4">(</span><span class="s2">Math</span><span class="s4">.</span><span class="s2">max</span><span class="s4">(</span><span class="s7">0</span><span class="s4">, </span><span class="s2">start</span><span class="s4">, </span><span class="s2">lastPos</span><span class="s4">), </span><span class="s2">end</span><span class="s4">);</span>
+
+    <span class="s6">return </span><span class="s4">{ </span><span class="s2">range</span><span class="s4">: [</span><span class="s2">start</span><span class="s4">, </span><span class="s2">end</span><span class="s4">], </span><span class="s2">text </span><span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Gets one fix object from the given descriptor.</span>
+ <span class="s0">* If the descriptor retrieves multiple fixes, this merges those to one.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{MessageDescriptor} descriptor The report descriptor.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{SourceCode} sourceCode The source code object to get text between fixes.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{({text: string, range: number[]}|null)} The fix for the descriptor</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">normalizeFixes</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">!== </span><span class="s3">&quot;function&quot;</span><span class="s4">) {</span>
+        <span class="s6">return null</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s5">// @type {null | Fix | Fix[] | IterableIterator&lt;Fix&gt;}</span>
+    <span class="s6">const </span><span class="s2">fix </span><span class="s4">= </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">fix</span><span class="s4">(</span><span class="s2">ruleFixer</span><span class="s4">);</span>
+
+    <span class="s5">// Merge to one.</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">fix </span><span class="s4">&amp;&amp; </span><span class="s2">Symbol</span><span class="s4">.</span><span class="s2">iterator </span><span class="s6">in </span><span class="s2">fix</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">mergeFixes</span><span class="s4">(</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">from</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">), </span><span class="s2">sourceCode</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s2">assertValidFix</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">);</span>
+    <span class="s6">return </span><span class="s2">cloneFix</span><span class="s4">(</span><span class="s2">fix</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Gets an array of suggestion objects from the given descriptor.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{MessageDescriptor} descriptor The report descriptor.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{SourceCode} sourceCode The source code object to get text between fixes.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} messages Object of meta messages for the rule.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Array&lt;SuggestionResult&gt;} The suggestions for the descriptor</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">mapSuggestions</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">, </span><span class="s2">messages</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">suggest </span><span class="s4">|| !</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">suggest</span><span class="s4">)) {</span>
+        <span class="s6">return </span><span class="s4">[];</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">suggest</span>
+        <span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">suggestInfo </span><span class="s4">=&gt; {</span>
+            <span class="s6">const </span><span class="s2">computedDesc </span><span class="s4">= </span><span class="s2">suggestInfo</span><span class="s4">.</span><span class="s2">desc </span><span class="s4">|| </span><span class="s2">messages</span><span class="s4">[</span><span class="s2">suggestInfo</span><span class="s4">.</span><span class="s2">messageId</span><span class="s4">];</span>
+
+            <span class="s6">return </span><span class="s4">{</span>
+                <span class="s2">...suggestInfo</span><span class="s4">,</span>
+                <span class="s2">desc</span><span class="s4">: </span><span class="s2">interpolate</span><span class="s4">(</span><span class="s2">computedDesc</span><span class="s4">, </span><span class="s2">suggestInfo</span><span class="s4">.</span><span class="s2">data</span><span class="s4">),</span>
+                <span class="s2">fix</span><span class="s4">: </span><span class="s2">normalizeFixes</span><span class="s4">(</span><span class="s2">suggestInfo</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">)</span>
+            <span class="s4">};</span>
+        <span class="s4">})</span>
+
+        <span class="s5">// Remove suggestions that didn't provide a fix</span>
+        <span class="s4">.</span><span class="s2">filter</span><span class="s4">(({ </span><span class="s2">fix </span><span class="s4">}) =&gt; </span><span class="s2">fix</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates information about the report from a descriptor</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} options Information about the problem</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} options.ruleId Rule ID</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{(0|1|2)} options.severity Rule severity</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{(ASTNode|null)} options.node Node</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} options.message Error message</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} [options.messageId] The error message ID.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{{start: SourceLocation, end: (SourceLocation|null)}} options.loc Start and end location</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{{text: string, range: (number[]|null)}} options.fix The fix object</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Array&lt;{text: string, range: (number[]|null)}&gt;} options.suggestions The array of suggestions objects</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintMessage} Information about the report</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createProblem</span><span class="s4">(</span><span class="s2">options</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s2">problem </span><span class="s4">= {</span>
+        <span class="s2">ruleId</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">,</span>
+        <span class="s2">severity</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">severity</span><span class="s4">,</span>
+        <span class="s2">message</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">message</span><span class="s4">,</span>
+        <span class="s2">line</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">line</span><span class="s4">,</span>
+        <span class="s2">column</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">start</span><span class="s4">.</span><span class="s2">column </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">,</span>
+        <span class="s2">nodeType</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">node </span><span class="s4">&amp;&amp; </span><span class="s2">options</span><span class="s4">.</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">|| </span><span class="s6">null</span>
+    <span class="s4">};</span>
+
+    <span class="s5">/* 
+     * If this isn’t in the conditional, some of the tests fail 
+     * because `messageId` is present in the problem object 
+     */</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">messageId</span><span class="s4">) {</span>
+        <span class="s2">problem</span><span class="s4">.</span><span class="s2">messageId </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">messageId</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">end</span><span class="s4">) {</span>
+        <span class="s2">problem</span><span class="s4">.</span><span class="s2">endLine </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">end</span><span class="s4">.</span><span class="s2">line</span><span class="s4">;</span>
+        <span class="s2">problem</span><span class="s4">.</span><span class="s2">endColumn </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">loc</span><span class="s4">.</span><span class="s2">end</span><span class="s4">.</span><span class="s2">column </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">fix</span><span class="s4">) {</span>
+        <span class="s2">problem</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">fix</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">suggestions </span><span class="s4">&amp;&amp; </span><span class="s2">options</span><span class="s4">.</span><span class="s2">suggestions</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s2">problem</span><span class="s4">.</span><span class="s2">suggestions </span><span class="s4">= </span><span class="s2">options</span><span class="s4">.</span><span class="s2">suggestions</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">problem</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Validates that suggestions are properly defined. Throws if an error is detected.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Array&lt;{ desc?: string, messageId?: string }&gt;} suggest The incoming suggest data.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} messages Object of meta messages for the rule.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{void}</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">validateSuggestions</span><span class="s4">(</span><span class="s2">suggest</span><span class="s4">, </span><span class="s2">messages</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">suggest </span><span class="s4">&amp;&amp; </span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">suggest</span><span class="s4">)) {</span>
+        <span class="s2">suggest</span><span class="s4">.</span><span class="s2">forEach</span><span class="s4">(</span><span class="s2">suggestion </span><span class="s4">=&gt; {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">suggestion</span><span class="s4">.</span><span class="s2">messageId</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s4">{ </span><span class="s2">messageId </span><span class="s4">} = </span><span class="s2">suggestion</span><span class="s4">;</span>
+
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">messages</span><span class="s4">) {</span>
+                    <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`context.report() called with a suggest option with a messageId '</span><span class="s2">$</span><span class="s4">{</span><span class="s2">messageId</span><span class="s4">}</span><span class="s3">', but no messages were present in the rule metadata.`</span><span class="s4">);</span>
+                <span class="s4">}</span>
+
+                <span class="s6">if </span><span class="s4">(!</span><span class="s2">messages</span><span class="s4">[</span><span class="s2">messageId</span><span class="s4">]) {</span>
+                    <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`context.report() called with a suggest option with a messageId '</span><span class="s2">$</span><span class="s4">{</span><span class="s2">messageId</span><span class="s4">}</span><span class="s3">' which is not present in the 'messages' config: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">JSON</span><span class="s4">.</span><span class="s2">stringify</span><span class="s4">(</span><span class="s2">messages</span><span class="s4">, </span><span class="s6">null</span><span class="s4">, </span><span class="s7">2</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">);</span>
+                <span class="s4">}</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">suggestion</span><span class="s4">.</span><span class="s2">desc</span><span class="s4">) {</span>
+                    <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;context.report() called with a suggest option that defines both a 'messageId' and an 'desc'. Please only pass one.&quot;</span><span class="s4">);</span>
+                <span class="s4">}</span>
+            <span class="s4">} </span><span class="s6">else if </span><span class="s4">(!</span><span class="s2">suggestion</span><span class="s4">.</span><span class="s2">desc</span><span class="s4">) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;context.report() called with a suggest option that doesn't have either a `desc` or `messageId`&quot;</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">suggestion</span><span class="s4">.</span><span class="s2">fix </span><span class="s4">!== </span><span class="s3">&quot;function&quot;</span><span class="s4">) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`context.report() called with a suggest option without a fix function. See: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">suggestion</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">});</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Returns a function that converts the arguments of a `context.report` call from a rule into a reported</span>
+ <span class="s0">* problem for the Node.js API.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{{ruleId: string, severity: number, sourceCode: SourceCode, messageIds: Object, disableFixes: boolean}} metadata Metadata for the reported problem</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{SourceCode} sourceCode The `SourceCode` instance for the text being linted</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{function(...args): LintMessage} Function that returns information about the report</span>
+ <span class="s0">*/</span>
+
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s6">function </span><span class="s2">createReportTranslator</span><span class="s4">(</span><span class="s2">metadata</span><span class="s4">) {</span>
+
+    <span class="s5">/* 
+     * `createReportTranslator` gets called once per enabled rule per file. It needs to be very performant. 
+     * The report translator itself (i.e. the function that `createReportTranslator` returns) gets 
+     * called every time a rule reports a problem, which happens much less frequently (usually, the vast 
+     * majority of rules don't report any problems for a given file). 
+     */</span>
+    <span class="s6">return </span><span class="s4">(</span><span class="s2">...args</span><span class="s4">) =&gt; {</span>
+        <span class="s6">const </span><span class="s2">descriptor </span><span class="s4">= </span><span class="s2">normalizeMultiArgReportCall</span><span class="s4">(</span><span class="s2">...args</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">messages </span><span class="s4">= </span><span class="s2">metadata</span><span class="s4">.</span><span class="s2">messageIds</span><span class="s4">;</span>
+
+        <span class="s2">assertValidNodeInfo</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">);</span>
+
+        <span class="s6">let </span><span class="s2">computedMessage</span><span class="s4">;</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">messageId</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">messages</span><span class="s4">) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;context.report() called with a messageId, but no messages were present in the rule metadata.&quot;</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s6">const </span><span class="s2">id </span><span class="s4">= </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">messageId</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">message</span><span class="s4">) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;context.report() called with a message and a messageId. Please only pass one.&quot;</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s6">if </span><span class="s4">(!</span><span class="s2">messages </span><span class="s4">|| !</span><span class="s2">Object</span><span class="s4">.</span><span class="s2">prototype</span><span class="s4">.</span><span class="s2">hasOwnProperty</span><span class="s4">.</span><span class="s2">call</span><span class="s4">(</span><span class="s2">messages</span><span class="s4">, </span><span class="s2">id</span><span class="s4">)) {</span>
+                <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">`context.report() called with a messageId of '</span><span class="s2">$</span><span class="s4">{</span><span class="s2">id</span><span class="s4">}</span><span class="s3">' which is not present in the 'messages' config: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">JSON</span><span class="s4">.</span><span class="s2">stringify</span><span class="s4">(</span><span class="s2">messages</span><span class="s4">, </span><span class="s6">null</span><span class="s4">, </span><span class="s7">2</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s2">computedMessage </span><span class="s4">= </span><span class="s2">messages</span><span class="s4">[</span><span class="s2">id</span><span class="s4">];</span>
+        <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">message</span><span class="s4">) {</span>
+            <span class="s2">computedMessage </span><span class="s4">= </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">message</span><span class="s4">;</span>
+        <span class="s4">} </span><span class="s6">else </span><span class="s4">{</span>
+            <span class="s6">throw new </span><span class="s2">TypeError</span><span class="s4">(</span><span class="s3">&quot;Missing `message` property in report() call; add a message that describes the linting problem.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s2">validateSuggestions</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">suggest</span><span class="s4">, </span><span class="s2">messages</span><span class="s4">);</span>
+
+        <span class="s6">return </span><span class="s2">createProblem</span><span class="s4">({</span>
+            <span class="s2">ruleId</span><span class="s4">: </span><span class="s2">metadata</span><span class="s4">.</span><span class="s2">ruleId</span><span class="s4">,</span>
+            <span class="s2">severity</span><span class="s4">: </span><span class="s2">metadata</span><span class="s4">.</span><span class="s2">severity</span><span class="s4">,</span>
+            <span class="s2">node</span><span class="s4">: </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">node</span><span class="s4">,</span>
+            <span class="s2">message</span><span class="s4">: </span><span class="s2">interpolate</span><span class="s4">(</span><span class="s2">computedMessage</span><span class="s4">, </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">data</span><span class="s4">),</span>
+            <span class="s2">messageId</span><span class="s4">: </span><span class="s2">descriptor</span><span class="s4">.</span><span class="s2">messageId</span><span class="s4">,</span>
+            <span class="s2">loc</span><span class="s4">: </span><span class="s2">normalizeReportLoc</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">),</span>
+            <span class="s2">fix</span><span class="s4">: </span><span class="s2">metadata</span><span class="s4">.</span><span class="s2">disableFixes </span><span class="s4">? </span><span class="s6">null </span><span class="s4">: </span><span class="s2">normalizeFixes</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">, </span><span class="s2">metadata</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">),</span>
+            <span class="s2">suggestions</span><span class="s4">: </span><span class="s2">metadata</span><span class="s4">.</span><span class="s2">disableFixes </span><span class="s4">? [] : </span><span class="s2">mapSuggestions</span><span class="s4">(</span><span class="s2">descriptor</span><span class="s4">, </span><span class="s2">metadata</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">, </span><span class="s2">messages</span><span class="s4">)</span>
+        <span class="s4">});</span>
+    <span class="s4">};</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

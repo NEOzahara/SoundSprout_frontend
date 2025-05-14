@@ -1,0 +1,443 @@
+<html>
+<head>
+<title>prng.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #cf8e6d;}
+.s4 { color: #bcbec4;}
+.s5 { color: #6aab73;}
+.s6 { color: #7a7e85;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+prng.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* A javascript implementation of a cryptographically-secure</span>
+ <span class="s0">* Pseudo Random Number Generator (PRNG). The Fortuna algorithm is followed</span>
+ <span class="s0">* here though the use of SHA-256 is not enforced; when generating an</span>
+ <span class="s0">* a PRNG context, the hashing algorithm and block cipher used for</span>
+ <span class="s0">* the generator are specified via a plugin.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Dave Longley</span>
+ <span class="s0">*</span>
+ <span class="s0">* Copyright (c) 2010-2014 Digital Bazaar, Inc.</span>
+ <span class="s0">*/</span>
+<span class="s3">var </span><span class="s2">forge </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s5">'./forge'</span><span class="s4">);</span>
+<span class="s2">require</span><span class="s4">(</span><span class="s5">'./util'</span><span class="s4">);</span>
+
+<span class="s3">var </span><span class="s2">_crypto </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+<span class="s3">if</span><span class="s4">(</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">isNodejs </span><span class="s4">&amp;&amp; !</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">usePureJavaScript </span><span class="s4">&amp;&amp;</span>
+  <span class="s4">!</span><span class="s2">process</span><span class="s4">.</span><span class="s2">versions</span><span class="s4">[</span><span class="s5">'node-webkit'</span><span class="s4">]) {</span>
+  <span class="s2">_crypto </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s5">'crypto'</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s6">/* PRNG API */</span>
+<span class="s3">var </span><span class="s2">prng </span><span class="s4">= </span><span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">prng </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">prng </span><span class="s4">|| {};</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Creates a new PRNG context.</span>
+ <span class="s0">*</span>
+ <span class="s0">* A PRNG plugin must be passed in that will provide:</span>
+ <span class="s0">*</span>
+ <span class="s0">* 1. A function that initializes the key and seed of a PRNG context. It</span>
+ <span class="s0">*   will be given a 16 byte key and a 16 byte seed. Any key expansion</span>
+ <span class="s0">*   or transformation of the seed from a byte string into an array of</span>
+ <span class="s0">*   integers (or similar) should be performed.</span>
+ <span class="s0">* 2. The cryptographic function used by the generator. It takes a key and</span>
+ <span class="s0">*   a seed.</span>
+ <span class="s0">* 3. A seed increment function. It takes the seed and returns seed + 1.</span>
+ <span class="s0">* 4. An api to create a message digest.</span>
+ <span class="s0">*</span>
+ <span class="s0">* For an example, see random.js.</span>
+ <span class="s0">*</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">plugin the PRNG plugin to use.</span>
+ <span class="s0">*/</span>
+<span class="s2">prng</span><span class="s4">.</span><span class="s2">create </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">plugin</span><span class="s4">) {</span>
+  <span class="s3">var </span><span class="s2">ctx </span><span class="s4">= {</span>
+    <span class="s2">plugin</span><span class="s4">: </span><span class="s2">plugin</span><span class="s4">,</span>
+    <span class="s2">key</span><span class="s4">: </span><span class="s3">null</span><span class="s4">,</span>
+    <span class="s2">seed</span><span class="s4">: </span><span class="s3">null</span><span class="s4">,</span>
+    <span class="s2">time</span><span class="s4">: </span><span class="s3">null</span><span class="s4">,</span>
+    <span class="s6">// number of reseeds so far</span>
+    <span class="s2">reseeds</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+    <span class="s6">// amount of data generated so far</span>
+    <span class="s2">generated</span><span class="s4">: </span><span class="s7">0</span><span class="s4">,</span>
+    <span class="s6">// no initial key bytes</span>
+    <span class="s2">keyBytes</span><span class="s4">: </span><span class="s5">''</span>
+  <span class="s4">};</span>
+
+  <span class="s6">// create 32 entropy pools (each is a message digest)</span>
+  <span class="s3">var </span><span class="s2">md </span><span class="s4">= </span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">md</span><span class="s4">;</span>
+  <span class="s3">var </span><span class="s2">pools </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Array</span><span class="s4">(</span><span class="s7">32</span><span class="s4">);</span>
+  <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s7">32</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+    <span class="s2">pools</span><span class="s4">[</span><span class="s2">i</span><span class="s4">] = </span><span class="s2">md</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+  <span class="s4">}</span>
+  <span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools </span><span class="s4">= </span><span class="s2">pools</span><span class="s4">;</span>
+
+  <span class="s6">// entropy pools are written to cyclically, starting at index 0</span>
+  <span class="s2">ctx</span><span class="s4">.</span><span class="s2">pool </span><span class="s4">= </span><span class="s7">0</span><span class="s4">;</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Generates random bytes. The bytes may be generated synchronously or</span>
+   <span class="s0">* asynchronously. Web workers must use the asynchronous interface or</span>
+   <span class="s0">* else the behavior is undefined.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">count the number of random bytes to generate.</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">[callback(err, bytes)] called once the operation completes.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">count random bytes as a string.</span>
+   <span class="s0">*/</span>
+  <span class="s2">ctx</span><span class="s4">.</span><span class="s2">generate </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">count</span><span class="s4">, </span><span class="s2">callback</span><span class="s4">) {</span>
+    <span class="s6">// do synchronously</span>
+    <span class="s3">if</span><span class="s4">(!</span><span class="s2">callback</span><span class="s4">) {</span>
+      <span class="s3">return </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">generateSync</span><span class="s4">(</span><span class="s2">count</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// simple generator using counter-based CBC</span>
+    <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">cipher</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">increment </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">increment</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">formatKey </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">formatKey</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">formatSeed </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">formatSeed</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">b </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">();</span>
+
+    <span class="s6">// paranoid deviation from Fortuna:</span>
+    <span class="s6">// reset key for every request to protect previously</span>
+    <span class="s6">// generated random bytes should the key be discovered;</span>
+    <span class="s6">// there is no 100ms based reseeding because of this</span>
+    <span class="s6">// forced reseed for every `generate` call</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+
+    <span class="s2">generate</span><span class="s4">();</span>
+
+    <span class="s3">function </span><span class="s2">generate</span><span class="s4">(</span><span class="s2">err</span><span class="s4">) {</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">err</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">callback</span><span class="s4">(</span><span class="s2">err</span><span class="s4">);</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// sufficient bytes generated</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &gt;= </span><span class="s2">count</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">callback</span><span class="s4">(</span><span class="s3">null</span><span class="s4">, </span><span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">count</span><span class="s4">));</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// if amount of data generated is greater than 1 MiB, trigger reseed</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">generated </span><span class="s4">&gt; </span><span class="s7">0xfffff</span><span class="s4">) {</span>
+        <span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+      <span class="s4">}</span>
+
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+        <span class="s6">// prevent stack overflow</span>
+        <span class="s3">return </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">nextTick</span><span class="s4">(</span><span class="s3">function</span><span class="s4">() {</span>
+          <span class="s2">_reseed</span><span class="s4">(</span><span class="s2">generate</span><span class="s4">);</span>
+        <span class="s4">});</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// generate the random bytes</span>
+      <span class="s3">var </span><span class="s2">bytes </span><span class="s4">= </span><span class="s2">cipher</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key</span><span class="s4">, </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed</span><span class="s4">);</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">generated </span><span class="s4">+= </span><span class="s2">bytes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+      <span class="s2">b</span><span class="s4">.</span><span class="s2">putBytes</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+
+      <span class="s6">// generate bytes for a new key and seed</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s2">formatKey</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key</span><span class="s4">, </span><span class="s2">increment</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed</span><span class="s4">)));</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed </span><span class="s4">= </span><span class="s2">formatSeed</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key</span><span class="s4">, </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed</span><span class="s4">));</span>
+
+      <span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">setImmediate</span><span class="s4">(</span><span class="s2">generate</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Generates random bytes synchronously.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">count the number of random bytes to generate.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">count random bytes as a string.</span>
+   <span class="s0">*/</span>
+  <span class="s2">ctx</span><span class="s4">.</span><span class="s2">generateSync </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">count</span><span class="s4">) {</span>
+    <span class="s6">// simple generator using counter-based CBC</span>
+    <span class="s3">var </span><span class="s2">cipher </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">cipher</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">increment </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">increment</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">formatKey </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">formatKey</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">formatSeed </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">formatSeed</span><span class="s4">;</span>
+
+    <span class="s6">// paranoid deviation from Fortuna:</span>
+    <span class="s6">// reset key for every request to protect previously</span>
+    <span class="s6">// generated random bytes should the key be discovered;</span>
+    <span class="s6">// there is no 100ms based reseeding because of this</span>
+    <span class="s6">// forced reseed for every `generateSync` call</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+
+    <span class="s3">var </span><span class="s2">b </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">();</span>
+    <span class="s3">while</span><span class="s4">(</span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &lt; </span><span class="s2">count</span><span class="s4">) {</span>
+      <span class="s6">// if amount of data generated is greater than 1 MiB, trigger reseed</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">generated </span><span class="s4">&gt; </span><span class="s7">0xfffff</span><span class="s4">) {</span>
+        <span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+      <span class="s4">}</span>
+
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">=== </span><span class="s3">null</span><span class="s4">) {</span>
+        <span class="s2">_reseedSync</span><span class="s4">();</span>
+      <span class="s4">}</span>
+
+      <span class="s6">// generate the random bytes</span>
+      <span class="s3">var </span><span class="s2">bytes </span><span class="s4">= </span><span class="s2">cipher</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key</span><span class="s4">, </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed</span><span class="s4">);</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">generated </span><span class="s4">+= </span><span class="s2">bytes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+      <span class="s2">b</span><span class="s4">.</span><span class="s2">putBytes</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+
+      <span class="s6">// generate bytes for a new key and seed</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s2">formatKey</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key</span><span class="s4">, </span><span class="s2">increment</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed</span><span class="s4">)));</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed </span><span class="s4">= </span><span class="s2">formatSeed</span><span class="s4">(</span><span class="s2">cipher</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">key</span><span class="s4">, </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">count</span><span class="s4">);</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Private function that asynchronously reseeds a generator.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">callback(err) called once the operation completes.</span>
+   <span class="s0">*/</span>
+  <span class="s3">function </span><span class="s2">_reseed</span><span class="s4">(</span><span class="s2">callback</span><span class="s4">) {</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">messageLength </span><span class="s4">&gt;= </span><span class="s7">32</span><span class="s4">) {</span>
+      <span class="s2">_seed</span><span class="s4">();</span>
+      <span class="s3">return </span><span class="s2">callback</span><span class="s4">();</span>
+    <span class="s4">}</span>
+    <span class="s6">// not enough seed data...</span>
+    <span class="s3">var </span><span class="s2">needed </span><span class="s4">= (</span><span class="s7">32 </span><span class="s4">- </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">messageLength</span><span class="s4">) &lt;&lt; </span><span class="s7">5</span><span class="s4">;</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFile</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">, </span><span class="s3">function</span><span class="s4">(</span><span class="s2">err</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">) {</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">err</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">callback</span><span class="s4">(</span><span class="s2">err</span><span class="s4">);</span>
+      <span class="s4">}</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">collect</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+      <span class="s2">_seed</span><span class="s4">();</span>
+      <span class="s2">callback</span><span class="s4">();</span>
+    <span class="s4">});</span>
+  <span class="s4">}</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Private function that synchronously reseeds a generator.</span>
+   <span class="s0">*/</span>
+  <span class="s3">function </span><span class="s2">_reseedSync</span><span class="s4">() {</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">messageLength </span><span class="s4">&gt;= </span><span class="s7">32</span><span class="s4">) {</span>
+      <span class="s3">return </span><span class="s2">_seed</span><span class="s4">();</span>
+    <span class="s4">}</span>
+    <span class="s6">// not enough seed data...</span>
+    <span class="s3">var </span><span class="s2">needed </span><span class="s4">= (</span><span class="s7">32 </span><span class="s4">- </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">messageLength</span><span class="s4">) &lt;&lt; </span><span class="s7">5</span><span class="s4">;</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">collect</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFileSync</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">));</span>
+    <span class="s2">_seed</span><span class="s4">();</span>
+  <span class="s4">}</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Private function that seeds a generator once enough bytes are available.</span>
+   <span class="s0">*/</span>
+  <span class="s3">function </span><span class="s2">_seed</span><span class="s4">() {</span>
+    <span class="s6">// update reseed count</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">reseeds </span><span class="s4">= (</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">reseeds </span><span class="s4">=== </span><span class="s7">0xffffffff</span><span class="s4">) ? </span><span class="s7">0 </span><span class="s4">: </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">reseeds </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">;</span>
+
+    <span class="s6">// goal is to update `key` via:</span>
+    <span class="s6">// key = hash(key + s)</span>
+    <span class="s6">//   where 's' is all collected entropy from selected pools, then...</span>
+
+    <span class="s6">// create a plugin-based message digest</span>
+    <span class="s3">var </span><span class="s2">md </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">md</span><span class="s4">.</span><span class="s2">create</span><span class="s4">();</span>
+
+    <span class="s6">// consume current key bytes</span>
+    <span class="s2">md</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">keyBytes</span><span class="s4">);</span>
+
+    <span class="s6">// digest the entropy of pools whose index k meet the</span>
+    <span class="s6">// condition 'n mod 2^k == 0' where n is the number of reseeds</span>
+    <span class="s3">var </span><span class="s2">_2powK </span><span class="s4">= </span><span class="s7">1</span><span class="s4">;</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">k </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">k </span><span class="s4">&lt; </span><span class="s7">32</span><span class="s4">; ++</span><span class="s2">k</span><span class="s4">) {</span>
+      <span class="s3">if</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">reseeds </span><span class="s4">% </span><span class="s2">_2powK </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s2">md</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools</span><span class="s4">[</span><span class="s2">k</span><span class="s4">].</span><span class="s2">digest</span><span class="s4">().</span><span class="s2">getBytes</span><span class="s4">());</span>
+        <span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools</span><span class="s4">[</span><span class="s2">k</span><span class="s4">].</span><span class="s2">start</span><span class="s4">();</span>
+      <span class="s4">}</span>
+      <span class="s2">_2powK </span><span class="s4">= </span><span class="s2">_2powK </span><span class="s4">&lt;&lt; </span><span class="s7">1</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// get digest for key bytes</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">keyBytes </span><span class="s4">= </span><span class="s2">md</span><span class="s4">.</span><span class="s2">digest</span><span class="s4">().</span><span class="s2">getBytes</span><span class="s4">();</span>
+
+    <span class="s6">// paranoid deviation from Fortuna:</span>
+    <span class="s6">// update `seed` via `seed = hash(key)`</span>
+    <span class="s6">// instead of initializing to zero once and only</span>
+    <span class="s6">// ever incrementing it</span>
+    <span class="s2">md</span><span class="s4">.</span><span class="s2">start</span><span class="s4">();</span>
+    <span class="s2">md</span><span class="s4">.</span><span class="s2">update</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">keyBytes</span><span class="s4">);</span>
+    <span class="s3">var </span><span class="s2">seedBytes </span><span class="s4">= </span><span class="s2">md</span><span class="s4">.</span><span class="s2">digest</span><span class="s4">().</span><span class="s2">getBytes</span><span class="s4">();</span>
+
+    <span class="s6">// update state</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">key </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">formatKey</span><span class="s4">(</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">keyBytes</span><span class="s4">);</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seed </span><span class="s4">= </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">plugin</span><span class="s4">.</span><span class="s2">formatSeed</span><span class="s4">(</span><span class="s2">seedBytes</span><span class="s4">);</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">generated </span><span class="s4">= </span><span class="s7">0</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* The built-in default seedFile. This seedFile is used when entropy</span>
+   <span class="s0">* is needed immediately.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">needed the number of bytes that are needed.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@return </span><span class="s0">the random bytes.</span>
+   <span class="s0">*/</span>
+  <span class="s3">function </span><span class="s2">defaultSeedFile</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">) {</span>
+    <span class="s6">// use window.crypto.getRandomValues strong source of entropy if available</span>
+    <span class="s3">var </span><span class="s2">getRandomValues </span><span class="s4">= </span><span class="s3">null</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">globalScope </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">globalScope</span><span class="s4">;</span>
+    <span class="s3">var </span><span class="s2">_crypto </span><span class="s4">= </span><span class="s2">globalScope</span><span class="s4">.</span><span class="s2">crypto </span><span class="s4">|| </span><span class="s2">globalScope</span><span class="s4">.</span><span class="s2">msCrypto</span><span class="s4">;</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">_crypto </span><span class="s4">&amp;&amp; </span><span class="s2">_crypto</span><span class="s4">.</span><span class="s2">getRandomValues</span><span class="s4">) {</span>
+      <span class="s2">getRandomValues </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">arr</span><span class="s4">) {</span>
+        <span class="s3">return </span><span class="s2">_crypto</span><span class="s4">.</span><span class="s2">getRandomValues</span><span class="s4">(</span><span class="s2">arr</span><span class="s4">);</span>
+      <span class="s4">};</span>
+    <span class="s4">}</span>
+
+    <span class="s3">var </span><span class="s2">b </span><span class="s4">= </span><span class="s2">forge</span><span class="s4">.</span><span class="s2">util</span><span class="s4">.</span><span class="s2">createBuffer</span><span class="s4">();</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">getRandomValues</span><span class="s4">) {</span>
+      <span class="s3">while</span><span class="s4">(</span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &lt; </span><span class="s2">needed</span><span class="s4">) {</span>
+        <span class="s6">// max byte length is 65536 before QuotaExceededError is thrown</span>
+        <span class="s6">// http://www.w3.org/TR/WebCryptoAPI/#RandomSource-method-getRandomValues</span>
+        <span class="s3">var </span><span class="s2">count </span><span class="s4">= </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">max</span><span class="s4">(</span><span class="s7">1</span><span class="s4">, </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">min</span><span class="s4">(</span><span class="s2">needed </span><span class="s4">- </span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">(), </span><span class="s7">65536</span><span class="s4">) / </span><span class="s7">4</span><span class="s4">);</span>
+        <span class="s3">var </span><span class="s2">entropy </span><span class="s4">= </span><span class="s3">new </span><span class="s2">Uint32Array</span><span class="s4">(</span><span class="s2">Math</span><span class="s4">.</span><span class="s2">floor</span><span class="s4">(</span><span class="s2">count</span><span class="s4">));</span>
+        <span class="s3">try </span><span class="s4">{</span>
+          <span class="s2">getRandomValues</span><span class="s4">(</span><span class="s2">entropy</span><span class="s4">);</span>
+          <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">entropy</span><span class="s4">.</span><span class="s2">length</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+            <span class="s2">b</span><span class="s4">.</span><span class="s2">putInt32</span><span class="s4">(</span><span class="s2">entropy</span><span class="s4">[</span><span class="s2">i</span><span class="s4">]);</span>
+          <span class="s4">}</span>
+        <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+          <span class="s6">/* only ignore QuotaExceededError */</span>
+          <span class="s3">if</span><span class="s4">(!(</span><span class="s3">typeof </span><span class="s2">QuotaExceededError </span><span class="s4">!== </span><span class="s5">'undefined' </span><span class="s4">&amp;&amp;</span>
+            <span class="s2">e </span><span class="s3">instanceof </span><span class="s2">QuotaExceededError</span><span class="s4">)) {</span>
+            <span class="s3">throw </span><span class="s2">e</span><span class="s4">;</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s6">// be sad and add some weak random data</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &lt; </span><span class="s2">needed</span><span class="s4">) {</span>
+      <span class="s6">/* Draws from Park-Miller &quot;minimal standard&quot; 31 bit PRNG, 
+      implemented with David G. Carta's optimization: with 32 bit math 
+      and without division (Public Domain). */</span>
+      <span class="s3">var </span><span class="s2">hi</span><span class="s4">, </span><span class="s2">lo</span><span class="s4">, </span><span class="s2">next</span><span class="s4">;</span>
+      <span class="s3">var </span><span class="s2">seed </span><span class="s4">= </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">floor</span><span class="s4">(</span><span class="s2">Math</span><span class="s4">.</span><span class="s2">random</span><span class="s4">() * </span><span class="s7">0x010000</span><span class="s4">);</span>
+      <span class="s3">while</span><span class="s4">(</span><span class="s2">b</span><span class="s4">.</span><span class="s2">length</span><span class="s4">() &lt; </span><span class="s2">needed</span><span class="s4">) {</span>
+        <span class="s2">lo </span><span class="s4">= </span><span class="s7">16807 </span><span class="s4">* (</span><span class="s2">seed </span><span class="s4">&amp; </span><span class="s7">0xFFFF</span><span class="s4">);</span>
+        <span class="s2">hi </span><span class="s4">= </span><span class="s7">16807 </span><span class="s4">* (</span><span class="s2">seed </span><span class="s4">&gt;&gt; </span><span class="s7">16</span><span class="s4">);</span>
+        <span class="s2">lo </span><span class="s4">+= (</span><span class="s2">hi </span><span class="s4">&amp; </span><span class="s7">0x7FFF</span><span class="s4">) &lt;&lt; </span><span class="s7">16</span><span class="s4">;</span>
+        <span class="s2">lo </span><span class="s4">+= </span><span class="s2">hi </span><span class="s4">&gt;&gt; </span><span class="s7">15</span><span class="s4">;</span>
+        <span class="s2">lo </span><span class="s4">= (</span><span class="s2">lo </span><span class="s4">&amp; </span><span class="s7">0x7FFFFFFF</span><span class="s4">) + (</span><span class="s2">lo </span><span class="s4">&gt;&gt; </span><span class="s7">31</span><span class="s4">);</span>
+        <span class="s2">seed </span><span class="s4">= </span><span class="s2">lo </span><span class="s4">&amp; </span><span class="s7">0xFFFFFFFF</span><span class="s4">;</span>
+
+        <span class="s6">// consume lower 3 bytes of seed</span>
+        <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s7">3</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+          <span class="s6">// throw in more pseudo random</span>
+          <span class="s2">next </span><span class="s4">= </span><span class="s2">seed </span><span class="s4">&gt;&gt;&gt; (</span><span class="s2">i </span><span class="s4">&lt;&lt; </span><span class="s7">3</span><span class="s4">);</span>
+          <span class="s2">next </span><span class="s4">^= </span><span class="s2">Math</span><span class="s4">.</span><span class="s2">floor</span><span class="s4">(</span><span class="s2">Math</span><span class="s4">.</span><span class="s2">random</span><span class="s4">() * </span><span class="s7">0x0100</span><span class="s4">);</span>
+          <span class="s2">b</span><span class="s4">.</span><span class="s2">putByte</span><span class="s4">(</span><span class="s2">next </span><span class="s4">&amp; </span><span class="s7">0xFF</span><span class="s4">);</span>
+        <span class="s4">}</span>
+      <span class="s4">}</span>
+    <span class="s4">}</span>
+
+    <span class="s3">return </span><span class="s2">b</span><span class="s4">.</span><span class="s2">getBytes</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">);</span>
+  <span class="s4">}</span>
+  <span class="s6">// initialize seed file APIs</span>
+  <span class="s3">if</span><span class="s4">(</span><span class="s2">_crypto</span><span class="s4">) {</span>
+    <span class="s6">// use nodejs async API</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFile </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">, </span><span class="s2">callback</span><span class="s4">) {</span>
+      <span class="s2">_crypto</span><span class="s4">.</span><span class="s2">randomBytes</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">, </span><span class="s3">function</span><span class="s4">(</span><span class="s2">err</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">) {</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">err</span><span class="s4">) {</span>
+          <span class="s3">return </span><span class="s2">callback</span><span class="s4">(</span><span class="s2">err</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s2">callback</span><span class="s4">(</span><span class="s3">null</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">.</span><span class="s2">toString</span><span class="s4">());</span>
+      <span class="s4">});</span>
+    <span class="s4">};</span>
+    <span class="s6">// use nodejs sync API</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFileSync </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">) {</span>
+      <span class="s3">return </span><span class="s2">_crypto</span><span class="s4">.</span><span class="s2">randomBytes</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">).</span><span class="s2">toString</span><span class="s4">();</span>
+    <span class="s4">};</span>
+  <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFile </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">, </span><span class="s2">callback</span><span class="s4">) {</span>
+      <span class="s3">try </span><span class="s4">{</span>
+        <span class="s2">callback</span><span class="s4">(</span><span class="s3">null</span><span class="s4">, </span><span class="s2">defaultSeedFile</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">));</span>
+      <span class="s4">} </span><span class="s3">catch</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+        <span class="s2">callback</span><span class="s4">(</span><span class="s2">e</span><span class="s4">);</span>
+      <span class="s4">}</span>
+    <span class="s4">};</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFileSync </span><span class="s4">= </span><span class="s2">defaultSeedFile</span><span class="s4">;</span>
+  <span class="s4">}</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Adds entropy to a prng ctx's accumulator.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">bytes the bytes of entropy as a string.</span>
+   <span class="s0">*/</span>
+  <span class="s2">ctx</span><span class="s4">.</span><span class="s2">collect </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">) {</span>
+    <span class="s6">// iterate over pools distributing entropy cyclically</span>
+    <span class="s3">var </span><span class="s2">count </span><span class="s4">= </span><span class="s2">bytes</span><span class="s4">.</span><span class="s2">length</span><span class="s4">;</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">i </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">i </span><span class="s4">&lt; </span><span class="s2">count</span><span class="s4">; ++</span><span class="s2">i</span><span class="s4">) {</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">pools</span><span class="s4">[</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pool</span><span class="s4">].</span><span class="s2">update</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">.</span><span class="s2">substr</span><span class="s4">(</span><span class="s2">i</span><span class="s4">, </span><span class="s7">1</span><span class="s4">));</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">pool </span><span class="s4">= (</span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pool </span><span class="s4">=== </span><span class="s7">31</span><span class="s4">) ? </span><span class="s7">0 </span><span class="s4">: </span><span class="s2">ctx</span><span class="s4">.</span><span class="s2">pool </span><span class="s4">+ </span><span class="s7">1</span><span class="s4">;</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Collects an integer of n bits.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">i the integer entropy.</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">n the number of bits in the integer.</span>
+   <span class="s0">*/</span>
+  <span class="s2">ctx</span><span class="s4">.</span><span class="s2">collectInt </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">i</span><span class="s4">, </span><span class="s2">n</span><span class="s4">) {</span>
+    <span class="s3">var </span><span class="s2">bytes </span><span class="s4">= </span><span class="s5">''</span><span class="s4">;</span>
+    <span class="s3">for</span><span class="s4">(</span><span class="s3">var </span><span class="s2">x </span><span class="s4">= </span><span class="s7">0</span><span class="s4">; </span><span class="s2">x </span><span class="s4">&lt; </span><span class="s2">n</span><span class="s4">; </span><span class="s2">x </span><span class="s4">+= </span><span class="s7">8</span><span class="s4">) {</span>
+      <span class="s2">bytes </span><span class="s4">+= </span><span class="s2">String</span><span class="s4">.</span><span class="s2">fromCharCode</span><span class="s4">((</span><span class="s2">i </span><span class="s4">&gt;&gt; </span><span class="s2">x</span><span class="s4">) &amp; </span><span class="s7">0xFF</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s2">ctx</span><span class="s4">.</span><span class="s2">collect</span><span class="s4">(</span><span class="s2">bytes</span><span class="s4">);</span>
+  <span class="s4">};</span>
+
+  <span class="s0">/**</span>
+   <span class="s0">* Registers a Web Worker to receive immediate entropy from the main thread.</span>
+   <span class="s0">* This method is required until Web Workers can access the native crypto</span>
+   <span class="s0">* API. This method should be called twice for each created worker, once in</span>
+   <span class="s0">* the main thread, and once in the worker itself.</span>
+   <span class="s0">*</span>
+   <span class="s0">* </span><span class="s1">@param </span><span class="s0">worker the worker to register.</span>
+   <span class="s0">*/</span>
+  <span class="s2">ctx</span><span class="s4">.</span><span class="s2">registerWorker </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">worker</span><span class="s4">) {</span>
+    <span class="s6">// worker receives random bytes</span>
+    <span class="s3">if</span><span class="s4">(</span><span class="s2">worker </span><span class="s4">=== </span><span class="s2">self</span><span class="s4">) {</span>
+      <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFile </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">needed</span><span class="s4">, </span><span class="s2">callback</span><span class="s4">) {</span>
+        <span class="s3">function </span><span class="s2">listener</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+          <span class="s3">var </span><span class="s2">data </span><span class="s4">= </span><span class="s2">e</span><span class="s4">.</span><span class="s2">data</span><span class="s4">;</span>
+          <span class="s3">if</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">forge </span><span class="s4">&amp;&amp; </span><span class="s2">data</span><span class="s4">.</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">prng</span><span class="s4">) {</span>
+            <span class="s2">self</span><span class="s4">.</span><span class="s2">removeEventListener</span><span class="s4">(</span><span class="s5">'message'</span><span class="s4">, </span><span class="s2">listener</span><span class="s4">);</span>
+            <span class="s2">callback</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">prng</span><span class="s4">.</span><span class="s2">err</span><span class="s4">, </span><span class="s2">data</span><span class="s4">.</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">prng</span><span class="s4">.</span><span class="s2">bytes</span><span class="s4">);</span>
+          <span class="s4">}</span>
+        <span class="s4">}</span>
+        <span class="s2">self</span><span class="s4">.</span><span class="s2">addEventListener</span><span class="s4">(</span><span class="s5">'message'</span><span class="s4">, </span><span class="s2">listener</span><span class="s4">);</span>
+        <span class="s2">self</span><span class="s4">.</span><span class="s2">postMessage</span><span class="s4">({</span><span class="s2">forge</span><span class="s4">: {</span><span class="s2">prng</span><span class="s4">: {</span><span class="s2">needed</span><span class="s4">: </span><span class="s2">needed</span><span class="s4">}}});</span>
+      <span class="s4">};</span>
+    <span class="s4">} </span><span class="s3">else </span><span class="s4">{</span>
+      <span class="s6">// main thread sends random bytes upon request</span>
+      <span class="s3">var </span><span class="s2">listener </span><span class="s4">= </span><span class="s3">function</span><span class="s4">(</span><span class="s2">e</span><span class="s4">) {</span>
+        <span class="s3">var </span><span class="s2">data </span><span class="s4">= </span><span class="s2">e</span><span class="s4">.</span><span class="s2">data</span><span class="s4">;</span>
+        <span class="s3">if</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">forge </span><span class="s4">&amp;&amp; </span><span class="s2">data</span><span class="s4">.</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">prng</span><span class="s4">) {</span>
+          <span class="s2">ctx</span><span class="s4">.</span><span class="s2">seedFile</span><span class="s4">(</span><span class="s2">data</span><span class="s4">.</span><span class="s2">forge</span><span class="s4">.</span><span class="s2">prng</span><span class="s4">.</span><span class="s2">needed</span><span class="s4">, </span><span class="s3">function</span><span class="s4">(</span><span class="s2">err</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">) {</span>
+            <span class="s2">worker</span><span class="s4">.</span><span class="s2">postMessage</span><span class="s4">({</span><span class="s2">forge</span><span class="s4">: {</span><span class="s2">prng</span><span class="s4">: {</span><span class="s2">err</span><span class="s4">: </span><span class="s2">err</span><span class="s4">, </span><span class="s2">bytes</span><span class="s4">: </span><span class="s2">bytes</span><span class="s4">}}});</span>
+          <span class="s4">});</span>
+        <span class="s4">}</span>
+      <span class="s4">};</span>
+      <span class="s6">// TODO: do we need to remove the event listener when the worker dies?</span>
+      <span class="s2">worker</span><span class="s4">.</span><span class="s2">addEventListener</span><span class="s4">(</span><span class="s5">'message'</span><span class="s4">, </span><span class="s2">listener</span><span class="s4">);</span>
+    <span class="s4">}</span>
+  <span class="s4">};</span>
+
+  <span class="s3">return </span><span class="s2">ctx</span><span class="s4">;</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

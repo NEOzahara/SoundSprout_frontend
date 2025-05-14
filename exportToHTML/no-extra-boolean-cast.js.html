@@ -1,0 +1,341 @@
+<html>
+<head>
+<title>no-extra-boolean-cast.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+no-extra-boolean-cast.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Rule to flag unnecessary double negation in Boolean contexts</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Brandon Mills</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">astUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;./utils/ast-utils&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">eslintUtils </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint-community/eslint-utils&quot;</span><span class="s4">);</span>
+
+<span class="s6">const </span><span class="s2">precedence </span><span class="s4">= </span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">getPrecedence</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Rule Definition</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{import('../shared/types').Rule} */</span>
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">meta</span><span class="s4">: {</span>
+        <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;suggestion&quot;</span><span class="s4">,</span>
+
+        <span class="s2">docs</span><span class="s4">: {</span>
+            <span class="s2">description</span><span class="s4">: </span><span class="s3">&quot;Disallow unnecessary boolean casts&quot;</span><span class="s4">,</span>
+            <span class="s2">recommended</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+            <span class="s2">url</span><span class="s4">: </span><span class="s3">&quot;https://eslint.org/docs/latest/rules/no-extra-boolean-cast&quot;</span>
+        <span class="s4">},</span>
+
+        <span class="s2">schema</span><span class="s4">: [{</span>
+            <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;object&quot;</span><span class="s4">,</span>
+            <span class="s2">properties</span><span class="s4">: {</span>
+                <span class="s2">enforceForLogicalOperands</span><span class="s4">: {</span>
+                    <span class="s2">type</span><span class="s4">: </span><span class="s3">&quot;boolean&quot;</span><span class="s4">,</span>
+                    <span class="s6">default</span><span class="s4">: </span><span class="s6">false</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+            <span class="s2">additionalProperties</span><span class="s4">: </span><span class="s6">false</span>
+        <span class="s4">}],</span>
+        <span class="s2">fixable</span><span class="s4">: </span><span class="s3">&quot;code&quot;</span><span class="s4">,</span>
+
+        <span class="s2">messages</span><span class="s4">: {</span>
+            <span class="s2">unexpectedCall</span><span class="s4">: </span><span class="s3">&quot;Redundant Boolean call.&quot;</span><span class="s4">,</span>
+            <span class="s2">unexpectedNegation</span><span class="s4">: </span><span class="s3">&quot;Redundant double negation.&quot;</span>
+        <span class="s4">}</span>
+    <span class="s4">},</span>
+
+    <span class="s2">create</span><span class="s4">(</span><span class="s2">context</span><span class="s4">) {</span>
+        <span class="s6">const </span><span class="s2">sourceCode </span><span class="s4">= </span><span class="s2">context</span><span class="s4">.</span><span class="s2">sourceCode</span><span class="s4">;</span>
+
+        <span class="s5">// Node types which have a test which will coerce values to booleans.</span>
+        <span class="s6">const </span><span class="s2">BOOLEAN_NODE_TYPES </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">([</span>
+            <span class="s3">&quot;IfStatement&quot;</span><span class="s4">,</span>
+            <span class="s3">&quot;DoWhileStatement&quot;</span><span class="s4">,</span>
+            <span class="s3">&quot;WhileStatement&quot;</span><span class="s4">,</span>
+            <span class="s3">&quot;ConditionalExpression&quot;</span><span class="s4">,</span>
+            <span class="s3">&quot;ForStatement&quot;</span>
+        <span class="s4">]);</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check if a node is a Boolean function or constructor.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node the node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} If the node is Boolean function or constructor</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isBooleanFunctionOrConstructorCall</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+
+            <span class="s5">// Boolean(&lt;bool&gt;) and new Boolean(&lt;bool&gt;)</span>
+            <span class="s6">return </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;CallExpression&quot; </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;NewExpression&quot;</span><span class="s4">) &amp;&amp;</span>
+                    <span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">&amp;&amp;</span>
+                        <span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">name </span><span class="s4">=== </span><span class="s3">&quot;Boolean&quot;</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether the node is a logical expression and that the option is enabled</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node the node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} if the node is a logical expression and option is enabled</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isLogicalContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;LogicalExpression&quot; </span><span class="s4">&amp;&amp;</span>
+            <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;||&quot; </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;&amp;&amp;&quot;</span><span class="s4">) &amp;&amp;</span>
+            <span class="s4">(</span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&amp;&amp; </span><span class="s2">context</span><span class="s4">.</span><span class="s2">options</span><span class="s4">[</span><span class="s7">0</span><span class="s4">].</span><span class="s2">enforceForLogicalOperands </span><span class="s4">=== </span><span class="s6">true</span><span class="s4">);</span>
+
+        <span class="s4">}</span>
+
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check if a node is in a context where its value would be coerced to a boolean at runtime.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} If it is in a boolean context</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isInBooleanContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s4">(</span>
+                <span class="s4">(</span><span class="s2">isBooleanFunctionOrConstructorCall</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">) &amp;&amp;</span>
+                <span class="s2">node </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">0</span><span class="s4">]) ||</span>
+
+                <span class="s4">(</span><span class="s2">BOOLEAN_NODE_TYPES</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) &amp;&amp;</span>
+                    <span class="s2">node </span><span class="s4">=== </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">test</span><span class="s4">) ||</span>
+
+                <span class="s5">// !&lt;bool&gt;</span>
+                <span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;UnaryExpression&quot; </span><span class="s4">&amp;&amp;</span>
+                    <span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!&quot;</span><span class="s4">)</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks whether the node is a context that should report an error</span>
+         <span class="s0">* Acts recursively if it is in a logical context</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node the node</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} If the node is in one of the flagged contexts</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isInFlaggedContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ChainExpression&quot;</span><span class="s4">) {</span>
+                <span class="s6">return </span><span class="s2">isInFlaggedContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">);</span>
+            <span class="s4">}</span>
+
+            <span class="s6">return </span><span class="s2">isInBooleanContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) ||</span>
+            <span class="s4">(</span><span class="s2">isLogicalContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">) &amp;&amp;</span>
+
+            <span class="s5">// For nested logical statements</span>
+            <span class="s2">isInFlaggedContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">)</span>
+            <span class="s4">);</span>
+        <span class="s4">}</span>
+
+
+        <span class="s0">/**</span>
+         <span class="s0">* Check if a node has comments inside.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if it has comments inside.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">hasCommentsInside</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">Boolean</span><span class="s4">(</span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getCommentsInside</span><span class="s4">(</span><span class="s2">node</span><span class="s4">).</span><span class="s2">length</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Checks if the given node is wrapped in grouping parentheses. Parentheses for constructs such as if() don't count.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to check.</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node is parenthesized.</span>
+         <span class="s0">* </span><span class="s1">@private</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">isParenthesized</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">return </span><span class="s2">eslintUtils</span><span class="s4">.</span><span class="s2">isParenthesized</span><span class="s4">(</span><span class="s7">1</span><span class="s4">, </span><span class="s2">node</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s0">/**</span>
+         <span class="s0">* Determines whether the given node needs to be parenthesized when replacing the previous node.</span>
+         <span class="s0">* It assumes that `previousNode` is the node to be reported by this rule, so it has a limited list</span>
+         <span class="s0">* of possible parent node types. By the same assumption, the node's role in a particular parent is already known.</span>
+         <span class="s0">* For example, if the parent is `ConditionalExpression`, `previousNode` must be its `test` child.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} previousNode Previous node.</span>
+         <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ASTNode} node The node to check.</span>
+         <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{Error} (Unreachable.)</span>
+         <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if the node needs to be parenthesized.</span>
+         <span class="s0">*/</span>
+        <span class="s6">function </span><span class="s2">needsParens</span><span class="s4">(</span><span class="s2">previousNode</span><span class="s4">, </span><span class="s2">node</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">previousNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;ChainExpression&quot;</span><span class="s4">) {</span>
+                <span class="s6">return </span><span class="s2">needsParens</span><span class="s4">(</span><span class="s2">previousNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">, </span><span class="s2">node</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">isParenthesized</span><span class="s4">(</span><span class="s2">previousNode</span><span class="s4">)) {</span>
+
+                <span class="s5">// parentheses around the previous node will stay, so there is no need for an additional pair</span>
+                <span class="s6">return false</span><span class="s4">;</span>
+            <span class="s4">}</span>
+
+            <span class="s5">// parent of the previous node will become parent of the replacement node</span>
+            <span class="s6">const </span><span class="s2">parent </span><span class="s4">= </span><span class="s2">previousNode</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+            <span class="s6">switch </span><span class="s4">(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">) {</span>
+                <span class="s6">case </span><span class="s3">&quot;CallExpression&quot;</span><span class="s4">:</span>
+                <span class="s6">case </span><span class="s3">&quot;NewExpression&quot;</span><span class="s4">:</span>
+                    <span class="s6">return </span><span class="s2">node</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;SequenceExpression&quot;</span><span class="s4">;</span>
+                <span class="s6">case </span><span class="s3">&quot;IfStatement&quot;</span><span class="s4">:</span>
+                <span class="s6">case </span><span class="s3">&quot;DoWhileStatement&quot;</span><span class="s4">:</span>
+                <span class="s6">case </span><span class="s3">&quot;WhileStatement&quot;</span><span class="s4">:</span>
+                <span class="s6">case </span><span class="s3">&quot;ForStatement&quot;</span><span class="s4">:</span>
+                    <span class="s6">return false</span><span class="s4">;</span>
+                <span class="s6">case </span><span class="s3">&quot;ConditionalExpression&quot;</span><span class="s4">:</span>
+                    <span class="s6">return </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) &lt;= </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+                <span class="s6">case </span><span class="s3">&quot;UnaryExpression&quot;</span><span class="s4">:</span>
+                    <span class="s6">return </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) &lt; </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+                <span class="s6">case </span><span class="s3">&quot;LogicalExpression&quot;</span><span class="s4">:</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">isMixedLogicalAndCoalesceExpressions</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">parent</span><span class="s4">)) {</span>
+                        <span class="s6">return true</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s2">previousNode </span><span class="s4">=== </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">left</span><span class="s4">) {</span>
+                        <span class="s6">return </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) &lt; </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+                    <span class="s6">return </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) &lt;= </span><span class="s2">precedence</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+
+                <span class="s5">/* c8 ignore next */</span>
+                <span class="s6">default</span><span class="s4">:</span>
+                    <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">`Unexpected parent type: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type</span><span class="s4">}</span><span class="s3">`</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+            <span class="s2">UnaryExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">const </span><span class="s2">parent </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+
+                <span class="s5">// Exit early if it's guaranteed not to match</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">!== </span><span class="s3">&quot;!&quot; </span><span class="s4">||</span>
+                          <span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;UnaryExpression&quot; </span><span class="s4">||</span>
+                          <span class="s2">parent</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">!== </span><span class="s3">&quot;!&quot;</span><span class="s4">) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">isInFlaggedContext</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">)) {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                        <span class="s2">node</span><span class="s4">: </span><span class="s2">parent</span><span class="s4">,</span>
+                        <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;unexpectedNegation&quot;</span><span class="s4">,</span>
+                        <span class="s2">fix</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">) {</span>
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">hasCommentsInside</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">)) {</span>
+                                <span class="s6">return null</span><span class="s4">;</span>
+                            <span class="s4">}</span>
+
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">needsParens</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">, </span><span class="s2">node</span><span class="s4">.</span><span class="s2">argument</span><span class="s4">)) {</span>
+                                <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceText</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">, </span><span class="s3">`(</span><span class="s2">$</span><span class="s4">{</span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">argument</span><span class="s4">)}</span><span class="s3">)`</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+
+                            <span class="s6">let </span><span class="s2">prefix </span><span class="s4">= </span><span class="s3">&quot;&quot;</span><span class="s4">;</span>
+                            <span class="s6">const </span><span class="s2">tokenBefore </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+                            <span class="s6">const </span><span class="s2">firstReplacementToken </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getFirstToken</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">argument</span><span class="s4">);</span>
+
+                            <span class="s6">if </span><span class="s4">(</span>
+                                <span class="s2">tokenBefore </span><span class="s4">&amp;&amp;</span>
+                                <span class="s2">tokenBefore</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] === </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp;</span>
+                                <span class="s4">!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">canTokensBeAdjacent</span><span class="s4">(</span><span class="s2">tokenBefore</span><span class="s4">, </span><span class="s2">firstReplacementToken</span><span class="s4">)</span>
+                            <span class="s4">) {</span>
+                                <span class="s2">prefix </span><span class="s4">= </span><span class="s3">&quot; &quot;</span><span class="s4">;</span>
+                            <span class="s4">}</span>
+
+                            <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceText</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">, </span><span class="s2">prefix </span><span class="s4">+ </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">argument</span><span class="s4">));</span>
+                        <span class="s4">}</span>
+                    <span class="s4">});</span>
+                <span class="s4">}</span>
+            <span class="s4">},</span>
+
+            <span class="s2">CallExpression</span><span class="s4">(</span><span class="s2">node</span><span class="s4">) {</span>
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">type </span><span class="s4">!== </span><span class="s3">&quot;Identifier&quot; </span><span class="s4">|| </span><span class="s2">node</span><span class="s4">.</span><span class="s2">callee</span><span class="s4">.</span><span class="s2">name </span><span class="s4">!== </span><span class="s3">&quot;Boolean&quot;</span><span class="s4">) {</span>
+                    <span class="s6">return</span><span class="s4">;</span>
+                <span class="s4">}</span>
+
+                <span class="s6">if </span><span class="s4">(</span><span class="s2">isInFlaggedContext</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+                    <span class="s2">context</span><span class="s4">.</span><span class="s2">report</span><span class="s4">({</span>
+                        <span class="s2">node</span><span class="s4">,</span>
+                        <span class="s2">messageId</span><span class="s4">: </span><span class="s3">&quot;unexpectedCall&quot;</span><span class="s4">,</span>
+                        <span class="s2">fix</span><span class="s4">(</span><span class="s2">fixer</span><span class="s4">) {</span>
+                            <span class="s6">const </span><span class="s2">parent </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">parent</span><span class="s4">;</span>
+
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">0</span><span class="s4">) {</span>
+                                <span class="s6">if </span><span class="s4">(</span><span class="s2">parent</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;UnaryExpression&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">operator </span><span class="s4">=== </span><span class="s3">&quot;!&quot;</span><span class="s4">) {</span>
+
+                                    <span class="s5">/* 
+                                     * !Boolean() -&gt; true 
+                                     */</span>
+
+                                    <span class="s6">if </span><span class="s4">(</span><span class="s2">hasCommentsInside</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">)) {</span>
+                                        <span class="s6">return null</span><span class="s4">;</span>
+                                    <span class="s4">}</span>
+
+                                    <span class="s6">const </span><span class="s2">replacement </span><span class="s4">= </span><span class="s3">&quot;true&quot;</span><span class="s4">;</span>
+                                    <span class="s6">let </span><span class="s2">prefix </span><span class="s4">= </span><span class="s3">&quot;&quot;</span><span class="s4">;</span>
+                                    <span class="s6">const </span><span class="s2">tokenBefore </span><span class="s4">= </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getTokenBefore</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">);</span>
+
+                                    <span class="s6">if </span><span class="s4">(</span>
+                                        <span class="s2">tokenBefore </span><span class="s4">&amp;&amp;</span>
+                                        <span class="s2">tokenBefore</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">1</span><span class="s4">] === </span><span class="s2">parent</span><span class="s4">.</span><span class="s2">range</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] &amp;&amp;</span>
+                                        <span class="s4">!</span><span class="s2">astUtils</span><span class="s4">.</span><span class="s2">canTokensBeAdjacent</span><span class="s4">(</span><span class="s2">tokenBefore</span><span class="s4">, </span><span class="s2">replacement</span><span class="s4">)</span>
+                                    <span class="s4">) {</span>
+                                        <span class="s2">prefix </span><span class="s4">= </span><span class="s3">&quot; &quot;</span><span class="s4">;</span>
+                                    <span class="s4">}</span>
+
+                                    <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceText</span><span class="s4">(</span><span class="s2">parent</span><span class="s4">, </span><span class="s2">prefix </span><span class="s4">+ </span><span class="s2">replacement</span><span class="s4">);</span>
+                                <span class="s4">}</span>
+
+                                <span class="s5">/* 
+                                 * Boolean() -&gt; false 
+                                 */</span>
+
+                                <span class="s6">if </span><span class="s4">(</span><span class="s2">hasCommentsInside</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+                                    <span class="s6">return null</span><span class="s4">;</span>
+                                <span class="s4">}</span>
+
+                                <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceText</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s3">&quot;false&quot;</span><span class="s4">);</span>
+                            <span class="s4">}</span>
+
+                            <span class="s6">if </span><span class="s4">(</span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">.</span><span class="s2">length </span><span class="s4">=== </span><span class="s7">1</span><span class="s4">) {</span>
+                                <span class="s6">const </span><span class="s2">argument </span><span class="s4">= </span><span class="s2">node</span><span class="s4">.</span><span class="s2">arguments</span><span class="s4">[</span><span class="s7">0</span><span class="s4">];</span>
+
+                                <span class="s6">if </span><span class="s4">(</span><span class="s2">argument</span><span class="s4">.</span><span class="s2">type </span><span class="s4">=== </span><span class="s3">&quot;SpreadElement&quot; </span><span class="s4">|| </span><span class="s2">hasCommentsInside</span><span class="s4">(</span><span class="s2">node</span><span class="s4">)) {</span>
+                                    <span class="s6">return null</span><span class="s4">;</span>
+                                <span class="s4">}</span>
+
+                                <span class="s5">/* 
+                                 * Boolean(expression) -&gt; expression 
+                                 */</span>
+
+                                <span class="s6">if </span><span class="s4">(</span><span class="s2">needsParens</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">argument</span><span class="s4">)) {</span>
+                                    <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceText</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s3">`(</span><span class="s2">$</span><span class="s4">{</span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">argument</span><span class="s4">)}</span><span class="s3">)`</span><span class="s4">);</span>
+                                <span class="s4">}</span>
+
+                                <span class="s6">return </span><span class="s2">fixer</span><span class="s4">.</span><span class="s2">replaceText</span><span class="s4">(</span><span class="s2">node</span><span class="s4">, </span><span class="s2">sourceCode</span><span class="s4">.</span><span class="s2">getText</span><span class="s4">(</span><span class="s2">argument</span><span class="s4">));</span>
+                            <span class="s4">}</span>
+
+                            <span class="s5">// two or more arguments</span>
+                            <span class="s6">return null</span><span class="s4">;</span>
+                        <span class="s4">}</span>
+                    <span class="s4">});</span>
+                <span class="s4">}</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,316 @@
+<html>
+<head>
+<title>AssetModulesPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+AssetModulesPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Yuta Hiroto @hiroppy 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">ASSET_MODULE_TYPE_RESOURCE</span><span class="s3">,</span>
+	<span class="s1">ASSET_MODULE_TYPE_INLINE</span><span class="s3">,</span>
+	<span class="s1">ASSET_MODULE_TYPE</span><span class="s3">,</span>
+	<span class="s1">ASSET_MODULE_TYPE_SOURCE</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleTypeConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">cleverMerge </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/cleverMerge&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareModulesByIdOrIdentifier </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">createSchemaValidation </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/create-schema-validation&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">memoize </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/memoize&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;webpack-sources&quot;).Source} Source */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../../declarations/WebpackOptions&quot;).AssetParserOptions} AssetParserOptions */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Chunk&quot;)} Chunk */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compilation&quot;).AssetInfo} AssetInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;).BuildInfo} BuildInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;).CodeGenerationResult} CodeGenerationResult */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../NormalModule&quot;)} NormalModule */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name name of definitions</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{TODO} definition</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">getSchema </span><span class="s3">= </span><span class="s1">name </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s3">{ </span><span class="s1">definitions </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/WebpackOptions.json&quot;</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s3">{</span>
+		<span class="s1">definitions</span><span class="s3">,</span>
+		<span class="s1">oneOf</span><span class="s3">: [{ </span><span class="s1">$ref</span><span class="s3">: </span><span class="s2">`#/definitions/</span><span class="s1">$</span><span class="s3">{</span><span class="s1">name</span><span class="s3">}</span><span class="s2">` </span><span class="s3">}]</span>
+	<span class="s3">};</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">generatorValidationOptions </span><span class="s3">= {</span>
+	<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;Asset Modules Plugin&quot;</span><span class="s3">,</span>
+	<span class="s1">baseDataPath</span><span class="s3">: </span><span class="s2">&quot;generator&quot;</span>
+<span class="s3">};</span>
+<span class="s4">const </span><span class="s1">validateGeneratorOptions </span><span class="s3">= {</span>
+	<span class="s1">asset</span><span class="s3">: </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+		<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/asset/AssetGeneratorOptions.check.js&quot;</span><span class="s3">),</span>
+		<span class="s3">() =&gt; </span><span class="s1">getSchema</span><span class="s3">(</span><span class="s2">&quot;AssetGeneratorOptions&quot;</span><span class="s3">),</span>
+		<span class="s1">generatorValidationOptions</span>
+	<span class="s3">),</span>
+	<span class="s2">&quot;asset/resource&quot;</span><span class="s3">: </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+		<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/asset/AssetResourceGeneratorOptions.check.js&quot;</span><span class="s3">),</span>
+		<span class="s3">() =&gt; </span><span class="s1">getSchema</span><span class="s3">(</span><span class="s2">&quot;AssetResourceGeneratorOptions&quot;</span><span class="s3">),</span>
+		<span class="s1">generatorValidationOptions</span>
+	<span class="s3">),</span>
+	<span class="s2">&quot;asset/inline&quot;</span><span class="s3">: </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+		<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/asset/AssetInlineGeneratorOptions.check.js&quot;</span><span class="s3">),</span>
+		<span class="s3">() =&gt; </span><span class="s1">getSchema</span><span class="s3">(</span><span class="s2">&quot;AssetInlineGeneratorOptions&quot;</span><span class="s3">),</span>
+		<span class="s1">generatorValidationOptions</span>
+	<span class="s3">)</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">validateParserOptions </span><span class="s3">= </span><span class="s1">createSchemaValidation</span><span class="s3">(</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../../schemas/plugins/asset/AssetParserOptions.check.js&quot;</span><span class="s3">),</span>
+	<span class="s3">() =&gt; </span><span class="s1">getSchema</span><span class="s3">(</span><span class="s2">&quot;AssetParserOptions&quot;</span><span class="s3">),</span>
+	<span class="s3">{</span>
+		<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;Asset Modules Plugin&quot;</span><span class="s3">,</span>
+		<span class="s1">baseDataPath</span><span class="s3">: </span><span class="s2">&quot;parser&quot;</span>
+	<span class="s3">}</span>
+<span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">getAssetGenerator </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AssetGenerator&quot;</span><span class="s3">));</span>
+<span class="s4">const </span><span class="s1">getAssetParser </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AssetParser&quot;</span><span class="s3">));</span>
+<span class="s4">const </span><span class="s1">getAssetSourceParser </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt; </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AssetSourceParser&quot;</span><span class="s3">));</span>
+<span class="s4">const </span><span class="s1">getAssetSourceGenerator </span><span class="s3">= </span><span class="s1">memoize</span><span class="s3">(() =&gt;</span>
+	<span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./AssetSourceGenerator&quot;</span><span class="s3">)</span>
+<span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">type </span><span class="s3">= </span><span class="s1">ASSET_MODULE_TYPE</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">plugin </span><span class="s3">= </span><span class="s2">&quot;AssetModulesPlugin&quot;</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">AssetModulesPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+			<span class="s1">plugin</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">compilation</span><span class="s3">, { </span><span class="s1">normalModuleFactory </span><span class="s3">}) =&gt; {</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createParser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">ASSET_MODULE_TYPE</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, </span><span class="s1">parserOptions </span><span class="s3">=&gt; {</span>
+						<span class="s1">validateParserOptions</span><span class="s3">(</span><span class="s1">parserOptions</span><span class="s3">);</span>
+						<span class="s1">parserOptions </span><span class="s3">= </span><span class="s1">cleverMerge</span><span class="s3">(</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssetParserOptions} */</span>
+							<span class="s3">(</span><span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">.</span><span class="s1">module</span><span class="s3">.</span><span class="s1">parser</span><span class="s3">.</span><span class="s1">asset</span><span class="s3">),</span>
+							<span class="s1">parserOptions</span>
+						<span class="s3">);</span>
+
+						<span class="s4">let </span><span class="s1">dataUrlCondition </span><span class="s3">= </span><span class="s1">parserOptions</span><span class="s3">.</span><span class="s1">dataUrlCondition</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">dataUrlCondition </span><span class="s3">|| </span><span class="s4">typeof </span><span class="s1">dataUrlCondition </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span><span class="s3">) {</span>
+							<span class="s1">dataUrlCondition </span><span class="s3">= {</span>
+								<span class="s1">maxSize</span><span class="s3">: </span><span class="s7">8096</span><span class="s3">,</span>
+								<span class="s1">...dataUrlCondition</span>
+							<span class="s3">};</span>
+						<span class="s3">}</span>
+
+						<span class="s4">const </span><span class="s1">AssetParser </span><span class="s3">= </span><span class="s1">getAssetParser</span><span class="s3">();</span>
+
+						<span class="s4">return new </span><span class="s1">AssetParser</span><span class="s3">(</span><span class="s1">dataUrlCondition</span><span class="s3">);</span>
+					<span class="s3">});</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createParser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">ASSET_MODULE_TYPE_INLINE</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, </span><span class="s1">_parserOptions </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">AssetParser </span><span class="s3">= </span><span class="s1">getAssetParser</span><span class="s3">();</span>
+
+						<span class="s4">return new </span><span class="s1">AssetParser</span><span class="s3">(</span><span class="s4">true</span><span class="s3">);</span>
+					<span class="s3">});</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createParser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">ASSET_MODULE_TYPE_RESOURCE</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, </span><span class="s1">_parserOptions </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">AssetParser </span><span class="s3">= </span><span class="s1">getAssetParser</span><span class="s3">();</span>
+
+						<span class="s4">return new </span><span class="s1">AssetParser</span><span class="s3">(</span><span class="s4">false</span><span class="s3">);</span>
+					<span class="s3">});</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createParser</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">ASSET_MODULE_TYPE_SOURCE</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, </span><span class="s1">_parserOptions </span><span class="s3">=&gt; {</span>
+						<span class="s4">const </span><span class="s1">AssetSourceParser </span><span class="s3">= </span><span class="s1">getAssetSourceParser</span><span class="s3">();</span>
+
+						<span class="s4">return new </span><span class="s1">AssetSourceParser</span><span class="s3">();</span>
+					<span class="s3">});</span>
+
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">type of </span><span class="s3">[</span>
+					<span class="s1">ASSET_MODULE_TYPE</span><span class="s3">,</span>
+					<span class="s1">ASSET_MODULE_TYPE_INLINE</span><span class="s3">,</span>
+					<span class="s1">ASSET_MODULE_TYPE_RESOURCE</span>
+				<span class="s3">]) {</span>
+					<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createGenerator</span>
+						<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">type</span><span class="s3">)</span>
+						<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, </span><span class="s1">generatorOptions </span><span class="s3">=&gt; {</span>
+							<span class="s1">validateGeneratorOptions</span><span class="s3">[</span><span class="s1">type</span><span class="s3">](</span><span class="s1">generatorOptions</span><span class="s3">);</span>
+
+							<span class="s4">let </span><span class="s1">dataUrl</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">type </span><span class="s3">!== </span><span class="s1">ASSET_MODULE_TYPE_RESOURCE</span><span class="s3">) {</span>
+								<span class="s1">dataUrl </span><span class="s3">= </span><span class="s1">generatorOptions</span><span class="s3">.</span><span class="s1">dataUrl</span><span class="s3">;</span>
+								<span class="s4">if </span><span class="s3">(!</span><span class="s1">dataUrl </span><span class="s3">|| </span><span class="s4">typeof </span><span class="s1">dataUrl </span><span class="s3">=== </span><span class="s2">&quot;object&quot;</span><span class="s3">) {</span>
+									<span class="s1">dataUrl </span><span class="s3">= {</span>
+										<span class="s1">encoding</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+										<span class="s1">mimetype</span><span class="s3">: </span><span class="s1">undefined</span><span class="s3">,</span>
+										<span class="s1">...dataUrl</span>
+									<span class="s3">};</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+
+							<span class="s4">let </span><span class="s1">filename</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">publicPath</span><span class="s3">;</span>
+							<span class="s4">let </span><span class="s1">outputPath</span><span class="s3">;</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">type </span><span class="s3">!== </span><span class="s1">ASSET_MODULE_TYPE_INLINE</span><span class="s3">) {</span>
+								<span class="s1">filename </span><span class="s3">= </span><span class="s1">generatorOptions</span><span class="s3">.</span><span class="s1">filename</span><span class="s3">;</span>
+								<span class="s1">publicPath </span><span class="s3">= </span><span class="s1">generatorOptions</span><span class="s3">.</span><span class="s1">publicPath</span><span class="s3">;</span>
+								<span class="s1">outputPath </span><span class="s3">= </span><span class="s1">generatorOptions</span><span class="s3">.</span><span class="s1">outputPath</span><span class="s3">;</span>
+							<span class="s3">}</span>
+
+							<span class="s4">const </span><span class="s1">AssetGenerator </span><span class="s3">= </span><span class="s1">getAssetGenerator</span><span class="s3">();</span>
+
+							<span class="s4">return new </span><span class="s1">AssetGenerator</span><span class="s3">(</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">,</span>
+								<span class="s1">dataUrl</span><span class="s3">,</span>
+								<span class="s1">filename</span><span class="s3">,</span>
+								<span class="s1">publicPath</span><span class="s3">,</span>
+								<span class="s1">outputPath</span><span class="s3">,</span>
+								<span class="s1">generatorOptions</span><span class="s3">.</span><span class="s1">emit </span><span class="s3">!== </span><span class="s4">false</span>
+							<span class="s3">);</span>
+						<span class="s3">});</span>
+				<span class="s3">}</span>
+				<span class="s1">normalModuleFactory</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">createGenerator</span>
+					<span class="s3">.</span><span class="s1">for</span><span class="s3">(</span><span class="s1">ASSET_MODULE_TYPE_SOURCE</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, () =&gt; {</span>
+						<span class="s4">const </span><span class="s1">AssetSourceGenerator </span><span class="s3">= </span><span class="s1">getAssetSourceGenerator</span><span class="s3">();</span>
+
+						<span class="s4">return new </span><span class="s1">AssetSourceGenerator</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">);</span>
+					<span class="s3">});</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">renderManifest</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s1">plugin</span><span class="s3">, (</span><span class="s1">result</span><span class="s3">, </span><span class="s1">options</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGraph </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">codeGenerationResults</span><span class="s3">, </span><span class="s1">runtimeTemplate </span><span class="s3">} = </span><span class="s1">options</span><span class="s3">;</span>
+
+					<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getOrderedChunkModulesIterableBySourceType</span><span class="s3">(</span>
+						<span class="s1">chunk</span><span class="s3">,</span>
+						<span class="s1">ASSET_MODULE_TYPE</span><span class="s3">,</span>
+						<span class="s1">compareModulesByIdOrIdentifier</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">modules</span><span class="s3">) {</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+							<span class="s4">try </span><span class="s3">{</span>
+								<span class="s4">const </span><span class="s1">codeGenResult </span><span class="s3">= </span><span class="s1">codeGenerationResults</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span>
+									<span class="s1">module</span><span class="s3">,</span>
+									<span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span>
+								<span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">buildInfo </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">data </span><span class="s3">=</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;CodeGenerationResult[&quot;data&quot;]&gt;} */</span>
+									<span class="s3">(</span><span class="s1">codeGenResult</span><span class="s3">.</span><span class="s1">data</span><span class="s3">);</span>
+								<span class="s4">const </span><span class="s1">errored </span><span class="s3">= </span><span class="s1">module</span><span class="s3">.</span><span class="s1">getNumberOfErrors</span><span class="s3">() &gt; </span><span class="s7">0</span><span class="s3">;</span>
+
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+								<span class="s4">let </span><span class="s1">entryFilename</span><span class="s3">;</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{AssetInfo} */</span>
+								<span class="s4">let </span><span class="s1">entryInfo</span><span class="s3">;</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{string} */</span>
+								<span class="s4">let </span><span class="s1">entryHash</span><span class="s3">;</span>
+
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">errored</span><span class="s3">) {</span>
+									<span class="s4">const </span><span class="s1">erroredModule </span><span class="s3">= </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NormalModule} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+									<span class="s4">const </span><span class="s1">AssetGenerator </span><span class="s3">= </span><span class="s1">getAssetGenerator</span><span class="s3">();</span>
+									<span class="s4">const </span><span class="s3">[</span><span class="s1">fullContentHash</span><span class="s3">, </span><span class="s1">contentHash</span><span class="s3">] =</span>
+										<span class="s1">AssetGenerator</span><span class="s3">.</span><span class="s1">getFullContentHash</span><span class="s3">(</span>
+											<span class="s1">erroredModule</span><span class="s3">,</span>
+											<span class="s1">runtimeTemplate</span>
+										<span class="s3">);</span>
+									<span class="s4">const </span><span class="s3">{ </span><span class="s1">filename</span><span class="s3">, </span><span class="s1">assetInfo </span><span class="s3">} =</span>
+										<span class="s1">AssetGenerator</span><span class="s3">.</span><span class="s1">getFilenameWithInfo</span><span class="s3">(</span>
+											<span class="s1">erroredModule</span><span class="s3">,</span>
+											<span class="s3">{</span>
+												<span class="s1">filename</span><span class="s3">:</span>
+													<span class="s1">erroredModule</span><span class="s3">.</span><span class="s1">generatorOptions </span><span class="s3">&amp;&amp;</span>
+													<span class="s1">erroredModule</span><span class="s3">.</span><span class="s1">generatorOptions</span><span class="s3">.</span><span class="s1">filename</span><span class="s3">,</span>
+												<span class="s1">outputPath</span><span class="s3">:</span>
+													<span class="s1">erroredModule</span><span class="s3">.</span><span class="s1">generatorOptions </span><span class="s3">&amp;&amp;</span>
+													<span class="s1">erroredModule</span><span class="s3">.</span><span class="s1">generatorOptions</span><span class="s3">.</span><span class="s1">outputPath</span>
+											<span class="s3">},</span>
+											<span class="s3">{</span>
+												<span class="s1">runtime</span><span class="s3">: </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">,</span>
+												<span class="s1">runtimeTemplate</span><span class="s3">,</span>
+												<span class="s1">chunkGraph</span>
+											<span class="s3">},</span>
+											<span class="s1">contentHash</span>
+										<span class="s3">);</span>
+									<span class="s1">entryFilename </span><span class="s3">= </span><span class="s1">filename</span><span class="s3">;</span>
+									<span class="s1">entryInfo </span><span class="s3">= </span><span class="s1">assetInfo</span><span class="s3">;</span>
+									<span class="s1">entryHash </span><span class="s3">= </span><span class="s1">fullContentHash</span><span class="s3">;</span>
+								<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+									<span class="s1">entryFilename </span><span class="s3">= </span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">filename </span><span class="s3">|| </span><span class="s1">data</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">&quot;filename&quot;</span><span class="s3">);</span>
+									<span class="s1">entryInfo </span><span class="s3">= </span><span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">assetInfo </span><span class="s3">|| </span><span class="s1">data</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">&quot;assetInfo&quot;</span><span class="s3">);</span>
+									<span class="s1">entryHash </span><span class="s3">=</span>
+										<span class="s1">buildInfo</span><span class="s3">.</span><span class="s1">fullContentHash </span><span class="s3">|| </span><span class="s1">data</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">&quot;fullContentHash&quot;</span><span class="s3">);</span>
+								<span class="s3">}</span>
+
+								<span class="s1">result</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+									<span class="s1">render</span><span class="s3">: () =&gt;</span>
+										<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Source} */ </span><span class="s3">(</span><span class="s1">codeGenResult</span><span class="s3">.</span><span class="s1">sources</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">type</span><span class="s3">)),</span>
+									<span class="s1">filename</span><span class="s3">: </span><span class="s1">entryFilename</span><span class="s3">,</span>
+									<span class="s1">info</span><span class="s3">: </span><span class="s1">entryInfo</span><span class="s3">,</span>
+									<span class="s1">auxiliary</span><span class="s3">: </span><span class="s4">true</span><span class="s3">,</span>
+									<span class="s1">identifier</span><span class="s3">: </span><span class="s2">`assetModule</span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleId</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">,</span>
+									<span class="s1">hash</span><span class="s3">: </span><span class="s1">entryHash</span>
+								<span class="s3">});</span>
+							<span class="s3">} </span><span class="s4">catch </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Error} */ </span><span class="s3">(</span><span class="s1">err</span><span class="s3">).</span><span class="s1">message </span><span class="s3">+=</span>
+									<span class="s2">`</span><span class="s4">\n</span><span class="s2">during rendering of asset </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">identifier</span><span class="s3">()}</span><span class="s2">`</span><span class="s3">;</span>
+								<span class="s4">throw </span><span class="s1">err</span><span class="s3">;</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+
+					<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+				<span class="s3">});</span>
+
+				<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">prepareModuleExecution</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span>
+					<span class="s2">&quot;AssetModulesPlugin&quot;</span><span class="s3">,</span>
+					<span class="s3">(</span><span class="s1">options</span><span class="s3">, </span><span class="s1">context</span><span class="s3">) =&gt; {</span>
+						<span class="s4">const </span><span class="s3">{ </span><span class="s1">codeGenerationResult </span><span class="s3">} = </span><span class="s1">options</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">source </span><span class="s3">= </span><span class="s1">codeGenerationResult</span><span class="s3">.</span><span class="s1">sources</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">ASSET_MODULE_TYPE</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">source </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+						<span class="s4">const </span><span class="s1">data </span><span class="s3">=</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{NonNullable&lt;CodeGenerationResult[&quot;data&quot;]&gt;} */</span>
+							<span class="s3">(</span><span class="s1">codeGenerationResult</span><span class="s3">.</span><span class="s1">data</span><span class="s3">);</span>
+						<span class="s1">context</span><span class="s3">.</span><span class="s1">assets</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">&quot;filename&quot;</span><span class="s3">), {</span>
+							<span class="s1">source</span><span class="s3">,</span>
+							<span class="s1">info</span><span class="s3">: </span><span class="s1">data</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">&quot;assetInfo&quot;</span><span class="s3">)</span>
+						<span class="s3">});</span>
+					<span class="s3">}</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">AssetModulesPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

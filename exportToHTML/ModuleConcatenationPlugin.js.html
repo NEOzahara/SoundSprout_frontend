@@ -1,0 +1,959 @@
+<html>
+<head>
+<title>ModuleConcatenationPlugin.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+ModuleConcatenationPlugin.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ChunkGraph </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ChunkGraph&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ModuleGraph </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleGraph&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">JS_TYPE </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../ModuleSourceTypesConstants&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">STAGE_DEFAULT </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../OptimizationStages&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">HarmonyImportDependency </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../dependencies/HarmonyImportDependency&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">compareModulesByIdentifier </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/comparators&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{</span>
+	<span class="s1">intersectRuntime</span><span class="s3">,</span>
+	<span class="s1">mergeRuntimeOwned</span><span class="s3">,</span>
+	<span class="s1">filterRuntime</span><span class="s3">,</span>
+	<span class="s1">runtimeToString</span><span class="s3">,</span>
+	<span class="s1">mergeRuntime</span>
+<span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;../util/runtime&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">ConcatenatedModule </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./ConcatenatedModule&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compilation&quot;)} Compilation */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Compiler&quot;)} Compiler */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;)} Module */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../Module&quot;).BuildInfo} BuildInfo */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../RequestShortener&quot;)} RequestShortener */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;../util/runtime&quot;).RuntimeSpec} RuntimeSpec */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@typedef </span><span class="s5">{object} Statistics</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} cached</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} alreadyInConfig</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} invalidModule</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} incorrectChunks</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} incorrectDependency</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} incorrectModuleDependency</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} incorrectChunksOfImporter</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} incorrectRuntimeCondition</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} importerFailed</span>
+ <span class="s5">* </span><span class="s6">@property </span><span class="s5">{number} added</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} msg message</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} formatted message</span>
+ <span class="s5">*/</span>
+<span class="s4">const </span><span class="s1">formatBailoutReason </span><span class="s3">= </span><span class="s1">msg </span><span class="s3">=&gt; </span><span class="s2">`ModuleConcatenation bailout: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">msg</span><span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">ModuleConcatenationPlugin </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* Apply the plugin</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compiler} compiler the compiler instance</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">apply</span><span class="s3">(</span><span class="s1">compiler</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s3">{ </span><span class="s1">_backCompat</span><span class="s3">: </span><span class="s1">backCompat </span><span class="s3">} = </span><span class="s1">compiler</span><span class="s3">;</span>
+		<span class="s1">compiler</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">tap</span><span class="s3">(</span><span class="s2">&quot;ModuleConcatenationPlugin&quot;</span><span class="s3">, </span><span class="s1">compilation </span><span class="s3">=&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleMemCaches</span><span class="s3">) {</span>
+				<span class="s4">throw new </span><span class="s1">Error</span><span class="s3">(</span>
+					<span class="s2">&quot;optimization.concatenateModules can't be used with cacheUnaffected as module concatenation is a global effect&quot;</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+			<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, string | ((requestShortener: RequestShortener) =&gt; string)&gt;} */</span>
+			<span class="s4">const </span><span class="s1">bailoutReasonMap </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | ((requestShortener: RequestShortener) =&gt; string)} reason the reason</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">setBailoutReason </span><span class="s3">= (</span><span class="s1">module</span><span class="s3">, </span><span class="s1">reason</span><span class="s3">) =&gt; {</span>
+				<span class="s1">setInnerBailoutReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">reason</span><span class="s3">);</span>
+				<span class="s1">moduleGraph</span>
+					<span class="s3">.</span><span class="s1">getOptimizationBailout</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+						<span class="s4">typeof </span><span class="s1">reason </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span>
+							<span class="s3">? </span><span class="s1">rs </span><span class="s3">=&gt; </span><span class="s1">formatBailoutReason</span><span class="s3">(</span><span class="s1">reason</span><span class="s3">(</span><span class="s1">rs</span><span class="s3">))</span>
+							<span class="s3">: </span><span class="s1">formatBailoutReason</span><span class="s3">(</span><span class="s1">reason</span><span class="s3">)</span>
+					<span class="s3">);</span>
+			<span class="s3">};</span>
+
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string | ((requestShortener: RequestShortener) =&gt; string)} reason the reason</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">setInnerBailoutReason </span><span class="s3">= (</span><span class="s1">module</span><span class="s3">, </span><span class="s1">reason</span><span class="s3">) =&gt; {</span>
+				<span class="s1">bailoutReasonMap</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">reason</span><span class="s3">);</span>
+			<span class="s3">};</span>
+
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener the request shortener</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string | ((requestShortener: RequestShortener) =&gt; string) | undefined} the reason</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">getInnerBailoutReason </span><span class="s3">= (</span><span class="s1">module</span><span class="s3">, </span><span class="s1">requestShortener</span><span class="s3">) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">reason </span><span class="s3">= </span><span class="s1">bailoutReasonMap</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">reason </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) </span><span class="s4">return </span><span class="s1">reason</span><span class="s3">(</span><span class="s1">requestShortener</span><span class="s3">);</span>
+				<span class="s4">return </span><span class="s1">reason</span><span class="s3">;</span>
+			<span class="s3">};</span>
+
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module | ((requestShortener: RequestShortener) =&gt; string)} problem the problem</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{(requestShortener: RequestShortener) =&gt; string} the reason</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">formatBailoutWarning </span><span class="s3">= (</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">) =&gt; </span><span class="s1">requestShortener </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">problem </span><span class="s3">=== </span><span class="s2">&quot;function&quot;</span><span class="s3">) {</span>
+					<span class="s4">return </span><span class="s1">formatBailoutReason</span><span class="s3">(</span>
+						<span class="s2">`Cannot concat with </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+							<span class="s1">requestShortener</span>
+						<span class="s3">)}</span><span class="s2">: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">problem</span><span class="s3">(</span><span class="s1">requestShortener</span><span class="s3">)}</span><span class="s2">`</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s4">const </span><span class="s1">reason </span><span class="s3">= </span><span class="s1">getInnerBailoutReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">requestShortener</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">reasonWithPrefix </span><span class="s3">= </span><span class="s1">reason </span><span class="s3">? </span><span class="s2">`: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">reason</span><span class="s3">}</span><span class="s2">` </span><span class="s3">: </span><span class="s2">&quot;&quot;</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">module </span><span class="s3">=== </span><span class="s1">problem</span><span class="s3">) {</span>
+					<span class="s4">return </span><span class="s1">formatBailoutReason</span><span class="s3">(</span>
+						<span class="s2">`Cannot concat with </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+							<span class="s1">requestShortener</span>
+						<span class="s3">)}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">reasonWithPrefix</span><span class="s3">}</span><span class="s2">`</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+				<span class="s4">return </span><span class="s1">formatBailoutReason</span><span class="s3">(</span>
+					<span class="s2">`Cannot concat with </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+						<span class="s1">requestShortener</span>
+					<span class="s3">)} </span><span class="s2">because of </span><span class="s1">$</span><span class="s3">{</span><span class="s1">problem</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+						<span class="s1">requestShortener</span>
+					<span class="s3">)}</span><span class="s1">$</span><span class="s3">{</span><span class="s1">reasonWithPrefix</span><span class="s3">}</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">};</span>
+
+			<span class="s1">compilation</span><span class="s3">.</span><span class="s1">hooks</span><span class="s3">.</span><span class="s1">optimizeChunkModules</span><span class="s3">.</span><span class="s1">tapAsync</span><span class="s3">(</span>
+				<span class="s3">{</span>
+					<span class="s1">name</span><span class="s3">: </span><span class="s2">&quot;ModuleConcatenationPlugin&quot;</span><span class="s3">,</span>
+					<span class="s1">stage</span><span class="s3">: </span><span class="s1">STAGE_DEFAULT</span>
+				<span class="s3">},</span>
+				<span class="s3">(</span><span class="s1">allChunks</span><span class="s3">, </span><span class="s1">modules</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+					<span class="s4">const </span><span class="s1">logger </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getLogger</span><span class="s3">(</span>
+						<span class="s2">&quot;webpack.ModuleConcatenationPlugin&quot;</span>
+					<span class="s3">);</span>
+					<span class="s4">const </span><span class="s3">{ </span><span class="s1">chunkGraph</span><span class="s3">, </span><span class="s1">moduleGraph </span><span class="s3">} = </span><span class="s1">compilation</span><span class="s3">;</span>
+					<span class="s4">const </span><span class="s1">relevantModules </span><span class="s3">= [];</span>
+					<span class="s4">const </span><span class="s1">possibleInners </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+					<span class="s4">const </span><span class="s1">context </span><span class="s3">= {</span>
+						<span class="s1">chunkGraph</span><span class="s3">,</span>
+						<span class="s1">moduleGraph</span>
+					<span class="s3">};</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;select relevant modules&quot;</span><span class="s3">);</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+						<span class="s4">let </span><span class="s1">canBeRoot </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+						<span class="s4">let </span><span class="s1">canBeInner </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+
+						<span class="s4">const </span><span class="s1">bailoutReason </span><span class="s3">= </span><span class="s1">module</span><span class="s3">.</span><span class="s1">getConcatenationBailoutReason</span><span class="s3">(</span><span class="s1">context</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">bailoutReason</span><span class="s3">) {</span>
+							<span class="s1">setBailoutReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">bailoutReason</span><span class="s3">);</span>
+							<span class="s4">continue</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Must not be an async module</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">isAsync</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)) {</span>
+							<span class="s1">setBailoutReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s2">&quot;Module is async&quot;</span><span class="s3">);</span>
+							<span class="s4">continue</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Must be in strict mode</span>
+						<span class="s4">if </span><span class="s3">(!(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{BuildInfo} */ </span><span class="s3">(</span><span class="s1">module</span><span class="s3">.</span><span class="s1">buildInfo</span><span class="s3">).</span><span class="s1">strict</span><span class="s3">)) {</span>
+							<span class="s1">setBailoutReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s2">&quot;Module is not in strict mode&quot;</span><span class="s3">);</span>
+							<span class="s4">continue</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Module must be in any chunk (we don't want to do useless work)</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getNumberOfModuleChunks</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) === </span><span class="s7">0</span><span class="s3">) {</span>
+							<span class="s1">setBailoutReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s2">&quot;Module is not in any chunk&quot;</span><span class="s3">);</span>
+							<span class="s4">continue</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Exports must be known (and not dynamic)</span>
+						<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">relevantExports </span><span class="s3">= </span><span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">getRelevantExports</span><span class="s3">(</span><span class="s1">undefined</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">unknownReexports </span><span class="s3">= </span><span class="s1">relevantExports</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span>
+							<span class="s1">exportInfo </span><span class="s3">=&gt;</span>
+								<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">isReexport</span><span class="s3">() &amp;&amp; !</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">getTarget</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">)</span>
+						<span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">unknownReexports</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+							<span class="s1">setBailoutReason</span><span class="s3">(</span>
+								<span class="s1">module</span><span class="s3">,</span>
+								<span class="s2">`Reexports in this module do not have a static target (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+									<span class="s1">unknownReexports</span><span class="s3">,</span>
+									<span class="s1">exportInfo </span><span class="s3">=&gt;</span>
+										<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+											<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">name </span><span class="s3">|| </span><span class="s2">&quot;other exports&quot;</span>
+										<span class="s3">}</span><span class="s2">: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">getUsedInfo</span><span class="s3">()}</span><span class="s2">`</span>
+								<span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">)`</span>
+							<span class="s3">);</span>
+							<span class="s4">continue</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Root modules must have a static list of exports</span>
+						<span class="s4">const </span><span class="s1">unknownProvidedExports </span><span class="s3">= </span><span class="s1">relevantExports</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span>
+							<span class="s1">exportInfo </span><span class="s3">=&gt; </span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">provided </span><span class="s3">!== </span><span class="s4">true</span>
+						<span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">unknownProvidedExports</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+							<span class="s1">setBailoutReason</span><span class="s3">(</span>
+								<span class="s1">module</span><span class="s3">,</span>
+								<span class="s2">`List of module exports is dynamic (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+									<span class="s1">unknownProvidedExports</span><span class="s3">,</span>
+									<span class="s1">exportInfo </span><span class="s3">=&gt;</span>
+										<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+											<span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">name </span><span class="s3">|| </span><span class="s2">&quot;other exports&quot;</span>
+										<span class="s3">}</span><span class="s2">: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">getProvidedInfo</span><span class="s3">()} </span><span class="s2">and </span><span class="s1">$</span><span class="s3">{</span><span class="s1">exportInfo</span><span class="s3">.</span><span class="s1">getUsedInfo</span><span class="s3">()}</span><span class="s2">`</span>
+								<span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">)`</span>
+							<span class="s3">);</span>
+							<span class="s1">canBeRoot </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s0">// Module must not be an entry point</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">isEntryModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)) {</span>
+							<span class="s1">setInnerBailoutReason</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s2">&quot;Module is an entry point&quot;</span><span class="s3">);</span>
+							<span class="s1">canBeInner </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+						<span class="s3">}</span>
+
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">canBeRoot</span><span class="s3">) </span><span class="s1">relevantModules</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">canBeInner</span><span class="s3">) </span><span class="s1">possibleInners</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;select relevant modules&quot;</span><span class="s3">);</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">relevantModules</span><span class="s3">.</span><span class="s1">length</span><span class="s3">} </span><span class="s2">potential root modules, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">possibleInners</span><span class="s3">.</span><span class="s1">size</span><span class="s3">} </span><span class="s2">potential inner modules`</span>
+					<span class="s3">);</span>
+					<span class="s0">// sort by depth</span>
+					<span class="s0">// modules with lower depth are more likely suited as roots</span>
+					<span class="s0">// this improves performance, because modules already selected as inner are skipped</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;sort relevant modules&quot;</span><span class="s3">);</span>
+					<span class="s1">relevantModules</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span>
+						<span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt;</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getDepth</span><span class="s3">(</span><span class="s1">a</span><span class="s3">)) -</span>
+							<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{number} */ </span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getDepth</span><span class="s3">(</span><span class="s1">b</span><span class="s3">))</span>
+					<span class="s3">);</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;sort relevant modules&quot;</span><span class="s3">);</span>
+
+					<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Statistics} */</span>
+					<span class="s4">const </span><span class="s1">stats </span><span class="s3">= {</span>
+						<span class="s1">cached</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">alreadyInConfig</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">invalidModule</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">incorrectChunks</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">incorrectDependency</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">incorrectModuleDependency</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">incorrectChunksOfImporter</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">incorrectRuntimeCondition</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">importerFailed</span><span class="s3">: </span><span class="s7">0</span><span class="s3">,</span>
+						<span class="s1">added</span><span class="s3">: </span><span class="s7">0</span>
+					<span class="s3">};</span>
+					<span class="s4">let </span><span class="s1">statsCandidates </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">statsSizeSum </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+					<span class="s4">let </span><span class="s1">statsEmptyConfigurations </span><span class="s3">= </span><span class="s7">0</span><span class="s3">;</span>
+
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;find modules to concatenate&quot;</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">concatConfigurations </span><span class="s3">= [];</span>
+					<span class="s4">const </span><span class="s1">usedAsInner </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">currentRoot of relevantModules</span><span class="s3">) {</span>
+						<span class="s0">// when used by another configuration as inner:</span>
+						<span class="s0">// the other configuration is better and we can skip this one</span>
+						<span class="s0">// TODO reconsider that when it's only used in a different runtime</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">usedAsInner</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">currentRoot</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+
+						<span class="s4">let </span><span class="s1">chunkRuntime</span><span class="s3">;</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">r of chunkGraph</span><span class="s3">.</span><span class="s1">getModuleRuntimes</span><span class="s3">(</span><span class="s1">currentRoot</span><span class="s3">)) {</span>
+							<span class="s1">chunkRuntime </span><span class="s3">= </span><span class="s1">mergeRuntimeOwned</span><span class="s3">(</span><span class="s1">chunkRuntime</span><span class="s3">, </span><span class="s1">r</span><span class="s3">);</span>
+						<span class="s3">}</span>
+						<span class="s4">const </span><span class="s1">exportsInfo </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getExportsInfo</span><span class="s3">(</span><span class="s1">currentRoot</span><span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">filteredRuntime </span><span class="s3">= </span><span class="s1">filterRuntime</span><span class="s3">(</span><span class="s1">chunkRuntime</span><span class="s3">, </span><span class="s1">r </span><span class="s3">=&gt;</span>
+							<span class="s1">exportsInfo</span><span class="s3">.</span><span class="s1">isModuleUsed</span><span class="s3">(</span><span class="s1">r</span><span class="s3">)</span>
+						<span class="s3">);</span>
+						<span class="s4">const </span><span class="s1">activeRuntime </span><span class="s3">=</span>
+							<span class="s1">filteredRuntime </span><span class="s3">=== </span><span class="s4">true</span>
+								<span class="s3">? </span><span class="s1">chunkRuntime</span>
+								<span class="s3">: </span><span class="s1">filteredRuntime </span><span class="s3">=== </span><span class="s4">false</span>
+									<span class="s3">? </span><span class="s1">undefined</span>
+									<span class="s3">: </span><span class="s1">filteredRuntime</span><span class="s3">;</span>
+
+						<span class="s0">// create a configuration with the root</span>
+						<span class="s4">const </span><span class="s1">currentConfiguration </span><span class="s3">= </span><span class="s4">new </span><span class="s1">ConcatConfiguration</span><span class="s3">(</span>
+							<span class="s1">currentRoot</span><span class="s3">,</span>
+							<span class="s1">activeRuntime</span>
+						<span class="s3">);</span>
+
+						<span class="s0">// cache failures to add modules</span>
+						<span class="s4">const </span><span class="s1">failureCache </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+						<span class="s0">// potential optional import candidates</span>
+						<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;Module&gt;} */</span>
+						<span class="s4">const </span><span class="s1">candidates </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+						<span class="s0">// try to add all imports</span>
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">imp of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getImports</span><span class="s3">(</span>
+							<span class="s1">compilation</span><span class="s3">,</span>
+							<span class="s1">currentRoot</span><span class="s3">,</span>
+							<span class="s1">activeRuntime</span>
+						<span class="s3">)) {</span>
+							<span class="s1">candidates</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">imp</span><span class="s3">);</span>
+						<span class="s3">}</span>
+
+						<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">imp of candidates</span><span class="s3">) {</span>
+							<span class="s4">const </span><span class="s1">impCandidates </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+							<span class="s4">const </span><span class="s1">problem </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_tryToAdd</span><span class="s3">(</span>
+								<span class="s1">compilation</span><span class="s3">,</span>
+								<span class="s1">currentConfiguration</span><span class="s3">,</span>
+								<span class="s1">imp</span><span class="s3">,</span>
+								<span class="s1">chunkRuntime</span><span class="s3">,</span>
+								<span class="s1">activeRuntime</span><span class="s3">,</span>
+								<span class="s1">possibleInners</span><span class="s3">,</span>
+								<span class="s1">impCandidates</span><span class="s3">,</span>
+								<span class="s1">failureCache</span><span class="s3">,</span>
+								<span class="s1">chunkGraph</span><span class="s3">,</span>
+								<span class="s4">true</span><span class="s3">,</span>
+								<span class="s1">stats</span>
+							<span class="s3">);</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">problem</span><span class="s3">) {</span>
+								<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">imp</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">);</span>
+								<span class="s1">currentConfiguration</span><span class="s3">.</span><span class="s1">addWarning</span><span class="s3">(</span><span class="s1">imp</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">);</span>
+							<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">c of impCandidates</span><span class="s3">) {</span>
+									<span class="s1">candidates</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">c</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+						<span class="s1">statsCandidates </span><span class="s3">+= </span><span class="s1">candidates</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+						<span class="s4">if </span><span class="s3">(!</span><span class="s1">currentConfiguration</span><span class="s3">.</span><span class="s1">isEmpty</span><span class="s3">()) {</span>
+							<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">currentConfiguration</span><span class="s3">.</span><span class="s1">getModules</span><span class="s3">();</span>
+							<span class="s1">statsSizeSum </span><span class="s3">+= </span><span class="s1">modules</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+							<span class="s1">concatConfigurations</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">currentConfiguration</span><span class="s3">);</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">module of modules</span><span class="s3">) {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">module </span><span class="s3">!== </span><span class="s1">currentConfiguration</span><span class="s3">.</span><span class="s1">rootModule</span><span class="s3">) {</span>
+									<span class="s1">usedAsInner</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+								<span class="s3">}</span>
+							<span class="s3">}</span>
+						<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+							<span class="s1">statsEmptyConfigurations</span><span class="s3">++;</span>
+							<span class="s4">const </span><span class="s1">optimizationBailouts </span><span class="s3">=</span>
+								<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getOptimizationBailout</span><span class="s3">(</span><span class="s1">currentRoot</span><span class="s3">);</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">warning of currentConfiguration</span><span class="s3">.</span><span class="s1">getWarningsSorted</span><span class="s3">()) {</span>
+								<span class="s1">optimizationBailouts</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span>
+									<span class="s1">formatBailoutWarning</span><span class="s3">(</span><span class="s1">warning</span><span class="s3">[</span><span class="s7">0</span><span class="s3">], </span><span class="s1">warning</span><span class="s3">[</span><span class="s7">1</span><span class="s3">])</span>
+								<span class="s3">);</span>
+							<span class="s3">}</span>
+						<span class="s3">}</span>
+					<span class="s3">}</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;find modules to concatenate&quot;</span><span class="s3">);</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s1">concatConfigurations</span><span class="s3">.</span><span class="s1">length</span>
+						<span class="s3">} </span><span class="s2">successful concat configurations (avg size: </span><span class="s1">$</span><span class="s3">{</span>
+							<span class="s1">statsSizeSum </span><span class="s3">/ </span><span class="s1">concatConfigurations</span><span class="s3">.</span><span class="s1">length</span>
+						<span class="s3">}</span><span class="s2">), </span><span class="s1">$</span><span class="s3">{</span><span class="s1">statsEmptyConfigurations</span><span class="s3">} </span><span class="s2">bailed out completely`</span>
+					<span class="s3">);</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">debug</span><span class="s3">(</span>
+						<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">statsCandidates</span><span class="s3">} </span><span class="s2">candidates were considered for adding (</span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">cached</span><span class="s3">} </span><span class="s2">cached failure, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">alreadyInConfig</span><span class="s3">} </span><span class="s2">already in config, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">invalidModule</span><span class="s3">} </span><span class="s2">invalid module, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">incorrectChunks</span><span class="s3">} </span><span class="s2">incorrect chunks, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">incorrectDependency</span><span class="s3">} </span><span class="s2">incorrect dependency, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">incorrectChunksOfImporter</span><span class="s3">} </span><span class="s2">incorrect chunks of importer, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">incorrectModuleDependency</span><span class="s3">} </span><span class="s2">incorrect module dependency, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">incorrectRuntimeCondition</span><span class="s3">} </span><span class="s2">incorrect runtime condition, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">importerFailed</span><span class="s3">} </span><span class="s2">importer failed, </span><span class="s1">$</span><span class="s3">{</span><span class="s1">stats</span><span class="s3">.</span><span class="s1">added</span><span class="s3">} </span><span class="s2">added)`</span>
+					<span class="s3">);</span>
+					<span class="s0">// HACK: Sort configurations by length and start with the longest one</span>
+					<span class="s0">// to get the biggest groups possible. Used modules are marked with usedModules</span>
+					<span class="s0">// TODO: Allow to reuse existing configuration while trying to add dependencies.</span>
+					<span class="s0">// This would improve performance. O(n^2) -&gt; O(n)</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;sort concat configurations&quot;</span><span class="s3">);</span>
+					<span class="s1">concatConfigurations</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">((</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; </span><span class="s1">b</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">size </span><span class="s3">- </span><span class="s1">a</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">size</span><span class="s3">);</span>
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;sort concat configurations&quot;</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">usedModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+
+					<span class="s1">logger</span><span class="s3">.</span><span class="s1">time</span><span class="s3">(</span><span class="s2">&quot;create concatenated modules&quot;</span><span class="s3">);</span>
+					<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+						<span class="s1">concatConfigurations</span><span class="s3">,</span>
+						<span class="s3">(</span><span class="s1">concatConfiguration</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; {</span>
+							<span class="s4">const </span><span class="s1">rootModule </span><span class="s3">= </span><span class="s1">concatConfiguration</span><span class="s3">.</span><span class="s1">rootModule</span><span class="s3">;</span>
+
+							<span class="s0">// Avoid overlapping configurations</span>
+							<span class="s0">// TODO: remove this when todo above is fixed</span>
+							<span class="s4">if </span><span class="s3">(</span><span class="s1">usedModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">)) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">();</span>
+							<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s1">concatConfiguration</span><span class="s3">.</span><span class="s1">getModules</span><span class="s3">();</span>
+							<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">m of modules</span><span class="s3">) {</span>
+								<span class="s1">usedModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">m</span><span class="s3">);</span>
+							<span class="s3">}</span>
+
+							<span class="s0">// Create a new ConcatenatedModule</span>
+							<span class="s1">ConcatenatedModule</span><span class="s3">.</span><span class="s1">getCompilationHooks</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">);</span>
+							<span class="s4">const </span><span class="s1">newModule </span><span class="s3">= </span><span class="s1">ConcatenatedModule</span><span class="s3">.</span><span class="s1">create</span><span class="s3">(</span>
+								<span class="s1">rootModule</span><span class="s3">,</span>
+								<span class="s1">modules</span><span class="s3">,</span>
+								<span class="s1">concatConfiguration</span><span class="s3">.</span><span class="s1">runtime</span><span class="s3">,</span>
+								<span class="s1">compilation</span><span class="s3">,</span>
+								<span class="s1">compiler</span><span class="s3">.</span><span class="s1">root</span><span class="s3">,</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">outputOptions</span><span class="s3">.</span><span class="s1">hashFunction</span>
+							<span class="s3">);</span>
+
+							<span class="s4">const </span><span class="s1">build </span><span class="s3">= () =&gt; {</span>
+								<span class="s1">newModule</span><span class="s3">.</span><span class="s1">build</span><span class="s3">(</span>
+									<span class="s1">compiler</span><span class="s3">.</span><span class="s1">options</span><span class="s3">,</span>
+									<span class="s1">compilation</span><span class="s3">,</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */</span>
+									<span class="s3">(</span><span class="s4">null</span><span class="s3">),</span>
+									<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */</span>
+									<span class="s3">(</span><span class="s4">null</span><span class="s3">),</span>
+									<span class="s1">err </span><span class="s3">=&gt; {</span>
+										<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+											<span class="s4">if </span><span class="s3">(!</span><span class="s1">err</span><span class="s3">.</span><span class="s1">module</span><span class="s3">) {</span>
+												<span class="s1">err</span><span class="s3">.</span><span class="s1">module </span><span class="s3">= </span><span class="s1">newModule</span><span class="s3">;</span>
+											<span class="s3">}</span>
+											<span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+										<span class="s3">}</span>
+										<span class="s1">integrate</span><span class="s3">();</span>
+									<span class="s3">}</span>
+								<span class="s3">);</span>
+							<span class="s3">};</span>
+
+							<span class="s4">const </span><span class="s1">integrate </span><span class="s3">= () =&gt; {</span>
+								<span class="s4">if </span><span class="s3">(</span><span class="s1">backCompat</span><span class="s3">) {</span>
+									<span class="s1">ChunkGraph</span><span class="s3">.</span><span class="s1">setChunkGraphForModule</span><span class="s3">(</span><span class="s1">newModule</span><span class="s3">, </span><span class="s1">chunkGraph</span><span class="s3">);</span>
+									<span class="s1">ModuleGraph</span><span class="s3">.</span><span class="s1">setModuleGraphForModule</span><span class="s3">(</span><span class="s1">newModule</span><span class="s3">, </span><span class="s1">moduleGraph</span><span class="s3">);</span>
+								<span class="s3">}</span>
+
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">warning of concatConfiguration</span><span class="s3">.</span><span class="s1">getWarningsSorted</span><span class="s3">()) {</span>
+									<span class="s1">moduleGraph</span>
+										<span class="s3">.</span><span class="s1">getOptimizationBailout</span><span class="s3">(</span><span class="s1">newModule</span><span class="s3">)</span>
+										<span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">formatBailoutWarning</span><span class="s3">(</span><span class="s1">warning</span><span class="s3">[</span><span class="s7">0</span><span class="s3">], </span><span class="s1">warning</span><span class="s3">[</span><span class="s7">1</span><span class="s3">]));</span>
+								<span class="s3">}</span>
+								<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">cloneModuleAttributes</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">, </span><span class="s1">newModule</span><span class="s3">);</span>
+								<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">m of modules</span><span class="s3">) {</span>
+									<span class="s0">// add to builtModules when one of the included modules was built</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">builtModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">m</span><span class="s3">)) {</span>
+										<span class="s1">compilation</span><span class="s3">.</span><span class="s1">builtModules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newModule</span><span class="s3">);</span>
+									<span class="s3">}</span>
+									<span class="s4">if </span><span class="s3">(</span><span class="s1">m </span><span class="s3">!== </span><span class="s1">rootModule</span><span class="s3">) {</span>
+										<span class="s0">// attach external references to the concatenated module too</span>
+										<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">copyOutgoingModuleConnections</span><span class="s3">(</span>
+											<span class="s1">m</span><span class="s3">,</span>
+											<span class="s1">newModule</span><span class="s3">,</span>
+											<span class="s1">c </span><span class="s3">=&gt;</span>
+												<span class="s1">c</span><span class="s3">.</span><span class="s1">originModule </span><span class="s3">=== </span><span class="s1">m </span><span class="s3">&amp;&amp;</span>
+												<span class="s3">!(</span>
+													<span class="s1">c</span><span class="s3">.</span><span class="s1">dependency </span><span class="s4">instanceof </span><span class="s1">HarmonyImportDependency </span><span class="s3">&amp;&amp;</span>
+													<span class="s1">modules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">c</span><span class="s3">.</span><span class="s1">module</span><span class="s3">)</span>
+												<span class="s3">)</span>
+										<span class="s3">);</span>
+										<span class="s0">// remove module from chunk</span>
+										<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunkGraph</span><span class="s3">.</span><span class="s1">getModuleChunksIterable</span><span class="s3">(</span>
+											<span class="s1">rootModule</span>
+										<span class="s3">)) {</span>
+											<span class="s4">const </span><span class="s1">sourceTypes </span><span class="s3">= </span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getChunkModuleSourceTypes</span><span class="s3">(</span>
+												<span class="s1">chunk</span><span class="s3">,</span>
+												<span class="s1">m</span>
+											<span class="s3">);</span>
+											<span class="s4">if </span><span class="s3">(</span><span class="s1">sourceTypes</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">1</span><span class="s3">) {</span>
+												<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">disconnectChunkAndModule</span><span class="s3">(</span><span class="s1">chunk</span><span class="s3">, </span><span class="s1">m</span><span class="s3">);</span>
+											<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+												<span class="s4">const </span><span class="s1">newSourceTypes </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">sourceTypes</span><span class="s3">);</span>
+												<span class="s1">newSourceTypes</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">JS_TYPE</span><span class="s3">);</span>
+												<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">setChunkModuleSourceTypes</span><span class="s3">(</span>
+													<span class="s1">chunk</span><span class="s3">,</span>
+													<span class="s1">m</span><span class="s3">,</span>
+													<span class="s1">newSourceTypes</span>
+												<span class="s3">);</span>
+											<span class="s3">}</span>
+										<span class="s3">}</span>
+									<span class="s3">}</span>
+								<span class="s3">}</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">);</span>
+								<span class="s1">ChunkGraph</span><span class="s3">.</span><span class="s1">clearChunkGraphForModule</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">);</span>
+								<span class="s1">ModuleGraph</span><span class="s3">.</span><span class="s1">clearModuleGraphForModule</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">);</span>
+
+								<span class="s0">// remove module from chunk</span>
+								<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">replaceModule</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">, </span><span class="s1">newModule</span><span class="s3">);</span>
+								<span class="s0">// replace module references with the concatenated module</span>
+								<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">moveModuleConnections</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">, </span><span class="s1">newModule</span><span class="s3">, </span><span class="s1">c </span><span class="s3">=&gt; {</span>
+									<span class="s4">const </span><span class="s1">otherModule </span><span class="s3">=</span>
+										<span class="s1">c</span><span class="s3">.</span><span class="s1">module </span><span class="s3">=== </span><span class="s1">rootModule </span><span class="s3">? </span><span class="s1">c</span><span class="s3">.</span><span class="s1">originModule </span><span class="s3">: </span><span class="s1">c</span><span class="s3">.</span><span class="s1">module</span><span class="s3">;</span>
+									<span class="s4">const </span><span class="s1">innerConnection </span><span class="s3">=</span>
+										<span class="s1">c</span><span class="s3">.</span><span class="s1">dependency </span><span class="s4">instanceof </span><span class="s1">HarmonyImportDependency </span><span class="s3">&amp;&amp;</span>
+										<span class="s1">modules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Module} */ </span><span class="s3">(</span><span class="s1">otherModule</span><span class="s3">));</span>
+									<span class="s4">return </span><span class="s3">!</span><span class="s1">innerConnection</span><span class="s3">;</span>
+								<span class="s3">});</span>
+								<span class="s0">// add concatenated module to the compilation</span>
+								<span class="s1">compilation</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">newModule</span><span class="s3">);</span>
+
+								<span class="s1">callback</span><span class="s3">();</span>
+							<span class="s3">};</span>
+
+							<span class="s1">build</span><span class="s3">();</span>
+						<span class="s3">},</span>
+						<span class="s1">err </span><span class="s3">=&gt; {</span>
+							<span class="s1">logger</span><span class="s3">.</span><span class="s1">timeEnd</span><span class="s3">(</span><span class="s2">&quot;create concatenated modules&quot;</span><span class="s3">);</span>
+							<span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">.</span><span class="s1">bind</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">err</span><span class="s3">));</span>
+						<span class="s3">}</span>
+					<span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">);</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation the compilation</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module to be added</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime the runtime scope</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Set&lt;Module&gt;} the imported modules</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_getImports</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">set </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">dep of module</span><span class="s3">.</span><span class="s1">dependencies</span><span class="s3">) {</span>
+			<span class="s0">// Get reference info only for harmony Dependencies</span>
+			<span class="s4">if </span><span class="s3">(!(</span><span class="s1">dep </span><span class="s4">instanceof </span><span class="s1">HarmonyImportDependency</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+
+			<span class="s4">const </span><span class="s1">connection </span><span class="s3">= </span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getConnection</span><span class="s3">(</span><span class="s1">dep</span><span class="s3">);</span>
+			<span class="s0">// Reference is valid and has a module</span>
+			<span class="s4">if </span><span class="s3">(</span>
+				<span class="s3">!</span><span class="s1">connection </span><span class="s3">||</span>
+				<span class="s3">!</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module </span><span class="s3">||</span>
+				<span class="s3">!</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">isTargetActive</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+			<span class="s3">) {</span>
+				<span class="s4">continue</span><span class="s3">;</span>
+			<span class="s3">}</span>
+
+			<span class="s4">const </span><span class="s1">importedNames </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">getDependencyReferencedExports</span><span class="s3">(</span>
+				<span class="s1">dep</span><span class="s3">,</span>
+				<span class="s1">undefined</span>
+			<span class="s3">);</span>
+
+			<span class="s4">if </span><span class="s3">(</span>
+				<span class="s1">importedNames</span><span class="s3">.</span><span class="s1">every</span><span class="s3">(</span><span class="s1">i </span><span class="s3">=&gt;</span>
+					<span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">i</span><span class="s3">) ? </span><span class="s1">i</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0 </span><span class="s3">: </span><span class="s1">i</span><span class="s3">.</span><span class="s1">name</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span>
+				<span class="s3">) ||</span>
+				<span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getProvidedExports</span><span class="s3">(</span><span class="s1">module</span><span class="s3">))</span>
+			<span class="s3">) {</span>
+				<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">module</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">return </span><span class="s1">set</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Compilation} compilation webpack compilation</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ConcatConfiguration} config concat configuration (will be modified when added)</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module to be added</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime the runtime scope of the generated code</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} activeRuntime the runtime scope of the root module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;Module&gt;} possibleModules modules that are candidates</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Set&lt;Module&gt;} candidates list of potential candidates (will be added to)</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Map&lt;Module, Module | ((requestShortener: RequestShortener) =&gt; string)&gt;} failureCache cache for problematic modules to be more performant</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ChunkGraph} chunkGraph the chunk graph</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{boolean} avoidMutateOnFailure avoid mutating the config when adding fails</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Statistics} statistics gathering metrics</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{null | Module | ((requestShortener: RequestShortener) =&gt; string)} the problematic module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">_tryToAdd</span><span class="s3">(</span>
+		<span class="s1">compilation</span><span class="s3">,</span>
+		<span class="s1">config</span><span class="s3">,</span>
+		<span class="s1">module</span><span class="s3">,</span>
+		<span class="s1">runtime</span><span class="s3">,</span>
+		<span class="s1">activeRuntime</span><span class="s3">,</span>
+		<span class="s1">possibleModules</span><span class="s3">,</span>
+		<span class="s1">candidates</span><span class="s3">,</span>
+		<span class="s1">failureCache</span><span class="s3">,</span>
+		<span class="s1">chunkGraph</span><span class="s3">,</span>
+		<span class="s1">avoidMutateOnFailure</span><span class="s3">,</span>
+		<span class="s1">statistics</span>
+	<span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s1">failureCache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry</span><span class="s3">) {</span>
+			<span class="s1">statistics</span><span class="s3">.</span><span class="s1">cached</span><span class="s3">++;</span>
+			<span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Already added?</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">config</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)) {</span>
+			<span class="s1">statistics</span><span class="s3">.</span><span class="s1">alreadyInConfig</span><span class="s3">++;</span>
+			<span class="s4">return null</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Not possible to add?</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">possibleModules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)) {</span>
+			<span class="s1">statistics</span><span class="s3">.</span><span class="s1">invalidModule</span><span class="s3">++;</span>
+			<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">module</span><span class="s3">); </span><span class="s0">// cache failures for performance</span>
+			<span class="s4">return </span><span class="s1">module</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Module must be in the correct chunks</span>
+		<span class="s4">const </span><span class="s1">missingChunks </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+			<span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleChunksIterable</span><span class="s3">(</span><span class="s1">config</span><span class="s3">.</span><span class="s1">rootModule</span><span class="s3">)</span>
+		<span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">chunk </span><span class="s3">=&gt; !</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">isModuleInChunk</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">));</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">missingChunks</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener request shortener</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} problem description</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">problem </span><span class="s3">= </span><span class="s1">requestShortener </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">missingChunksList </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+					<span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">missingChunks</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">chunk </span><span class="s3">=&gt; </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">name </span><span class="s3">|| </span><span class="s2">&quot;unnamed chunk(s)&quot;</span><span class="s3">))</span>
+				<span class="s3">).</span><span class="s1">sort</span><span class="s3">();</span>
+				<span class="s4">const </span><span class="s1">chunks </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+					<span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span>
+						<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getModuleChunksIterable</span><span class="s3">(</span><span class="s1">module</span><span class="s3">)).</span><span class="s1">map</span><span class="s3">(</span>
+							<span class="s1">chunk </span><span class="s3">=&gt; </span><span class="s1">chunk</span><span class="s3">.</span><span class="s1">name </span><span class="s3">|| </span><span class="s2">&quot;unnamed chunk(s)&quot;</span>
+						<span class="s3">)</span>
+					<span class="s3">)</span>
+				<span class="s3">).</span><span class="s1">sort</span><span class="s3">();</span>
+				<span class="s4">return </span><span class="s2">`Module </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+					<span class="s1">requestShortener</span>
+				<span class="s3">)} </span><span class="s2">is not in the same chunk(s) (expected in chunk(s) </span><span class="s1">$</span><span class="s3">{</span><span class="s1">missingChunksList</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span>
+					<span class="s2">&quot;, &quot;</span>
+				<span class="s3">)}</span><span class="s2">, module is in chunk(s) </span><span class="s1">$</span><span class="s3">{</span><span class="s1">chunks</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">)`</span><span class="s3">;</span>
+			<span class="s3">};</span>
+			<span class="s1">statistics</span><span class="s3">.</span><span class="s1">incorrectChunks</span><span class="s3">++;</span>
+			<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">); </span><span class="s0">// cache failures for performance</span>
+			<span class="s4">return </span><span class="s1">problem</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">const </span><span class="s1">moduleGraph </span><span class="s3">= </span><span class="s1">compilation</span><span class="s3">.</span><span class="s1">moduleGraph</span><span class="s3">;</span>
+
+		<span class="s4">const </span><span class="s1">incomingConnections </span><span class="s3">=</span>
+			<span class="s1">moduleGraph</span><span class="s3">.</span><span class="s1">getIncomingConnectionsByOriginModule</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+
+		<span class="s4">const </span><span class="s1">incomingConnectionsFromNonModules </span><span class="s3">=</span>
+			<span class="s1">incomingConnections</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s4">null</span><span class="s3">) || </span><span class="s1">incomingConnections</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">undefined</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">incomingConnectionsFromNonModules</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">activeNonModulesConnections </span><span class="s3">=</span>
+				<span class="s1">incomingConnectionsFromNonModules</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">connection </span><span class="s3">=&gt;</span>
+					<span class="s0">// We are not interested in inactive connections</span>
+					<span class="s0">// or connections without dependency</span>
+					<span class="s1">connection</span><span class="s3">.</span><span class="s1">isActive</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+				<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">activeNonModulesConnections</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener request shortener</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} problem description</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">problem </span><span class="s3">= </span><span class="s1">requestShortener </span><span class="s3">=&gt; {</span>
+					<span class="s4">const </span><span class="s1">importingExplanations </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span>
+						<span class="s1">activeNonModulesConnections</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">explanation</span><span class="s3">).</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">Boolean</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">explanations </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">importingExplanations</span><span class="s3">).</span><span class="s1">sort</span><span class="s3">();</span>
+					<span class="s4">return </span><span class="s2">`Module </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+						<span class="s1">requestShortener</span>
+					<span class="s3">)} </span><span class="s2">is referenced </span><span class="s1">$</span><span class="s3">{</span>
+						<span class="s1">explanations</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span>
+							<span class="s3">? </span><span class="s2">`by: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">explanations</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">`</span>
+							<span class="s3">: </span><span class="s2">&quot;in an unsupported way&quot;</span>
+					<span class="s3">}</span><span class="s2">`</span><span class="s3">;</span>
+				<span class="s3">};</span>
+				<span class="s1">statistics</span><span class="s3">.</span><span class="s1">incorrectDependency</span><span class="s3">++;</span>
+				<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">); </span><span class="s0">// cache failures for performance</span>
+				<span class="s4">return </span><span class="s1">problem</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, readonly ModuleGraph.ModuleGraphConnection[]&gt;} */</span>
+		<span class="s4">const </span><span class="s1">incomingConnectionsFromModules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">connections</span><span class="s3">] </span><span class="s1">of incomingConnections</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">) {</span>
+				<span class="s0">// Ignore connection from orphan modules</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">getNumberOfModuleChunks</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">) === </span><span class="s7">0</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+
+				<span class="s0">// We don't care for connections from other runtimes</span>
+				<span class="s4">let </span><span class="s1">originRuntime</span><span class="s3">;</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">r of chunkGraph</span><span class="s3">.</span><span class="s1">getModuleRuntimes</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">)) {</span>
+					<span class="s1">originRuntime </span><span class="s3">= </span><span class="s1">mergeRuntimeOwned</span><span class="s3">(</span><span class="s1">originRuntime</span><span class="s3">, </span><span class="s1">r</span><span class="s3">);</span>
+				<span class="s3">}</span>
+
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">intersectRuntime</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">originRuntime</span><span class="s3">)) </span><span class="s4">continue</span><span class="s3">;</span>
+
+				<span class="s0">// We are not interested in inactive connections</span>
+				<span class="s4">const </span><span class="s1">activeConnections </span><span class="s3">= </span><span class="s1">connections</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">connection </span><span class="s3">=&gt;</span>
+					<span class="s1">connection</span><span class="s3">.</span><span class="s1">isActive</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+				<span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">activeConnections</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">)</span>
+					<span class="s1">incomingConnectionsFromModules</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">activeConnections</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s4">const </span><span class="s1">incomingModules </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">incomingConnectionsFromModules</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">());</span>
+
+		<span class="s0">// Module must be in the same chunks like the referencing module</span>
+		<span class="s4">const </span><span class="s1">otherChunkModules </span><span class="s3">= </span><span class="s1">incomingModules</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">originModule </span><span class="s3">=&gt; {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">chunk of chunkGraph</span><span class="s3">.</span><span class="s1">getModuleChunksIterable</span><span class="s3">(</span>
+				<span class="s1">config</span><span class="s3">.</span><span class="s1">rootModule</span>
+			<span class="s3">)) {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">chunkGraph</span><span class="s3">.</span><span class="s1">isModuleInChunk</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">chunk</span><span class="s3">)) {</span>
+					<span class="s4">return true</span><span class="s3">;</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">return false</span><span class="s3">;</span>
+		<span class="s3">});</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">otherChunkModules</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener request shortener</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} problem description</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">problem </span><span class="s3">= </span><span class="s1">requestShortener </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">names </span><span class="s3">= </span><span class="s1">otherChunkModules</span>
+					<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">m </span><span class="s3">=&gt; </span><span class="s1">m</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span><span class="s1">requestShortener</span><span class="s3">))</span>
+					<span class="s3">.</span><span class="s1">sort</span><span class="s3">();</span>
+				<span class="s4">return </span><span class="s2">`Module </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+					<span class="s1">requestShortener</span>
+				<span class="s3">)} </span><span class="s2">is referenced from different chunks by these modules: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">names</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span>
+					<span class="s2">&quot;, &quot;</span>
+				<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+			<span class="s3">};</span>
+			<span class="s1">statistics</span><span class="s3">.</span><span class="s1">incorrectChunksOfImporter</span><span class="s3">++;</span>
+			<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">); </span><span class="s0">// cache failures for performance</span>
+			<span class="s4">return </span><span class="s1">problem</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, readonly ModuleGraph.ModuleGraphConnection[]&gt;} */</span>
+		<span class="s4">const </span><span class="s1">nonHarmonyConnections </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">connections</span><span class="s3">] </span><span class="s1">of incomingConnectionsFromModules</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">selected </span><span class="s3">= </span><span class="s1">connections</span><span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span>
+				<span class="s1">connection </span><span class="s3">=&gt;</span>
+					<span class="s3">!</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">dependency </span><span class="s3">||</span>
+					<span class="s3">!(</span><span class="s1">connection</span><span class="s3">.</span><span class="s1">dependency </span><span class="s4">instanceof </span><span class="s1">HarmonyImportDependency</span><span class="s3">)</span>
+			<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">selected</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">)</span>
+				<span class="s1">nonHarmonyConnections</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">connections</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">nonHarmonyConnections</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+			<span class="s5">/**</span>
+			 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener request shortener</span>
+			 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} problem description</span>
+			 <span class="s5">*/</span>
+			<span class="s4">const </span><span class="s1">problem </span><span class="s3">= </span><span class="s1">requestShortener </span><span class="s3">=&gt; {</span>
+				<span class="s4">const </span><span class="s1">names </span><span class="s3">= </span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">nonHarmonyConnections</span><span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span>
+						<span class="s3">([</span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">connections</span><span class="s3">]) =&gt;</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">originModule</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+								<span class="s1">requestShortener</span>
+							<span class="s3">)} </span><span class="s2">(referenced with </span><span class="s1">$</span><span class="s3">{</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+								<span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span>
+									<span class="s1">connections</span>
+										<span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">c </span><span class="s3">=&gt; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">dependency </span><span class="s3">&amp;&amp; </span><span class="s1">c</span><span class="s3">.</span><span class="s1">dependency</span><span class="s3">.</span><span class="s1">type</span><span class="s3">)</span>
+										<span class="s3">.</span><span class="s1">filter</span><span class="s3">(</span><span class="s1">Boolean</span><span class="s3">)</span>
+								<span class="s3">)</span>
+							<span class="s3">)</span>
+								<span class="s3">.</span><span class="s1">sort</span><span class="s3">()</span>
+								<span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">)`</span>
+					<span class="s3">)</span>
+					<span class="s3">.</span><span class="s1">sort</span><span class="s3">();</span>
+				<span class="s4">return </span><span class="s2">`Module </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+					<span class="s1">requestShortener</span>
+				<span class="s3">)} </span><span class="s2">is referenced from these modules with unsupported syntax: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">names</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span>
+					<span class="s2">&quot;, &quot;</span>
+				<span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+			<span class="s3">};</span>
+			<span class="s1">statistics</span><span class="s3">.</span><span class="s1">incorrectModuleDependency</span><span class="s3">++;</span>
+			<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">); </span><span class="s0">// cache failures for performance</span>
+			<span class="s4">return </span><span class="s1">problem</span><span class="s3">;</span>
+		<span class="s3">}</span>
+
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">runtime </span><span class="s3">!== </span><span class="s1">undefined </span><span class="s3">&amp;&amp; </span><span class="s4">typeof </span><span class="s1">runtime </span><span class="s3">!== </span><span class="s2">&quot;string&quot;</span><span class="s3">) {</span>
+			<span class="s0">// Module must be consistently referenced in the same runtimes</span>
+			<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{{ originModule: Module, runtimeCondition: RuntimeSpec }[]} */</span>
+			<span class="s4">const </span><span class="s1">otherRuntimeConnections </span><span class="s3">= [];</span>
+			<span class="s1">outer</span><span class="s3">: </span><span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span>
+				<span class="s1">originModule</span><span class="s3">,</span>
+				<span class="s1">connections</span>
+			<span class="s3">] </span><span class="s1">of incomingConnectionsFromModules</span><span class="s3">) {</span>
+				<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{false | RuntimeSpec} */</span>
+				<span class="s4">let </span><span class="s1">currentRuntimeCondition </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">connection of connections</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">runtimeCondition </span><span class="s3">= </span><span class="s1">filterRuntime</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">, </span><span class="s1">runtime </span><span class="s3">=&gt;</span>
+						<span class="s1">connection</span><span class="s3">.</span><span class="s1">isTargetActive</span><span class="s3">(</span><span class="s1">runtime</span><span class="s3">)</span>
+					<span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">runtimeCondition </span><span class="s3">=== </span><span class="s4">false</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">runtimeCondition </span><span class="s3">=== </span><span class="s4">true</span><span class="s3">) </span><span class="s4">continue </span><span class="s1">outer</span><span class="s3">;</span>
+					<span class="s1">currentRuntimeCondition </span><span class="s3">=</span>
+						<span class="s1">currentRuntimeCondition </span><span class="s3">!== </span><span class="s4">false</span>
+							<span class="s3">? </span><span class="s1">mergeRuntime</span><span class="s3">(</span><span class="s1">currentRuntimeCondition</span><span class="s3">, </span><span class="s1">runtimeCondition</span><span class="s3">)</span>
+							<span class="s3">: </span><span class="s1">runtimeCondition</span><span class="s3">;</span>
+				<span class="s3">}</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">currentRuntimeCondition </span><span class="s3">!== </span><span class="s4">false</span><span class="s3">) {</span>
+					<span class="s1">otherRuntimeConnections</span><span class="s3">.</span><span class="s1">push</span><span class="s3">({</span>
+						<span class="s1">originModule</span><span class="s3">,</span>
+						<span class="s1">runtimeCondition</span><span class="s3">: </span><span class="s1">currentRuntimeCondition</span>
+					<span class="s3">});</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">otherRuntimeConnections</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s5">/**</span>
+				 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RequestShortener} requestShortener request shortener</span>
+				 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{string} problem description</span>
+				 <span class="s5">*/</span>
+				<span class="s4">const </span><span class="s1">problem </span><span class="s3">= </span><span class="s1">requestShortener </span><span class="s3">=&gt;</span>
+					<span class="s2">`Module </span><span class="s1">$</span><span class="s3">{</span><span class="s1">module</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+						<span class="s1">requestShortener</span>
+					<span class="s3">)} </span><span class="s2">is runtime-dependent referenced by these modules: </span><span class="s1">$</span><span class="s3">{</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span>
+						<span class="s1">otherRuntimeConnections</span><span class="s3">,</span>
+						<span class="s3">({ </span><span class="s1">originModule</span><span class="s3">, </span><span class="s1">runtimeCondition </span><span class="s3">}) =&gt;</span>
+							<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s1">originModule</span><span class="s3">.</span><span class="s1">readableIdentifier</span><span class="s3">(</span>
+								<span class="s1">requestShortener</span>
+							<span class="s3">)} </span><span class="s2">(expected runtime </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeToString</span><span class="s3">(</span>
+								<span class="s1">runtime</span>
+							<span class="s3">)}</span><span class="s2">, module is only referenced in </span><span class="s1">$</span><span class="s3">{</span><span class="s1">runtimeToString</span><span class="s3">(</span>
+								<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{RuntimeSpec} */ </span><span class="s3">(</span><span class="s1">runtimeCondition</span><span class="s3">)</span>
+							<span class="s3">)}</span><span class="s2">)`</span>
+					<span class="s3">).</span><span class="s1">join</span><span class="s3">(</span><span class="s2">&quot;, &quot;</span><span class="s3">)}</span><span class="s2">`</span><span class="s3">;</span>
+				<span class="s1">statistics</span><span class="s3">.</span><span class="s1">incorrectRuntimeCondition</span><span class="s3">++;</span>
+				<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">); </span><span class="s0">// cache failures for performance</span>
+				<span class="s4">return </span><span class="s1">problem</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s4">let </span><span class="s1">backup</span><span class="s3">;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">avoidMutateOnFailure</span><span class="s3">) {</span>
+			<span class="s1">backup </span><span class="s3">= </span><span class="s1">config</span><span class="s3">.</span><span class="s1">snapshot</span><span class="s3">();</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Add the module</span>
+		<span class="s1">config</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+
+		<span class="s1">incomingModules</span><span class="s3">.</span><span class="s1">sort</span><span class="s3">(</span><span class="s1">compareModulesByIdentifier</span><span class="s3">);</span>
+
+		<span class="s0">// Every module which depends on the added module must be in the configuration too.</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">originModule of incomingModules</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">problem </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_tryToAdd</span><span class="s3">(</span>
+				<span class="s1">compilation</span><span class="s3">,</span>
+				<span class="s1">config</span><span class="s3">,</span>
+				<span class="s1">originModule</span><span class="s3">,</span>
+				<span class="s1">runtime</span><span class="s3">,</span>
+				<span class="s1">activeRuntime</span><span class="s3">,</span>
+				<span class="s1">possibleModules</span><span class="s3">,</span>
+				<span class="s1">candidates</span><span class="s3">,</span>
+				<span class="s1">failureCache</span><span class="s3">,</span>
+				<span class="s1">chunkGraph</span><span class="s3">,</span>
+				<span class="s4">false</span><span class="s3">,</span>
+				<span class="s1">statistics</span>
+			<span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">problem</span><span class="s3">) {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">backup </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">config</span><span class="s3">.</span><span class="s1">rollback</span><span class="s3">(</span><span class="s1">backup</span><span class="s3">);</span>
+				<span class="s1">statistics</span><span class="s3">.</span><span class="s1">importerFailed</span><span class="s3">++;</span>
+				<span class="s1">failureCache</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">); </span><span class="s0">// cache failures for performance</span>
+				<span class="s4">return </span><span class="s1">problem</span><span class="s3">;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+
+		<span class="s0">// Add imports to possible candidates list</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">imp of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_getImports</span><span class="s3">(</span><span class="s1">compilation</span><span class="s3">, </span><span class="s1">module</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">)) {</span>
+			<span class="s1">candidates</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">imp</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s1">statistics</span><span class="s3">.</span><span class="s1">added</span><span class="s3">++;</span>
+		<span class="s4">return null</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{Module | ((requestShortener: RequestShortener) =&gt; string)} Problem */</span>
+
+<span class="s4">class </span><span class="s1">ConcatConfiguration </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} rootModule the root module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{RuntimeSpec} runtime the runtime</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">, </span><span class="s1">runtime</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">rootModule </span><span class="s3">= </span><span class="s1">rootModule</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">runtime </span><span class="s3">= </span><span class="s1">runtime</span><span class="s3">;</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Set&lt;Module&gt;} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">modules </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">rootModule</span><span class="s3">);</span>
+		<span class="s5">/** </span><span class="s6">@type </span><span class="s5">{Map&lt;Module, Problem&gt;} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">warnings </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">*/</span>
+	<span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{boolean} true, when the module is in the module set</span>
+	 <span class="s5">*/</span>
+	<span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">) {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s1">module</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">isEmpty</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s7">1</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Module} module the module</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Problem} problem the problem</span>
+	 <span class="s5">*/</span>
+	<span class="s1">addWarning</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">warnings</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">module</span><span class="s3">, </span><span class="s1">problem</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Map&lt;Module, Problem&gt;} warnings</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getWarningsSorted</span><span class="s3">() {</span>
+		<span class="s4">return new </span><span class="s1">Map</span><span class="s3">(</span>
+			<span class="s1">Array</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">warnings</span><span class="s3">).</span><span class="s1">sort</span><span class="s3">((</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) =&gt; {</span>
+				<span class="s4">const </span><span class="s1">ai </span><span class="s3">= </span><span class="s1">a</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">identifier</span><span class="s3">();</span>
+				<span class="s4">const </span><span class="s1">bi </span><span class="s3">= </span><span class="s1">b</span><span class="s3">[</span><span class="s7">0</span><span class="s3">].</span><span class="s1">identifier</span><span class="s3">();</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">ai </span><span class="s3">&lt; </span><span class="s1">bi</span><span class="s3">) </span><span class="s4">return </span><span class="s3">-</span><span class="s7">1</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">ai </span><span class="s3">&gt; </span><span class="s1">bi</span><span class="s3">) </span><span class="s4">return </span><span class="s7">1</span><span class="s3">;</span>
+				<span class="s4">return </span><span class="s7">0</span><span class="s3">;</span>
+			<span class="s3">})</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Set&lt;Module&gt;} modules as set</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getModules</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">snapshot</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">.</span><span class="s1">size</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} snapshot snapshot</span>
+	 <span class="s5">*/</span>
+	<span class="s1">rollback</span><span class="s3">(</span><span class="s1">snapshot</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">modules </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">modules</span><span class="s3">;</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">m of modules</span><span class="s3">) {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">snapshot </span><span class="s3">=== </span><span class="s7">0</span><span class="s3">) {</span>
+				<span class="s1">modules</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">m</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">snapshot</span><span class="s3">--;</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">ModuleConcatenationPlugin</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

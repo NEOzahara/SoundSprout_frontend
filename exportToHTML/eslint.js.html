@@ -1,0 +1,731 @@
+<html>
+<head>
+<title>eslint.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #5f826b; font-style: italic;}
+.s1 { color: #67a37c; font-style: italic;}
+.s2 { color: #bcbec4;}
+.s3 { color: #6aab73;}
+.s4 { color: #bcbec4;}
+.s5 { color: #7a7e85;}
+.s6 { color: #cf8e6d;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+eslint.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/**</span>
+ <span class="s0">* </span><span class="s1">@fileoverview </span><span class="s0">Main API Class</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Kai Cataldo</span>
+ <span class="s0">* </span><span class="s1">@author </span><span class="s0">Toru Nagashima</span>
+ <span class="s0">*/</span>
+
+<span class="s3">&quot;use strict&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Requirements</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">path </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;path&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">fs </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;fs&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">promisify </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;util&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">CLIEngine</span><span class="s4">, </span><span class="s2">getCLIEngineInternalSlots </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../cli-engine/cli-engine&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s2">BuiltinRules </span><span class="s4">= </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../rules&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s4">{</span>
+    <span class="s2">Legacy</span><span class="s4">: {</span>
+        <span class="s2">ConfigOps</span><span class="s4">: {</span>
+            <span class="s2">getRuleSeverity</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+<span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;@eslint/eslintrc&quot;</span><span class="s4">);</span>
+<span class="s6">const </span><span class="s4">{ </span><span class="s2">version </span><span class="s4">} = </span><span class="s2">require</span><span class="s4">(</span><span class="s3">&quot;../../package.json&quot;</span><span class="s4">);</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Typedefs</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../cli-engine/cli-engine&quot;).LintReport} CLIEngineLintReport */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).DeprecatedRuleInfo} DeprecatedRuleInfo */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).ConfigData} ConfigData */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).LintMessage} LintMessage */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).SuppressedLintMessage} SuppressedLintMessage */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).Plugin} Plugin */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).Rule} Rule */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).LintResult} LintResult */</span>
+<span class="s0">/** </span><span class="s1">@typedef </span><span class="s0">{import(&quot;../shared/types&quot;).ResultsMeta} ResultsMeta */</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The main formatter object.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">LoadedFormatter</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{(results: LintResult[], resultsMeta: ResultsMeta) =&gt; string | Promise&lt;string&gt;} format format function.</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The options with which to configure the ESLint instance.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} ESLintOptions</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [allowInlineConfig] Enable or disable inline configuration comments.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ConfigData} [baseConfig] Base config object, extended by all configs used with this instance</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [cache] Enable result caching.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [cacheLocation] The cache file to use instead of .eslintcache.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{&quot;metadata&quot; | &quot;content&quot;} [cacheStrategy] The strategy used to detect changed files.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [cwd] The value to use for the current working directory.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [errorOnUnmatchedPattern] If `false` then `ESLint#lintFiles()` doesn't throw even if no target files found. Defaults to `true`.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [extensions] An array of file extensions to check.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean|Function} [fix] Execute in autofix mode. If a function, should return a boolean.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [fixTypes] Array of rule types to apply fixes for.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [globInputPaths] Set to false to skip glob resolution of input file paths to lint (default: true). If false, each input file paths is assumed to be a non-glob path to an existing file.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [ignore] False disables use of .eslintignore.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [ignorePath] The ignore file to use instead of .eslintignore.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ConfigData} [overrideConfig] Override config object, overrides all configs used with this instance</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [overrideConfigFile] The configuration file to use.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Record&lt;string,Plugin&gt;|null} [plugins] Preloaded plugins. This is a map-like object, keys are plugin IDs and each value is implementation.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{&quot;error&quot; | &quot;warn&quot; | &quot;off&quot;} [reportUnusedDisableDirectives] the severity to report unused eslint-disable directives.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} [resolvePluginsRelativeTo] The folder where plugins should be resolved from, defaulting to the CWD.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string[]} [rulePaths] An array of directories to load custom rules from.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{boolean} [useEslintrc] False disables looking for .eslintrc.* files.</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* A rules metadata object.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} RulesMeta</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{string} id The plugin ID.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{Object} definition The plugin definition.</span>
+ <span class="s0">*/</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Private members for the `ESLint` instance.</span>
+ <span class="s0">* </span><span class="s1">@typedef </span><span class="s0">{Object} ESLintPrivateMembers</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{CLIEngine} cliEngine The wrapped CLIEngine instance.</span>
+ <span class="s0">* </span><span class="s1">@property </span><span class="s0">{ESLintOptions} options The options used to instantiate the ESLint instance.</span>
+ <span class="s0">*/</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Helpers</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s6">const </span><span class="s2">writeFile </span><span class="s4">= </span><span class="s2">promisify</span><span class="s4">(</span><span class="s2">fs</span><span class="s4">.</span><span class="s2">writeFile</span><span class="s4">);</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The map with which to store private class members.</span>
+ <span class="s0">* </span><span class="s1">@type </span><span class="s0">{WeakMap&lt;ESLint, ESLintPrivateMembers&gt;}</span>
+ <span class="s0">*/</span>
+<span class="s6">const </span><span class="s2">privateMembersMap </span><span class="s4">= </span><span class="s6">new </span><span class="s2">WeakMap</span><span class="s4">();</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a given value is a non-empty string or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} x The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if `x` is a non-empty string.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">x</span><span class="s4">) {</span>
+    <span class="s6">return typeof </span><span class="s2">x </span><span class="s4">=== </span><span class="s3">&quot;string&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">x</span><span class="s4">.</span><span class="s2">trim</span><span class="s4">() !== </span><span class="s3">&quot;&quot;</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a given value is an array of non-empty strings or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} x The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if `x` is an array of non-empty strings.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isArrayOfNonEmptyString</span><span class="s4">(</span><span class="s2">x</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">x</span><span class="s4">) &amp;&amp; </span><span class="s2">x</span><span class="s4">.</span><span class="s2">every</span><span class="s4">(</span><span class="s2">isNonEmptyString</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a given value is a valid fix type or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} x The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if `x` is valid fix type.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isFixType</span><span class="s4">(</span><span class="s2">x</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">x </span><span class="s4">=== </span><span class="s3">&quot;directive&quot; </span><span class="s4">|| </span><span class="s2">x </span><span class="s4">=== </span><span class="s3">&quot;problem&quot; </span><span class="s4">|| </span><span class="s2">x </span><span class="s4">=== </span><span class="s3">&quot;suggestion&quot; </span><span class="s4">|| </span><span class="s2">x </span><span class="s4">=== </span><span class="s3">&quot;layout&quot;</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a given value is an array of fix types or not.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} x The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if `x` is an array of fix types.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">isFixTypeArray</span><span class="s4">(</span><span class="s2">x</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">x</span><span class="s4">) &amp;&amp; </span><span class="s2">x</span><span class="s4">.</span><span class="s2">every</span><span class="s4">(</span><span class="s2">isFixType</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The error for invalid options.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">ESLintInvalidOptionsError </span><span class="s6">extends </span><span class="s2">Error </span><span class="s4">{</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">messages</span><span class="s4">) {</span>
+        <span class="s6">super</span><span class="s4">(</span><span class="s3">`Invalid Options:</span><span class="s6">\n</span><span class="s3">- </span><span class="s2">$</span><span class="s4">{</span><span class="s2">messages</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s3">&quot;</span><span class="s6">\n</span><span class="s3">- &quot;</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">);</span>
+        <span class="s6">this</span><span class="s4">.</span><span class="s2">code </span><span class="s4">= </span><span class="s3">&quot;ESLINT_INVALID_OPTIONS&quot;</span><span class="s4">;</span>
+        <span class="s2">Error</span><span class="s4">.</span><span class="s2">captureStackTrace</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, </span><span class="s2">ESLintInvalidOptionsError</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Validates and normalizes options for the wrapped CLIEngine instance.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ESLintOptions} options The options to process.</span>
+ <span class="s0">* </span><span class="s1">@throws </span><span class="s0">{ESLintInvalidOptionsError} If of any of a variety of type errors.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ESLintOptions} The normalized options.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">processOptions</span><span class="s4">({</span>
+    <span class="s2">allowInlineConfig </span><span class="s4">= </span><span class="s6">true</span><span class="s4">, </span><span class="s5">// ← we cannot use `overrideConfig.noInlineConfig` instead because `allowInlineConfig` has side-effect that suppress warnings that show inline configs are ignored.</span>
+    <span class="s2">baseConfig </span><span class="s4">= </span><span class="s6">null</span><span class="s4">,</span>
+    <span class="s2">cache </span><span class="s4">= </span><span class="s6">false</span><span class="s4">,</span>
+    <span class="s2">cacheLocation </span><span class="s4">= </span><span class="s3">&quot;.eslintcache&quot;</span><span class="s4">,</span>
+    <span class="s2">cacheStrategy </span><span class="s4">= </span><span class="s3">&quot;metadata&quot;</span><span class="s4">,</span>
+    <span class="s2">cwd </span><span class="s4">= </span><span class="s2">process</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">(),</span>
+    <span class="s2">errorOnUnmatchedPattern </span><span class="s4">= </span><span class="s6">true</span><span class="s4">,</span>
+    <span class="s2">extensions </span><span class="s4">= </span><span class="s6">null</span><span class="s4">, </span><span class="s5">// ← should be null by default because if it's an array then it suppresses RFC20 feature.</span>
+    <span class="s2">fix </span><span class="s4">= </span><span class="s6">false</span><span class="s4">,</span>
+    <span class="s2">fixTypes </span><span class="s4">= </span><span class="s6">null</span><span class="s4">, </span><span class="s5">// ← should be null by default because if it's an array then it suppresses rules that don't have the `meta.type` property.</span>
+    <span class="s2">globInputPaths </span><span class="s4">= </span><span class="s6">true</span><span class="s4">,</span>
+    <span class="s2">ignore </span><span class="s4">= </span><span class="s6">true</span><span class="s4">,</span>
+    <span class="s2">ignorePath </span><span class="s4">= </span><span class="s6">null</span><span class="s4">, </span><span class="s5">// ← should be null by default because if it's a string then it may throw ENOENT.</span>
+    <span class="s2">overrideConfig </span><span class="s4">= </span><span class="s6">null</span><span class="s4">,</span>
+    <span class="s2">overrideConfigFile </span><span class="s4">= </span><span class="s6">null</span><span class="s4">,</span>
+    <span class="s2">plugins </span><span class="s4">= {},</span>
+    <span class="s2">reportUnusedDisableDirectives </span><span class="s4">= </span><span class="s6">null</span><span class="s4">, </span><span class="s5">// ← should be null by default because if it's a string then it overrides the 'reportUnusedDisableDirectives' setting in config files. And we cannot use `overrideConfig.reportUnusedDisableDirectives` instead because we cannot configure the `error` severity with that.</span>
+    <span class="s2">resolvePluginsRelativeTo </span><span class="s4">= </span><span class="s6">null</span><span class="s4">, </span><span class="s5">// ← should be null by default because if it's a string then it suppresses RFC47 feature.</span>
+    <span class="s2">rulePaths </span><span class="s4">= [],</span>
+    <span class="s2">useEslintrc </span><span class="s4">= </span><span class="s6">true</span><span class="s4">,</span>
+    <span class="s2">...unknownOptions</span>
+<span class="s4">}) {</span>
+    <span class="s6">const </span><span class="s2">errors </span><span class="s4">= [];</span>
+    <span class="s6">const </span><span class="s2">unknownOptionKeys </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">unknownOptions</span><span class="s4">);</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt;= </span><span class="s7">1</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">`Unknown options: </span><span class="s2">$</span><span class="s4">{</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s3">&quot;, &quot;</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">);</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;cacheFile&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'cacheFile' has been removed. Please use the 'cacheLocation' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;configFile&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'configFile' has been removed. Please use the 'overrideConfigFile' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;envs&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'envs' has been removed. Please use the 'overrideConfig.env' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;globals&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'globals' has been removed. Please use the 'overrideConfig.globals' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;ignorePattern&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'ignorePattern' has been removed. Please use the 'overrideConfig.ignorePatterns' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;parser&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'parser' has been removed. Please use the 'overrideConfig.parser' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;parserOptions&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'parserOptions' has been removed. Please use the 'overrideConfig.parserOptions' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;rules&quot;</span><span class="s4">)) {</span>
+            <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'rules' has been removed. Please use the 'overrideConfig.rules' option instead.&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">allowInlineConfig </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'allowInlineConfig' must be a boolean.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">baseConfig </span><span class="s4">!== </span><span class="s3">&quot;object&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'baseConfig' must be an object or null.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">cache </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'cache' must be a boolean.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">cacheLocation</span><span class="s4">)) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'cacheLocation' must be a non-empty string.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span>
+        <span class="s2">cacheStrategy </span><span class="s4">!== </span><span class="s3">&quot;metadata&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">cacheStrategy </span><span class="s4">!== </span><span class="s3">&quot;content&quot;</span>
+    <span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'cacheStrategy' must be any of </span><span class="s6">\&quot;</span><span class="s3">metadata</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">content</span><span class="s6">\&quot;</span><span class="s3">.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">) || !</span><span class="s2">path</span><span class="s4">.</span><span class="s2">isAbsolute</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">)) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'cwd' must be an absolute path.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">errorOnUnmatchedPattern </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'errorOnUnmatchedPattern' must be a boolean.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isArrayOfNonEmptyString</span><span class="s4">(</span><span class="s2">extensions</span><span class="s4">) &amp;&amp; </span><span class="s2">extensions </span><span class="s4">!== </span><span class="s6">null</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'extensions' must be an array of non-empty strings or null.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">fix </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot; </span><span class="s4">&amp;&amp; </span><span class="s6">typeof </span><span class="s2">fix </span><span class="s4">!== </span><span class="s3">&quot;function&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'fix' must be a boolean or a function.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">fixTypes </span><span class="s4">!== </span><span class="s6">null </span><span class="s4">&amp;&amp; !</span><span class="s2">isFixTypeArray</span><span class="s4">(</span><span class="s2">fixTypes</span><span class="s4">)) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'fixTypes' must be an array of any of </span><span class="s6">\&quot;</span><span class="s3">directive</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">problem</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">suggestion</span><span class="s6">\&quot;</span><span class="s3">, and </span><span class="s6">\&quot;</span><span class="s3">layout</span><span class="s6">\&quot;</span><span class="s3">.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">globInputPaths </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'globInputPaths' must be a boolean.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">ignore </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'ignore' must be a boolean.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">ignorePath</span><span class="s4">) &amp;&amp; </span><span class="s2">ignorePath </span><span class="s4">!== </span><span class="s6">null</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'ignorePath' must be a non-empty string or null.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">overrideConfig </span><span class="s4">!== </span><span class="s3">&quot;object&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'overrideConfig' must be an object or null.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">overrideConfigFile</span><span class="s4">) &amp;&amp; </span><span class="s2">overrideConfigFile </span><span class="s4">!== </span><span class="s6">null</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'overrideConfigFile' must be a non-empty string or null.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">plugins </span><span class="s4">!== </span><span class="s3">&quot;object&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'plugins' must be an object or null.&quot;</span><span class="s4">);</span>
+    <span class="s4">} </span><span class="s6">else if </span><span class="s4">(</span><span class="s2">plugins </span><span class="s4">!== </span><span class="s6">null </span><span class="s4">&amp;&amp; </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">plugins</span><span class="s4">).</span><span class="s2">includes</span><span class="s4">(</span><span class="s3">&quot;&quot;</span><span class="s4">)) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'plugins' must not include an empty string.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">plugins</span><span class="s4">)) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'plugins' doesn't add plugins to configuration to load. Please use the 'overrideConfig.plugins' option instead.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span>
+        <span class="s2">reportUnusedDisableDirectives </span><span class="s4">!== </span><span class="s3">&quot;error&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">reportUnusedDisableDirectives </span><span class="s4">!== </span><span class="s3">&quot;warn&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">reportUnusedDisableDirectives </span><span class="s4">!== </span><span class="s3">&quot;off&quot; </span><span class="s4">&amp;&amp;</span>
+        <span class="s2">reportUnusedDisableDirectives </span><span class="s4">!== </span><span class="s6">null</span>
+    <span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'reportUnusedDisableDirectives' must be any of </span><span class="s6">\&quot;</span><span class="s3">error</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">warn</span><span class="s6">\&quot;</span><span class="s3">, </span><span class="s6">\&quot;</span><span class="s3">off</span><span class="s6">\&quot;</span><span class="s3">, and null.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span>
+        <span class="s4">!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">resolvePluginsRelativeTo</span><span class="s4">) &amp;&amp;</span>
+        <span class="s2">resolvePluginsRelativeTo </span><span class="s4">!== </span><span class="s6">null</span>
+    <span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'resolvePluginsRelativeTo' must be a non-empty string or null.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">isArrayOfNonEmptyString</span><span class="s4">(</span><span class="s2">rulePaths</span><span class="s4">)) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'rulePaths' must be an array of non-empty strings.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">useEslintrc </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+        <span class="s2">errors</span><span class="s4">.</span><span class="s2">push</span><span class="s4">(</span><span class="s3">&quot;'useEslintrc' must be a boolean.&quot;</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">errors</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+        <span class="s6">throw new </span><span class="s2">ESLintInvalidOptionsError</span><span class="s4">(</span><span class="s2">errors</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s4">{</span>
+        <span class="s2">allowInlineConfig</span><span class="s4">,</span>
+        <span class="s2">baseConfig</span><span class="s4">,</span>
+        <span class="s2">cache</span><span class="s4">,</span>
+        <span class="s2">cacheLocation</span><span class="s4">,</span>
+        <span class="s2">cacheStrategy</span><span class="s4">,</span>
+        <span class="s2">configFile</span><span class="s4">: </span><span class="s2">overrideConfigFile</span><span class="s4">,</span>
+        <span class="s2">cwd</span><span class="s4">: </span><span class="s2">path</span><span class="s4">.</span><span class="s2">normalize</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">),</span>
+        <span class="s2">errorOnUnmatchedPattern</span><span class="s4">,</span>
+        <span class="s2">extensions</span><span class="s4">,</span>
+        <span class="s2">fix</span><span class="s4">,</span>
+        <span class="s2">fixTypes</span><span class="s4">,</span>
+        <span class="s2">globInputPaths</span><span class="s4">,</span>
+        <span class="s2">ignore</span><span class="s4">,</span>
+        <span class="s2">ignorePath</span><span class="s4">,</span>
+        <span class="s2">reportUnusedDisableDirectives</span><span class="s4">,</span>
+        <span class="s2">resolvePluginsRelativeTo</span><span class="s4">,</span>
+        <span class="s2">rulePaths</span><span class="s4">,</span>
+        <span class="s2">useEslintrc</span>
+    <span class="s4">};</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Check if a value has one or more properties and that value is not undefined.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{any} obj The value to check.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{boolean} `true` if `obj` has one or more properties that that value is not undefined.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">hasDefinedProperty</span><span class="s4">(</span><span class="s2">obj</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">obj </span><span class="s4">=== </span><span class="s3">&quot;object&quot; </span><span class="s4">&amp;&amp; </span><span class="s2">obj </span><span class="s4">!== </span><span class="s6">null</span><span class="s4">) {</span>
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">key </span><span class="s6">in </span><span class="s2">obj</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">obj</span><span class="s4">[</span><span class="s2">key</span><span class="s4">] !== </span><span class="s3">&quot;undefined&quot;</span><span class="s4">) {</span>
+                <span class="s6">return true</span><span class="s4">;</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+    <span class="s4">}</span>
+    <span class="s6">return false</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Create rulesMeta object.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Map&lt;string,Rule&gt;} rules a map of rules from which to generate the object.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} metadata for all enabled rules.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">createRulesMeta</span><span class="s4">(</span><span class="s2">rules</span><span class="s4">) {</span>
+    <span class="s6">return </span><span class="s2">Array</span><span class="s4">.</span><span class="s2">from</span><span class="s4">(</span><span class="s2">rules</span><span class="s4">).</span><span class="s2">reduce</span><span class="s4">((</span><span class="s2">retVal</span><span class="s4">, [</span><span class="s2">id</span><span class="s4">, </span><span class="s2">rule</span><span class="s4">]) =&gt; {</span>
+        <span class="s2">retVal</span><span class="s4">[</span><span class="s2">id</span><span class="s4">] = </span><span class="s2">rule</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">;</span>
+        <span class="s6">return </span><span class="s2">retVal</span><span class="s4">;</span>
+    <span class="s4">}, {});</span>
+<span class="s4">}</span>
+
+<span class="s0">/** </span><span class="s1">@type </span><span class="s0">{WeakMap&lt;ExtractedConfig, DeprecatedRuleInfo[]&gt;} */</span>
+<span class="s6">const </span><span class="s2">usedDeprecatedRulesCache </span><span class="s4">= </span><span class="s6">new </span><span class="s2">WeakMap</span><span class="s4">();</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Create used deprecated rule list.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CLIEngine} cliEngine The CLIEngine instance.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} maybeFilePath The absolute path to a lint target file or `&quot;&lt;text&gt;&quot;`.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{DeprecatedRuleInfo[]} The used deprecated rule list.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">getOrFindUsedDeprecatedRules</span><span class="s4">(</span><span class="s2">cliEngine</span><span class="s4">, </span><span class="s2">maybeFilePath</span><span class="s4">) {</span>
+    <span class="s6">const </span><span class="s4">{</span>
+        <span class="s2">configArrayFactory</span><span class="s4">,</span>
+        <span class="s2">options</span><span class="s4">: { </span><span class="s2">cwd </span><span class="s4">}</span>
+    <span class="s4">} = </span><span class="s2">getCLIEngineInternalSlots</span><span class="s4">(</span><span class="s2">cliEngine</span><span class="s4">);</span>
+    <span class="s6">const </span><span class="s2">filePath </span><span class="s4">= </span><span class="s2">path</span><span class="s4">.</span><span class="s2">isAbsolute</span><span class="s4">(</span><span class="s2">maybeFilePath</span><span class="s4">)</span>
+        <span class="s4">? </span><span class="s2">maybeFilePath</span>
+        <span class="s4">: </span><span class="s2">path</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s2">cwd</span><span class="s4">, </span><span class="s3">&quot;__placeholder__.js&quot;</span><span class="s4">);</span>
+    <span class="s6">const </span><span class="s2">configArray </span><span class="s4">= </span><span class="s2">configArrayFactory</span><span class="s4">.</span><span class="s2">getConfigArrayForFile</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">);</span>
+    <span class="s6">const </span><span class="s2">config </span><span class="s4">= </span><span class="s2">configArray</span><span class="s4">.</span><span class="s2">extractConfig</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">);</span>
+
+    <span class="s5">// Most files use the same config, so cache it.</span>
+    <span class="s6">if </span><span class="s4">(!</span><span class="s2">usedDeprecatedRulesCache</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">config</span><span class="s4">)) {</span>
+        <span class="s6">const </span><span class="s2">pluginRules </span><span class="s4">= </span><span class="s2">configArray</span><span class="s4">.</span><span class="s2">pluginRules</span><span class="s4">;</span>
+        <span class="s6">const </span><span class="s2">retv </span><span class="s4">= [];</span>
+
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">ruleConf</span><span class="s4">] </span><span class="s2">of Object</span><span class="s4">.</span><span class="s2">entries</span><span class="s4">(</span><span class="s2">config</span><span class="s4">.</span><span class="s2">rules</span><span class="s4">)) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">getRuleSeverity</span><span class="s4">(</span><span class="s2">ruleConf</span><span class="s4">) === </span><span class="s7">0</span><span class="s4">) {</span>
+                <span class="s6">continue</span><span class="s4">;</span>
+            <span class="s4">}</span>
+            <span class="s6">const </span><span class="s2">rule </span><span class="s4">= </span><span class="s2">pluginRules</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">) || </span><span class="s2">BuiltinRules</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">);</span>
+            <span class="s6">const </span><span class="s2">meta </span><span class="s4">= </span><span class="s2">rule </span><span class="s4">&amp;&amp; </span><span class="s2">rule</span><span class="s4">.</span><span class="s2">meta</span><span class="s4">;</span>
+
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">meta </span><span class="s4">&amp;&amp; </span><span class="s2">meta</span><span class="s4">.</span><span class="s2">deprecated</span><span class="s4">) {</span>
+                <span class="s2">retv</span><span class="s4">.</span><span class="s2">push</span><span class="s4">({ </span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">replacedBy</span><span class="s4">: </span><span class="s2">meta</span><span class="s4">.</span><span class="s2">replacedBy </span><span class="s4">|| [] });</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s2">usedDeprecatedRulesCache</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">config</span><span class="s4">, </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">freeze</span><span class="s4">(</span><span class="s2">retv</span><span class="s4">));</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">usedDeprecatedRulesCache</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">config</span><span class="s4">);</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Processes the linting results generated by a CLIEngine linting report to</span>
+ <span class="s0">* match the ESLint class's API.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CLIEngine} cliEngine The CLIEngine instance.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{CLIEngineLintReport} report The CLIEngine linting report to process.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintResult[]} The processed linting results.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">processCLIEngineLintReport</span><span class="s4">(</span><span class="s2">cliEngine</span><span class="s4">, { </span><span class="s2">results </span><span class="s4">}) {</span>
+    <span class="s6">const </span><span class="s2">descriptor </span><span class="s4">= {</span>
+        <span class="s2">configurable</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+        <span class="s2">enumerable</span><span class="s4">: </span><span class="s6">true</span><span class="s4">,</span>
+        <span class="s2">get</span><span class="s4">() {</span>
+            <span class="s6">return </span><span class="s2">getOrFindUsedDeprecatedRules</span><span class="s4">(</span><span class="s2">cliEngine</span><span class="s4">, </span><span class="s6">this</span><span class="s4">.</span><span class="s2">filePath</span><span class="s4">);</span>
+        <span class="s4">}</span>
+    <span class="s4">};</span>
+
+    <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">result of results</span><span class="s4">) {</span>
+        <span class="s2">Object</span><span class="s4">.</span><span class="s2">defineProperty</span><span class="s4">(</span><span class="s2">result</span><span class="s4">, </span><span class="s3">&quot;usedDeprecatedRules&quot;</span><span class="s4">, </span><span class="s2">descriptor</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s2">results</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* An Array.prototype.sort() compatible compare function to order results by their file path.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult} a The first lint result.</span>
+ <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult} b The second lint result.</span>
+ <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{number} An integer representing the order in which the two results should occur.</span>
+ <span class="s0">*/</span>
+<span class="s6">function </span><span class="s2">compareResultsByFilePath</span><span class="s4">(</span><span class="s2">a</span><span class="s4">, </span><span class="s2">b</span><span class="s4">) {</span>
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">a</span><span class="s4">.</span><span class="s2">filePath </span><span class="s4">&lt; </span><span class="s2">b</span><span class="s4">.</span><span class="s2">filePath</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s4">-</span><span class="s7">1</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">if </span><span class="s4">(</span><span class="s2">a</span><span class="s4">.</span><span class="s2">filePath </span><span class="s4">&gt; </span><span class="s2">b</span><span class="s4">.</span><span class="s2">filePath</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s7">1</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s6">return </span><span class="s7">0</span><span class="s4">;</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* Main API.</span>
+ <span class="s0">*/</span>
+<span class="s6">class </span><span class="s2">ESLint </span><span class="s4">{</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Creates a new instance of the main ESLint API.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ESLintOptions} options The options for this instance.</span>
+     <span class="s0">*/</span>
+    <span class="s2">constructor</span><span class="s4">(</span><span class="s2">options </span><span class="s4">= {}) {</span>
+        <span class="s6">const </span><span class="s2">processedOptions </span><span class="s4">= </span><span class="s2">processOptions</span><span class="s4">(</span><span class="s2">options</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">cliEngine </span><span class="s4">= </span><span class="s6">new </span><span class="s2">CLIEngine</span><span class="s4">(</span><span class="s2">processedOptions</span><span class="s4">, { </span><span class="s2">preloadedPlugins</span><span class="s4">: </span><span class="s2">options</span><span class="s4">.</span><span class="s2">plugins </span><span class="s4">});</span>
+        <span class="s6">const </span><span class="s4">{</span>
+            <span class="s2">configArrayFactory</span><span class="s4">,</span>
+            <span class="s2">lastConfigArrays</span>
+        <span class="s4">} = </span><span class="s2">getCLIEngineInternalSlots</span><span class="s4">(</span><span class="s2">cliEngine</span><span class="s4">);</span>
+        <span class="s6">let </span><span class="s2">updated </span><span class="s4">= </span><span class="s6">false</span><span class="s4">;</span>
+
+        <span class="s5">/* 
+         * Address `overrideConfig` to set override config. 
+         * Operate the `configArrayFactory` internal slot directly because this 
+         * functionality doesn't exist as the public API of CLIEngine. 
+         */</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">hasDefinedProperty</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">overrideConfig</span><span class="s4">)) {</span>
+            <span class="s2">configArrayFactory</span><span class="s4">.</span><span class="s2">setOverrideConfig</span><span class="s4">(</span><span class="s2">options</span><span class="s4">.</span><span class="s2">overrideConfig</span><span class="s4">);</span>
+            <span class="s2">updated </span><span class="s4">= </span><span class="s6">true</span><span class="s4">;</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// Update caches.</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">updated</span><span class="s4">) {</span>
+            <span class="s2">configArrayFactory</span><span class="s4">.</span><span class="s2">clearCache</span><span class="s4">();</span>
+            <span class="s2">lastConfigArrays</span><span class="s4">[</span><span class="s7">0</span><span class="s4">] = </span><span class="s2">configArrayFactory</span><span class="s4">.</span><span class="s2">getConfigArrayForFile</span><span class="s4">();</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// Initialize private properties.</span>
+        <span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s6">this</span><span class="s4">, {</span>
+            <span class="s2">cliEngine</span><span class="s4">,</span>
+            <span class="s2">options</span><span class="s4">: </span><span class="s2">processedOptions</span>
+        <span class="s4">});</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* The version text.</span>
+     <span class="s0">* </span><span class="s1">@type </span><span class="s0">{string}</span>
+     <span class="s0">*/</span>
+    <span class="s6">static </span><span class="s2">get version</span><span class="s4">() {</span>
+        <span class="s6">return </span><span class="s2">version</span><span class="s4">;</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Outputs fixes from the given results to files.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult[]} results The lint results.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Promise&lt;void&gt;} Returns a promise that is used to track side effects.</span>
+     <span class="s0">*/</span>
+    <span class="s6">static </span><span class="s2">async outputFixes</span><span class="s4">(</span><span class="s2">results</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">Array</span><span class="s4">.</span><span class="s2">isArray</span><span class="s4">(</span><span class="s2">results</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'results' must be an array&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">await </span><span class="s2">Promise</span><span class="s4">.</span><span class="s2">all</span><span class="s4">(</span>
+            <span class="s2">results</span>
+                <span class="s4">.</span><span class="s2">filter</span><span class="s4">(</span><span class="s2">result </span><span class="s4">=&gt; {</span>
+                    <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">result </span><span class="s4">!== </span><span class="s3">&quot;object&quot; </span><span class="s4">|| </span><span class="s2">result </span><span class="s4">=== </span><span class="s6">null</span><span class="s4">) {</span>
+                        <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'results' must include only objects&quot;</span><span class="s4">);</span>
+                    <span class="s4">}</span>
+                    <span class="s6">return </span><span class="s4">(</span>
+                        <span class="s6">typeof </span><span class="s2">result</span><span class="s4">.</span><span class="s2">output </span><span class="s4">=== </span><span class="s3">&quot;string&quot; </span><span class="s4">&amp;&amp;</span>
+                        <span class="s2">path</span><span class="s4">.</span><span class="s2">isAbsolute</span><span class="s4">(</span><span class="s2">result</span><span class="s4">.</span><span class="s2">filePath</span><span class="s4">)</span>
+                    <span class="s4">);</span>
+                <span class="s4">})</span>
+                <span class="s4">.</span><span class="s2">map</span><span class="s4">(</span><span class="s2">r </span><span class="s4">=&gt; </span><span class="s2">writeFile</span><span class="s4">(</span><span class="s2">r</span><span class="s4">.</span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">r</span><span class="s4">.</span><span class="s2">output</span><span class="s4">))</span>
+        <span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Returns results that only contains errors.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult[]} results The results to filter.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{LintResult[]} The filtered results.</span>
+     <span class="s0">*/</span>
+    <span class="s6">static </span><span class="s2">getErrorResults</span><span class="s4">(</span><span class="s2">results</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">CLIEngine</span><span class="s4">.</span><span class="s2">getErrorResults</span><span class="s4">(</span><span class="s2">results</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Returns meta objects for each rule represented in the lint results.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult[]} results The results to fetch rules meta for.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Object} A mapping of ruleIds to rule meta objects.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getRulesMetaForResults</span><span class="s4">(</span><span class="s2">results</span><span class="s4">) {</span>
+
+        <span class="s6">const </span><span class="s2">resultRuleIds </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Set</span><span class="s4">();</span>
+
+        <span class="s5">// first gather all ruleIds from all results</span>
+
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s2">result of results</span><span class="s4">) {</span>
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">{ </span><span class="s2">ruleId </span><span class="s4">} </span><span class="s2">of result</span><span class="s4">.</span><span class="s2">messages</span><span class="s4">) {</span>
+                <span class="s2">resultRuleIds</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">);</span>
+            <span class="s4">}</span>
+            <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">{ </span><span class="s2">ruleId </span><span class="s4">} </span><span class="s2">of result</span><span class="s4">.</span><span class="s2">suppressedMessages</span><span class="s4">) {</span>
+                <span class="s2">resultRuleIds</span><span class="s4">.</span><span class="s2">add</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s5">// create a map of all rules in the results</span>
+
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">cliEngine </span><span class="s4">} = </span><span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">rules </span><span class="s4">= </span><span class="s2">cliEngine</span><span class="s4">.</span><span class="s2">getRules</span><span class="s4">();</span>
+        <span class="s6">const </span><span class="s2">resultRules </span><span class="s4">= </span><span class="s6">new </span><span class="s2">Map</span><span class="s4">();</span>
+
+        <span class="s6">for </span><span class="s4">(</span><span class="s6">const </span><span class="s4">[</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">rule</span><span class="s4">] </span><span class="s2">of rules</span><span class="s4">) {</span>
+            <span class="s6">if </span><span class="s4">(</span><span class="s2">resultRuleIds</span><span class="s4">.</span><span class="s2">has</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">)) {</span>
+                <span class="s2">resultRules</span><span class="s4">.</span><span class="s2">set</span><span class="s4">(</span><span class="s2">ruleId</span><span class="s4">, </span><span class="s2">rule</span><span class="s4">);</span>
+            <span class="s4">}</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s2">createRulesMeta</span><span class="s4">(</span><span class="s2">resultRules</span><span class="s4">);</span>
+
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Executes the current configuration on an array of file and directory names.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string[]} patterns An array of file and directory names.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Promise&lt;LintResult[]&gt;} The results of linting the file patterns given.</span>
+     <span class="s0">*/</span>
+    <span class="s2">async lintFiles</span><span class="s4">(</span><span class="s2">patterns</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">patterns</span><span class="s4">) &amp;&amp; !</span><span class="s2">isArrayOfNonEmptyString</span><span class="s4">(</span><span class="s2">patterns</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'patterns' must be a non-empty string or an array of non-empty strings&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">cliEngine </span><span class="s4">} = </span><span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+
+        <span class="s6">return </span><span class="s2">processCLIEngineLintReport</span><span class="s4">(</span>
+            <span class="s2">cliEngine</span><span class="s4">,</span>
+            <span class="s2">cliEngine</span><span class="s4">.</span><span class="s2">executeOnFiles</span><span class="s4">(</span><span class="s2">patterns</span><span class="s4">)</span>
+        <span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Executes the current configuration on text.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} code A string of JavaScript code to lint.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{Object} [options] The options.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} [options.filePath] The path to the file of the source code.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{boolean} [options.warnIgnored] When set to true, warn if given filePath is an ignored path.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Promise&lt;LintResult[]&gt;} The results of linting the string of code given.</span>
+     <span class="s0">*/</span>
+    <span class="s2">async lintText</span><span class="s4">(</span><span class="s2">code</span><span class="s4">, </span><span class="s2">options </span><span class="s4">= {}) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">code </span><span class="s4">!== </span><span class="s3">&quot;string&quot;</span><span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'code' must be a string&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">options </span><span class="s4">!== </span><span class="s3">&quot;object&quot;</span><span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'options' must be an object, null, or undefined&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">const </span><span class="s4">{</span>
+            <span class="s2">filePath</span><span class="s4">,</span>
+            <span class="s2">warnIgnored </span><span class="s4">= </span><span class="s6">false</span><span class="s4">,</span>
+            <span class="s2">...unknownOptions</span>
+        <span class="s4">} = </span><span class="s2">options </span><span class="s4">|| {};</span>
+
+        <span class="s6">const </span><span class="s2">unknownOptionKeys </span><span class="s4">= </span><span class="s2">Object</span><span class="s4">.</span><span class="s2">keys</span><span class="s4">(</span><span class="s2">unknownOptions</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">length </span><span class="s4">&gt; </span><span class="s7">0</span><span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">`'options' must not include the unknown option(s): </span><span class="s2">$</span><span class="s4">{</span><span class="s2">unknownOptionKeys</span><span class="s4">.</span><span class="s2">join</span><span class="s4">(</span><span class="s3">&quot;, &quot;</span><span class="s4">)}</span><span class="s3">`</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s2">filePath </span><span class="s4">!== </span><span class="s6">void </span><span class="s7">0 </span><span class="s4">&amp;&amp; !</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'options.filePath' must be a non-empty string or undefined&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">warnIgnored </span><span class="s4">!== </span><span class="s3">&quot;boolean&quot;</span><span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'options.warnIgnored' must be a boolean or undefined&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">cliEngine </span><span class="s4">} = </span><span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+
+        <span class="s6">return </span><span class="s2">processCLIEngineLintReport</span><span class="s4">(</span>
+            <span class="s2">cliEngine</span><span class="s4">,</span>
+            <span class="s2">cliEngine</span><span class="s4">.</span><span class="s2">executeOnText</span><span class="s4">(</span><span class="s2">code</span><span class="s4">, </span><span class="s2">filePath</span><span class="s4">, </span><span class="s2">warnIgnored</span><span class="s4">)</span>
+        <span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Returns the formatter representing the given formatter name.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} [name] The name of the formatter to load.</span>
+     <span class="s0">* The following values are allowed:</span>
+     <span class="s0">* - `undefined` ... Load `stylish` builtin formatter.</span>
+     <span class="s0">* - A builtin formatter name ... Load the builtin formatter.</span>
+     <span class="s0">* - A third-party formatter name:</span>
+     <span class="s0">*   - `foo` → `eslint-formatter-foo`</span>
+     <span class="s0">*   - `@foo` → `@foo/eslint-formatter`</span>
+     <span class="s0">*   - `@foo/bar` → `@foo/eslint-formatter-bar`</span>
+     <span class="s0">* - A file path ... Load the file.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Promise&lt;LoadedFormatter&gt;} A promise resolving to the formatter object.</span>
+     <span class="s0">* This promise will be rejected if the given formatter was not found or not</span>
+     <span class="s0">* a function.</span>
+     <span class="s0">*/</span>
+    <span class="s2">async loadFormatter</span><span class="s4">(</span><span class="s2">name </span><span class="s4">= </span><span class="s3">&quot;stylish&quot;</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">name </span><span class="s4">!== </span><span class="s3">&quot;string&quot;</span><span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'name' must be a string&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">cliEngine</span><span class="s4">, </span><span class="s2">options </span><span class="s4">} = </span><span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+        <span class="s6">const </span><span class="s2">formatter </span><span class="s4">= </span><span class="s2">cliEngine</span><span class="s4">.</span><span class="s2">getFormatter</span><span class="s4">(</span><span class="s2">name</span><span class="s4">);</span>
+
+        <span class="s6">if </span><span class="s4">(</span><span class="s6">typeof </span><span class="s2">formatter </span><span class="s4">!== </span><span class="s3">&quot;function&quot;</span><span class="s4">) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">`Formatter must be a function, but got a </span><span class="s2">$</span><span class="s4">{</span><span class="s6">typeof </span><span class="s2">formatter</span><span class="s4">}</span><span class="s3">.`</span><span class="s4">);</span>
+        <span class="s4">}</span>
+
+        <span class="s6">return </span><span class="s4">{</span>
+
+            <span class="s0">/**</span>
+             <span class="s0">* The main formatter method.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{LintResult[]} results The lint results to format.</span>
+             <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ResultsMeta} resultsMeta Warning count and max threshold.</span>
+             <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{string | Promise&lt;string&gt;} The formatted lint results.</span>
+             <span class="s0">*/</span>
+            <span class="s2">format</span><span class="s4">(</span><span class="s2">results</span><span class="s4">, </span><span class="s2">resultsMeta</span><span class="s4">) {</span>
+                <span class="s6">let </span><span class="s2">rulesMeta </span><span class="s4">= </span><span class="s6">null</span><span class="s4">;</span>
+
+                <span class="s2">results</span><span class="s4">.</span><span class="s2">sort</span><span class="s4">(</span><span class="s2">compareResultsByFilePath</span><span class="s4">);</span>
+
+                <span class="s6">return </span><span class="s2">formatter</span><span class="s4">(</span><span class="s2">results</span><span class="s4">, {</span>
+                    <span class="s2">...resultsMeta</span><span class="s4">,</span>
+                    <span class="s2">get cwd</span><span class="s4">() {</span>
+                        <span class="s6">return </span><span class="s2">options</span><span class="s4">.</span><span class="s2">cwd</span><span class="s4">;</span>
+                    <span class="s4">},</span>
+                    <span class="s2">get rulesMeta</span><span class="s4">() {</span>
+                        <span class="s6">if </span><span class="s4">(!</span><span class="s2">rulesMeta</span><span class="s4">) {</span>
+                            <span class="s2">rulesMeta </span><span class="s4">= </span><span class="s2">createRulesMeta</span><span class="s4">(</span><span class="s2">cliEngine</span><span class="s4">.</span><span class="s2">getRules</span><span class="s4">());</span>
+                        <span class="s4">}</span>
+
+                        <span class="s6">return </span><span class="s2">rulesMeta</span><span class="s4">;</span>
+                    <span class="s4">}</span>
+                <span class="s4">});</span>
+            <span class="s4">}</span>
+        <span class="s4">};</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Returns a configuration object for the given file based on the CLI options.</span>
+     <span class="s0">* This is the same logic used by the ESLint CLI executable to determine</span>
+     <span class="s0">* configuration for each file it processes.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} filePath The path of the file to retrieve a config object for.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Promise&lt;ConfigData&gt;} A configuration object for the file.</span>
+     <span class="s0">*/</span>
+    <span class="s2">async calculateConfigForFile</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'filePath' must be a non-empty string&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">cliEngine </span><span class="s4">} = </span><span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+
+        <span class="s6">return </span><span class="s2">cliEngine</span><span class="s4">.</span><span class="s2">getConfigForFile</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">);</span>
+    <span class="s4">}</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Checks if a given path is ignored by ESLint.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{string} filePath The path of the file to check.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{Promise&lt;boolean&gt;} Whether or not the given path is ignored.</span>
+     <span class="s0">*/</span>
+    <span class="s2">async isPathIgnored</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">) {</span>
+        <span class="s6">if </span><span class="s4">(!</span><span class="s2">isNonEmptyString</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">)) {</span>
+            <span class="s6">throw new </span><span class="s2">Error</span><span class="s4">(</span><span class="s3">&quot;'filePath' must be a non-empty string&quot;</span><span class="s4">);</span>
+        <span class="s4">}</span>
+        <span class="s6">const </span><span class="s4">{ </span><span class="s2">cliEngine </span><span class="s4">} = </span><span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s6">this</span><span class="s4">);</span>
+
+        <span class="s6">return </span><span class="s2">cliEngine</span><span class="s4">.</span><span class="s2">isPathIgnored</span><span class="s4">(</span><span class="s2">filePath</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">}</span>
+
+<span class="s0">/**</span>
+ <span class="s0">* The type of configuration used by this class.</span>
+ <span class="s0">* </span><span class="s1">@type </span><span class="s0">{string}</span>
+ <span class="s0">* </span><span class="s1">@static</span>
+ <span class="s0">*/</span>
+<span class="s2">ESLint</span><span class="s4">.</span><span class="s2">configType </span><span class="s4">= </span><span class="s3">&quot;eslintrc&quot;</span><span class="s4">;</span>
+
+<span class="s5">//------------------------------------------------------------------------------</span>
+<span class="s5">// Public Interface</span>
+<span class="s5">//------------------------------------------------------------------------------</span>
+
+<span class="s2">module</span><span class="s4">.</span><span class="s2">exports </span><span class="s4">= {</span>
+    <span class="s2">ESLint</span><span class="s4">,</span>
+
+    <span class="s0">/**</span>
+     <span class="s0">* Get the private class members of a given ESLint instance for tests.</span>
+     <span class="s0">* </span><span class="s1">@param </span><span class="s0">{ESLint} instance The ESLint instance to get.</span>
+     <span class="s0">* </span><span class="s1">@returns </span><span class="s0">{ESLintPrivateMembers} The instance's private class members.</span>
+     <span class="s0">*/</span>
+    <span class="s2">getESLintPrivateMembers</span><span class="s4">(</span><span class="s2">instance</span><span class="s4">) {</span>
+        <span class="s6">return </span><span class="s2">privateMembersMap</span><span class="s4">.</span><span class="s2">get</span><span class="s4">(</span><span class="s2">instance</span><span class="s4">);</span>
+    <span class="s4">}</span>
+<span class="s4">};</span>
+</pre>
+</body>
+</html>

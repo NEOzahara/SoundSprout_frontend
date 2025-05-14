@@ -1,0 +1,232 @@
+<html>
+<head>
+<title>wasm-hash.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #2aacb8;}
+.s6 { color: #5f826b; font-style: italic;}
+.s7 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+wasm-hash.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">'use strict'</span><span class="s3">;</span>
+
+<span class="s0">// 65536 is the size of a wasm memory page</span>
+<span class="s0">// 64 is the maximum chunk size for every possible wasm hash implementation</span>
+<span class="s0">// 4 is the maximum number of bytes per char for string encoding (max is utf-8)</span>
+<span class="s0">// ~3 makes sure that it's always a block of 4 chars, so avoid partially encoded bytes for base64</span>
+<span class="s4">const </span><span class="s1">MAX_SHORT_STRING </span><span class="s3">= </span><span class="s1">Math</span><span class="s3">.</span><span class="s1">floor</span><span class="s3">((</span><span class="s5">65536 </span><span class="s3">- </span><span class="s5">64</span><span class="s3">) / </span><span class="s5">4</span><span class="s3">) &amp; ~</span><span class="s5">3</span><span class="s3">;</span>
+
+<span class="s4">class </span><span class="s1">WasmHash </span><span class="s3">{</span>
+  <span class="s6">/**</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{WebAssembly.Instance} instance wasm instance</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{WebAssembly.Instance[]} instancesPool pool of instances</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{number} chunkSize size of data chunks passed to wasm</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{number} digestSize size of digest returned by wasm</span>
+   <span class="s6">*/</span>
+  <span class="s1">constructor</span><span class="s3">(</span><span class="s1">instance</span><span class="s3">, </span><span class="s1">instancesPool</span><span class="s3">, </span><span class="s1">chunkSize</span><span class="s3">, </span><span class="s1">digestSize</span><span class="s3">) {</span>
+    <span class="s4">const </span><span class="s1">exports </span><span class="s3">= </span><span class="s6">/** </span><span class="s7">@type </span><span class="s6">{any} */ </span><span class="s3">(</span><span class="s1">instance</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">);</span>
+
+    <span class="s1">exports</span><span class="s3">.</span><span class="s1">init</span><span class="s3">();</span>
+
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">exports</span><span class="s3">;</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">mem </span><span class="s3">= </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">memory</span><span class="s3">.</span><span class="s1">buffer</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s5">65536</span><span class="s3">);</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">buffered </span><span class="s3">= </span><span class="s5">0</span><span class="s3">;</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">instancesPool </span><span class="s3">= </span><span class="s1">instancesPool</span><span class="s3">;</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">chunkSize </span><span class="s3">= </span><span class="s1">chunkSize</span><span class="s3">;</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">digestSize </span><span class="s3">= </span><span class="s1">digestSize</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s1">reset</span><span class="s3">() {</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">buffered </span><span class="s3">= </span><span class="s5">0</span><span class="s3">;</span>
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">init</span><span class="s3">();</span>
+  <span class="s3">}</span>
+
+  <span class="s6">/**</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Buffer | string} data data</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{BufferEncoding=} encoding encoding</span>
+   <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{this} itself</span>
+   <span class="s6">*/</span>
+  <span class="s1">update</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">encoding</span><span class="s3">) {</span>
+    <span class="s4">if </span><span class="s3">(</span><span class="s4">typeof </span><span class="s1">data </span><span class="s3">=== </span><span class="s2">'string'</span><span class="s3">) {</span>
+      <span class="s4">while </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s1">MAX_SHORT_STRING</span><span class="s3">) {</span>
+        <span class="s4">this</span><span class="s3">.</span><span class="s1">_updateWithShortString</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s5">0</span><span class="s3">, </span><span class="s1">MAX_SHORT_STRING</span><span class="s3">), </span><span class="s1">encoding</span><span class="s3">);</span>
+        <span class="s1">data </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">MAX_SHORT_STRING</span><span class="s3">);</span>
+      <span class="s3">}</span>
+
+      <span class="s4">this</span><span class="s3">.</span><span class="s1">_updateWithShortString</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">encoding</span><span class="s3">);</span>
+
+      <span class="s4">return this</span><span class="s3">;</span>
+    <span class="s3">}</span>
+
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">_updateWithBuffer</span><span class="s3">(</span><span class="s1">data</span><span class="s3">);</span>
+
+    <span class="s4">return this</span><span class="s3">;</span>
+  <span class="s3">}</span>
+
+  <span class="s6">/**</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{string} data data</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{BufferEncoding=} encoding encoding</span>
+   <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{void}</span>
+   <span class="s6">*/</span>
+  <span class="s1">_updateWithShortString</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">encoding</span><span class="s3">) {</span>
+    <span class="s4">const </span><span class="s3">{ </span><span class="s1">exports</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s1">mem</span><span class="s3">, </span><span class="s1">chunkSize </span><span class="s3">} = </span><span class="s4">this</span><span class="s3">;</span>
+
+    <span class="s4">let </span><span class="s1">endPos</span><span class="s3">;</span>
+
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&lt; </span><span class="s5">70</span><span class="s3">) {</span>
+      <span class="s4">if </span><span class="s3">(!</span><span class="s1">encoding </span><span class="s3">|| </span><span class="s1">encoding </span><span class="s3">=== </span><span class="s2">'utf-8' </span><span class="s3">|| </span><span class="s1">encoding </span><span class="s3">=== </span><span class="s2">'utf8'</span><span class="s3">) {</span>
+        <span class="s1">endPos </span><span class="s3">= </span><span class="s1">buffered</span><span class="s3">;</span>
+        <span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s5">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">data</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+          <span class="s4">const </span><span class="s1">cc </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">i</span><span class="s3">);</span>
+
+          <span class="s4">if </span><span class="s3">(</span><span class="s1">cc </span><span class="s3">&lt; </span><span class="s5">0x80</span><span class="s3">) {</span>
+            <span class="s1">mem</span><span class="s3">[</span><span class="s1">endPos</span><span class="s3">++] = </span><span class="s1">cc</span><span class="s3">;</span>
+          <span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">cc </span><span class="s3">&lt; </span><span class="s5">0x800</span><span class="s3">) {</span>
+            <span class="s1">mem</span><span class="s3">[</span><span class="s1">endPos</span><span class="s3">] = (</span><span class="s1">cc </span><span class="s3">&gt;&gt; </span><span class="s5">6</span><span class="s3">) | </span><span class="s5">0xc0</span><span class="s3">;</span>
+            <span class="s1">mem</span><span class="s3">[</span><span class="s1">endPos </span><span class="s3">+ </span><span class="s5">1</span><span class="s3">] = (</span><span class="s1">cc </span><span class="s3">&amp; </span><span class="s5">0x3f</span><span class="s3">) | </span><span class="s5">0x80</span><span class="s3">;</span>
+            <span class="s1">endPos </span><span class="s3">+= </span><span class="s5">2</span><span class="s3">;</span>
+          <span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+            <span class="s0">// bail-out for weird chars</span>
+            <span class="s1">endPos </span><span class="s3">+= </span><span class="s1">mem</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span><span class="s1">data</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s1">i</span><span class="s3">), </span><span class="s1">endPos</span><span class="s3">, </span><span class="s1">encoding</span><span class="s3">);</span>
+            <span class="s4">break</span><span class="s3">;</span>
+          <span class="s3">}</span>
+        <span class="s3">}</span>
+      <span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">encoding </span><span class="s3">=== </span><span class="s2">'latin1'</span><span class="s3">) {</span>
+        <span class="s1">endPos </span><span class="s3">= </span><span class="s1">buffered</span><span class="s3">;</span>
+
+        <span class="s4">for </span><span class="s3">(</span><span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s5">0</span><span class="s3">; </span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">data</span><span class="s3">.</span><span class="s1">length</span><span class="s3">; </span><span class="s1">i</span><span class="s3">++) {</span>
+          <span class="s4">const </span><span class="s1">cc </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">charCodeAt</span><span class="s3">(</span><span class="s1">i</span><span class="s3">);</span>
+
+          <span class="s1">mem</span><span class="s3">[</span><span class="s1">endPos</span><span class="s3">++] = </span><span class="s1">cc</span><span class="s3">;</span>
+        <span class="s3">}</span>
+      <span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+        <span class="s1">endPos </span><span class="s3">= </span><span class="s1">buffered </span><span class="s3">+ </span><span class="s1">mem</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s1">encoding</span><span class="s3">);</span>
+      <span class="s3">}</span>
+    <span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+      <span class="s1">endPos </span><span class="s3">= </span><span class="s1">buffered </span><span class="s3">+ </span><span class="s1">mem</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s1">encoding</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">endPos </span><span class="s3">&lt; </span><span class="s1">chunkSize</span><span class="s3">) {</span>
+      <span class="s4">this</span><span class="s3">.</span><span class="s1">buffered </span><span class="s3">= </span><span class="s1">endPos</span><span class="s3">;</span>
+    <span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+      <span class="s4">const </span><span class="s1">l </span><span class="s3">= </span><span class="s1">endPos </span><span class="s3">&amp; ~(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">chunkSize </span><span class="s3">- </span><span class="s5">1</span><span class="s3">);</span>
+
+      <span class="s1">exports</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">l</span><span class="s3">);</span>
+
+      <span class="s4">const </span><span class="s1">newBuffered </span><span class="s3">= </span><span class="s1">endPos </span><span class="s3">- </span><span class="s1">l</span><span class="s3">;</span>
+
+      <span class="s4">this</span><span class="s3">.</span><span class="s1">buffered </span><span class="s3">= </span><span class="s1">newBuffered</span><span class="s3">;</span>
+
+      <span class="s4">if </span><span class="s3">(</span><span class="s1">newBuffered </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+        <span class="s1">mem</span><span class="s3">.</span><span class="s1">copyWithin</span><span class="s3">(</span><span class="s5">0</span><span class="s3">, </span><span class="s1">l</span><span class="s3">, </span><span class="s1">endPos</span><span class="s3">);</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s6">/**</span>
+   <span class="s6">* </span><span class="s7">@param </span><span class="s6">{Buffer} data data</span>
+   <span class="s6">* </span><span class="s7">@returns </span><span class="s6">{void}</span>
+   <span class="s6">*/</span>
+  <span class="s1">_updateWithBuffer</span><span class="s3">(</span><span class="s1">data</span><span class="s3">) {</span>
+    <span class="s4">const </span><span class="s3">{ </span><span class="s1">exports</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s1">mem </span><span class="s3">} = </span><span class="s4">this</span><span class="s3">;</span>
+    <span class="s4">const </span><span class="s1">length </span><span class="s3">= </span><span class="s1">data</span><span class="s3">.</span><span class="s1">length</span><span class="s3">;</span>
+
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">buffered </span><span class="s3">+ </span><span class="s1">length </span><span class="s3">&lt; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">chunkSize</span><span class="s3">) {</span>
+      <span class="s1">data</span><span class="s3">.</span><span class="s1">copy</span><span class="s3">(</span><span class="s1">mem</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s1">length</span><span class="s3">);</span>
+
+      <span class="s4">this</span><span class="s3">.</span><span class="s1">buffered </span><span class="s3">+= </span><span class="s1">length</span><span class="s3">;</span>
+    <span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+      <span class="s4">const </span><span class="s1">l </span><span class="s3">= (</span><span class="s1">buffered </span><span class="s3">+ </span><span class="s1">length</span><span class="s3">) &amp; ~(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">chunkSize </span><span class="s3">- </span><span class="s5">1</span><span class="s3">);</span>
+
+      <span class="s4">if </span><span class="s3">(</span><span class="s1">l </span><span class="s3">&gt; </span><span class="s5">65536</span><span class="s3">) {</span>
+        <span class="s4">let </span><span class="s1">i </span><span class="s3">= </span><span class="s5">65536 </span><span class="s3">- </span><span class="s1">buffered</span><span class="s3">;</span>
+
+        <span class="s1">data</span><span class="s3">.</span><span class="s1">copy</span><span class="s3">(</span><span class="s1">mem</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s1">i</span><span class="s3">);</span>
+        <span class="s1">exports</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s5">65536</span><span class="s3">);</span>
+
+        <span class="s4">const </span><span class="s1">stop </span><span class="s3">= </span><span class="s1">l </span><span class="s3">- </span><span class="s1">buffered </span><span class="s3">- </span><span class="s5">65536</span><span class="s3">;</span>
+
+        <span class="s4">while </span><span class="s3">(</span><span class="s1">i </span><span class="s3">&lt; </span><span class="s1">stop</span><span class="s3">) {</span>
+          <span class="s1">data</span><span class="s3">.</span><span class="s1">copy</span><span class="s3">(</span><span class="s1">mem</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s1">i</span><span class="s3">, </span><span class="s1">i </span><span class="s3">+ </span><span class="s5">65536</span><span class="s3">);</span>
+          <span class="s1">exports</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s5">65536</span><span class="s3">);</span>
+          <span class="s1">i </span><span class="s3">+= </span><span class="s5">65536</span><span class="s3">;</span>
+        <span class="s3">}</span>
+
+        <span class="s1">data</span><span class="s3">.</span><span class="s1">copy</span><span class="s3">(</span><span class="s1">mem</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s1">i</span><span class="s3">, </span><span class="s1">l </span><span class="s3">- </span><span class="s1">buffered</span><span class="s3">);</span>
+
+        <span class="s1">exports</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">l </span><span class="s3">- </span><span class="s1">buffered </span><span class="s3">- </span><span class="s1">i</span><span class="s3">);</span>
+      <span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+        <span class="s1">data</span><span class="s3">.</span><span class="s1">copy</span><span class="s3">(</span><span class="s1">mem</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s1">l </span><span class="s3">- </span><span class="s1">buffered</span><span class="s3">);</span>
+
+        <span class="s1">exports</span><span class="s3">.</span><span class="s1">update</span><span class="s3">(</span><span class="s1">l</span><span class="s3">);</span>
+      <span class="s3">}</span>
+
+      <span class="s4">const </span><span class="s1">newBuffered </span><span class="s3">= </span><span class="s1">length </span><span class="s3">+ </span><span class="s1">buffered </span><span class="s3">- </span><span class="s1">l</span><span class="s3">;</span>
+
+      <span class="s4">this</span><span class="s3">.</span><span class="s1">buffered </span><span class="s3">= </span><span class="s1">newBuffered</span><span class="s3">;</span>
+
+      <span class="s4">if </span><span class="s3">(</span><span class="s1">newBuffered </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+        <span class="s1">data</span><span class="s3">.</span><span class="s1">copy</span><span class="s3">(</span><span class="s1">mem</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s1">length </span><span class="s3">- </span><span class="s1">newBuffered</span><span class="s3">, </span><span class="s1">length</span><span class="s3">);</span>
+      <span class="s3">}</span>
+    <span class="s3">}</span>
+  <span class="s3">}</span>
+
+  <span class="s1">digest</span><span class="s3">(</span><span class="s1">type</span><span class="s3">) {</span>
+    <span class="s4">const </span><span class="s3">{ </span><span class="s1">exports</span><span class="s3">, </span><span class="s1">buffered</span><span class="s3">, </span><span class="s1">mem</span><span class="s3">, </span><span class="s1">digestSize </span><span class="s3">} = </span><span class="s4">this</span><span class="s3">;</span>
+
+    <span class="s1">exports</span><span class="s3">.</span><span class="s1">final</span><span class="s3">(</span><span class="s1">buffered</span><span class="s3">);</span>
+
+    <span class="s4">this</span><span class="s3">.</span><span class="s1">instancesPool</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+
+    <span class="s4">const </span><span class="s1">hex </span><span class="s3">= </span><span class="s1">mem</span><span class="s3">.</span><span class="s1">toString</span><span class="s3">(</span><span class="s2">'latin1'</span><span class="s3">, </span><span class="s5">0</span><span class="s3">, </span><span class="s1">digestSize</span><span class="s3">);</span>
+
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">'hex'</span><span class="s3">) {</span>
+      <span class="s4">return </span><span class="s1">hex</span><span class="s3">;</span>
+    <span class="s3">}</span>
+
+    <span class="s4">if </span><span class="s3">(</span><span class="s1">type </span><span class="s3">=== </span><span class="s2">'binary' </span><span class="s3">|| !</span><span class="s1">type</span><span class="s3">) {</span>
+      <span class="s4">return </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">hex</span><span class="s3">, </span><span class="s2">'hex'</span><span class="s3">);</span>
+    <span class="s3">}</span>
+
+    <span class="s4">return </span><span class="s1">Buffer</span><span class="s3">.</span><span class="s1">from</span><span class="s3">(</span><span class="s1">hex</span><span class="s3">, </span><span class="s2">'hex'</span><span class="s3">).</span><span class="s1">toString</span><span class="s3">(</span><span class="s1">type</span><span class="s3">);</span>
+  <span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">const </span><span class="s1">create </span><span class="s3">= (</span><span class="s1">wasmModule</span><span class="s3">, </span><span class="s1">instancesPool</span><span class="s3">, </span><span class="s1">chunkSize</span><span class="s3">, </span><span class="s1">digestSize</span><span class="s3">) =&gt; {</span>
+  <span class="s4">if </span><span class="s3">(</span><span class="s1">instancesPool</span><span class="s3">.</span><span class="s1">length </span><span class="s3">&gt; </span><span class="s5">0</span><span class="s3">) {</span>
+    <span class="s4">const </span><span class="s1">old </span><span class="s3">= </span><span class="s1">instancesPool</span><span class="s3">.</span><span class="s1">pop</span><span class="s3">();</span>
+
+    <span class="s1">old</span><span class="s3">.</span><span class="s1">reset</span><span class="s3">();</span>
+
+    <span class="s4">return </span><span class="s1">old</span><span class="s3">;</span>
+  <span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+    <span class="s4">return new </span><span class="s1">WasmHash</span><span class="s3">(</span>
+      <span class="s4">new </span><span class="s1">WebAssembly</span><span class="s3">.</span><span class="s1">Instance</span><span class="s3">(</span><span class="s1">wasmModule</span><span class="s3">),</span>
+      <span class="s1">instancesPool</span><span class="s3">,</span>
+      <span class="s1">chunkSize</span><span class="s3">,</span>
+      <span class="s1">digestSize</span>
+    <span class="s3">);</span>
+  <span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">create</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">MAX_SHORT_STRING </span><span class="s3">= </span><span class="s1">MAX_SHORT_STRING</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

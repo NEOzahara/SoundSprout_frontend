@@ -1,0 +1,373 @@
+<html>
+<head>
+<title>CacheFacade.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #5f826b; font-style: italic;}
+.s6 { color: #67a37c; font-style: italic;}
+.s7 { color: #2aacb8;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+CacheFacade.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">forEachBail </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;enhanced-resolve&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">asyncLib </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;neo-async&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">getLazyHashedEtag </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./cache/getLazyHashedEtag&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">mergeEtags </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./cache/mergeEtags&quot;</span><span class="s3">);</span>
+
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Cache&quot;)} Cache */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./Cache&quot;).Etag} Etag */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./WebpackError&quot;)} WebpackError */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{import(&quot;./cache/getLazyHashedEtag&quot;).HashableObject} HashableObject */</span>
+<span class="s5">/** </span><span class="s6">@typedef </span><span class="s5">{typeof import(&quot;./util/Hash&quot;)} HashConstructor */</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">CallbackCache</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(Error | null)=} err</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(T | null)=} result</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+
+<span class="s5">/**</span>
+ <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+ <span class="s5">* </span><span class="s6">@callback </span><span class="s5">CallbackNormalErrorCache</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(Error | null)=} err</span>
+ <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T=} result</span>
+ <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+ <span class="s5">*/</span>
+
+<span class="s4">class </span><span class="s1">MultiItemCache </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{ItemCacheFacade[]} items item caches</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">items</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_items </span><span class="s3">= </span><span class="s1">items</span><span class="s3">;</span>
+		<span class="s0">// eslint-disable-next-line no-constructor-return</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">items</span><span class="s3">.</span><span class="s1">length </span><span class="s3">=== </span><span class="s7">1</span><span class="s3">) </span><span class="s4">return </span><span class="s5">/** </span><span class="s6">@type </span><span class="s5">{TODO} */ </span><span class="s3">(</span><span class="s1">items</span><span class="s3">[</span><span class="s7">0</span><span class="s3">]);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackCache&lt;T&gt;} callback signals when the value is retrieved</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s1">forEachBail</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_items</span><span class="s3">, (</span><span class="s1">item</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; </span><span class="s1">item</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">), </span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;T&gt;} promise with the data</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getPromise</span><span class="s3">() {</span>
+		<span class="s5">/**</span>
+		 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{number} i index</span>
+		 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;T&gt;} promise with the data</span>
+		 <span class="s5">*/</span>
+		<span class="s4">const </span><span class="s1">next </span><span class="s3">= </span><span class="s1">i </span><span class="s3">=&gt;</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_items</span><span class="s3">[</span><span class="s1">i</span><span class="s3">].</span><span class="s1">getPromise</span><span class="s3">().</span><span class="s1">then</span><span class="s3">(</span><span class="s1">result </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">result </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+				<span class="s4">if </span><span class="s3">(++</span><span class="s1">i </span><span class="s3">&lt; </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_items</span><span class="s3">.</span><span class="s1">length</span><span class="s3">) </span><span class="s4">return </span><span class="s1">next</span><span class="s3">(</span><span class="s1">i</span><span class="s3">);</span>
+			<span class="s3">});</span>
+		<span class="s4">return </span><span class="s1">next</span><span class="s3">(</span><span class="s7">0</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} data the value to store</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackCache&lt;void&gt;} callback signals when the value is stored</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">store</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s1">asyncLib</span><span class="s3">.</span><span class="s1">each</span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_items</span><span class="s3">,</span>
+			<span class="s3">(</span><span class="s1">item</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) =&gt; </span><span class="s1">item</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">),</span>
+			<span class="s1">callback</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} data the value to store</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;void&gt;} promise signals when the value is stored</span>
+	 <span class="s5">*/</span>
+	<span class="s1">storePromise</span><span class="s3">(</span><span class="s1">data</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">Promise</span><span class="s3">.</span><span class="s1">all</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_items</span><span class="s3">.</span><span class="s1">map</span><span class="s3">(</span><span class="s1">item </span><span class="s3">=&gt; </span><span class="s1">item</span><span class="s3">.</span><span class="s1">storePromise</span><span class="s3">(</span><span class="s1">data</span><span class="s3">))).</span><span class="s1">then</span><span class="s3">(</span>
+			<span class="s3">() =&gt; {}</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">class </span><span class="s1">ItemCacheFacade </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Cache} cache the root cache</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name the child cache item name</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">cache</span><span class="s3">, </span><span class="s1">name</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_name </span><span class="s3">= </span><span class="s1">name</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_etag </span><span class="s3">= </span><span class="s1">etag</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackCache&lt;T&gt;} callback signals when the value is retrieved</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get</span><span class="s3">(</span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_etag</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;T&gt;} promise with the data</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getPromise</span><span class="s3">() {</span>
+		<span class="s4">return new </span><span class="s1">Promise</span><span class="s3">((</span><span class="s1">resolve</span><span class="s3">, </span><span class="s1">reject</span><span class="s3">) =&gt; {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_etag</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">data</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+					<span class="s1">reject</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">resolve</span><span class="s3">(</span><span class="s1">data</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} data the value to store</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackCache&lt;void&gt;} callback signals when the value is stored</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">store</span><span class="s3">(</span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_etag</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} data the value to store</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;void&gt;} promise signals when the value is stored</span>
+	 <span class="s5">*/</span>
+	<span class="s1">storePromise</span><span class="s3">(</span><span class="s1">data</span><span class="s3">) {</span>
+		<span class="s4">return new </span><span class="s1">Promise</span><span class="s3">((</span><span class="s1">resolve</span><span class="s3">, </span><span class="s1">reject</span><span class="s3">) =&gt; {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_etag</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+					<span class="s1">reject</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">resolve</span><span class="s3">();</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(callback: CallbackNormalErrorCache&lt;T&gt;) =&gt; void} computer function to compute the value if not cached</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackNormalErrorCache&lt;T&gt;} callback signals when the value is retrieved</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">provide</span><span class="s3">(</span><span class="s1">computer</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">get</span><span class="s3">((</span><span class="s1">err</span><span class="s3">, </span><span class="s1">cacheEntry</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+			<span class="s1">computer</span><span class="s3">((</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span><span class="s1">result</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+					<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+				<span class="s3">});</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{() =&gt; Promise&lt;T&gt; | T} computer function to compute the value if not cached</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;T&gt;} promise with the data</span>
+	 <span class="s5">*/</span>
+	<span class="s1">async providePromise</span><span class="s3">(</span><span class="s1">computer</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s4">await this</span><span class="s3">.</span><span class="s1">getPromise</span><span class="s3">();</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s4">await </span><span class="s1">computer</span><span class="s3">();</span>
+		<span class="s4">await this</span><span class="s3">.</span><span class="s1">storePromise</span><span class="s3">(</span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">class </span><span class="s1">CacheFacade </span><span class="s3">{</span>
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Cache} cache the root cache</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name the child cache name</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(string | HashConstructor)=} hashFunction the hash function to use</span>
+	 <span class="s5">*/</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">cache</span><span class="s3">, </span><span class="s1">name</span><span class="s3">, </span><span class="s1">hashFunction</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache </span><span class="s3">= </span><span class="s1">cache</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_name </span><span class="s3">= </span><span class="s1">name</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_hashFunction </span><span class="s3">= </span><span class="s1">hashFunction</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} name the child cache name#</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{CacheFacade} child cache</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getChildCache</span><span class="s3">(</span><span class="s1">name</span><span class="s3">) {</span>
+		<span class="s4">return new </span><span class="s1">CacheFacade</span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">,</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">name</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_hashFunction</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} identifier the cache identifier</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{ItemCacheFacade} item cache</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getItemCache</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">) {</span>
+		<span class="s4">return new </span><span class="s1">ItemCacheFacade</span><span class="s3">(</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">,</span>
+			<span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">identifier</span><span class="s3">}</span><span class="s2">`</span><span class="s3">,</span>
+			<span class="s1">etag</span>
+		<span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{HashableObject} obj an hashable object</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Etag} an etag that is lazy hashed</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getLazyHashedEtag</span><span class="s3">(</span><span class="s1">obj</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">getLazyHashedEtag</span><span class="s3">(</span><span class="s1">obj</span><span class="s3">, </span><span class="s4">this</span><span class="s3">.</span><span class="s1">_hashFunction</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag} a an etag</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag} b another etag</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Etag} an etag that represents both</span>
+	 <span class="s5">*/</span>
+	<span class="s1">mergeEtags</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">) {</span>
+		<span class="s4">return </span><span class="s1">mergeEtags</span><span class="s3">(</span><span class="s1">a</span><span class="s3">, </span><span class="s1">b</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} identifier the cache identifier</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackCache&lt;T&gt;} callback signals when the value is retrieved</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">get</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">identifier</span><span class="s3">}</span><span class="s2">`</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} identifier the cache identifier</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;T&gt;} promise with the data</span>
+	 <span class="s5">*/</span>
+	<span class="s1">getPromise</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">) {</span>
+		<span class="s4">return new </span><span class="s1">Promise</span><span class="s3">((</span><span class="s1">resolve</span><span class="s3">, </span><span class="s1">reject</span><span class="s3">) =&gt; {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">identifier</span><span class="s3">}</span><span class="s2">`</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">data</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+					<span class="s1">reject</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">resolve</span><span class="s3">(</span><span class="s1">data</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} identifier the cache identifier</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} data the value to store</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackCache&lt;void&gt;} callback signals when the value is stored</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">store</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">identifier</span><span class="s3">}</span><span class="s2">`</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} identifier the cache identifier</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{T} data the value to store</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;void&gt;} promise signals when the value is stored</span>
+	 <span class="s5">*/</span>
+	<span class="s1">storePromise</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">data</span><span class="s3">) {</span>
+		<span class="s4">return new </span><span class="s1">Promise</span><span class="s3">((</span><span class="s1">resolve</span><span class="s3">, </span><span class="s1">reject</span><span class="s3">) =&gt; {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">_cache</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span><span class="s2">`</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">_name</span><span class="s3">}</span><span class="s2">|</span><span class="s1">$</span><span class="s3">{</span><span class="s1">identifier</span><span class="s3">}</span><span class="s2">`</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">data</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+					<span class="s1">reject</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s1">resolve</span><span class="s3">();</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} identifier the cache identifier</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{(callback: CallbackNormalErrorCache&lt;T&gt;) =&gt; void} computer function to compute the value if not cached</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{CallbackNormalErrorCache&lt;T&gt;} callback signals when the value is retrieved</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{void}</span>
+	 <span class="s5">*/</span>
+	<span class="s1">provide</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">computer</span><span class="s3">, </span><span class="s1">callback</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, (</span><span class="s1">err</span><span class="s3">, </span><span class="s1">cacheEntry</span><span class="s3">) =&gt; {</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+			<span class="s1">computer</span><span class="s3">((</span><span class="s1">err</span><span class="s3">, </span><span class="s1">result</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s4">this</span><span class="s3">.</span><span class="s1">store</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">result</span><span class="s3">, </span><span class="s1">err </span><span class="s3">=&gt; {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) </span><span class="s4">return </span><span class="s1">callback</span><span class="s3">(</span><span class="s1">err</span><span class="s3">);</span>
+					<span class="s1">callback</span><span class="s3">(</span><span class="s4">null</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+				<span class="s3">});</span>
+			<span class="s3">});</span>
+		<span class="s3">});</span>
+	<span class="s3">}</span>
+
+	<span class="s5">/**</span>
+	 <span class="s5">* </span><span class="s6">@template </span><span class="s5">T</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{string} identifier the cache identifier</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{Etag | null} etag the etag</span>
+	 <span class="s5">* </span><span class="s6">@param </span><span class="s5">{() =&gt; Promise&lt;T&gt; | T} computer function to compute the value if not cached</span>
+	 <span class="s5">* </span><span class="s6">@returns </span><span class="s5">{Promise&lt;T&gt;} promise with the data</span>
+	 <span class="s5">*/</span>
+	<span class="s1">async providePromise</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">computer</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">cacheEntry </span><span class="s3">= </span><span class="s4">await this</span><span class="s3">.</span><span class="s1">getPromise</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">cacheEntry </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">cacheEntry</span><span class="s3">;</span>
+		<span class="s4">const </span><span class="s1">result </span><span class="s3">= </span><span class="s4">await </span><span class="s1">computer</span><span class="s3">();</span>
+		<span class="s4">await this</span><span class="s3">.</span><span class="s1">storePromise</span><span class="s3">(</span><span class="s1">identifier</span><span class="s3">, </span><span class="s1">etag</span><span class="s3">, </span><span class="s1">result</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">result</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports </span><span class="s3">= </span><span class="s1">CacheFacade</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">ItemCacheFacade </span><span class="s3">= </span><span class="s1">ItemCacheFacade</span><span class="s3">;</span>
+<span class="s1">module</span><span class="s3">.</span><span class="s1">exports</span><span class="s3">.</span><span class="s1">MultiItemCache </span><span class="s3">= </span><span class="s1">MultiItemCache</span><span class="s3">;</span>
+</pre>
+</body>
+</html>

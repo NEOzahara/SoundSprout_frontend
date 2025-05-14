@@ -1,0 +1,357 @@
+<html>
+<head>
+<title>watchEventSource.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #7a7e85;}
+.s1 { color: #bcbec4;}
+.s2 { color: #6aab73;}
+.s3 { color: #bcbec4;}
+.s4 { color: #cf8e6d;}
+.s5 { color: #2aacb8;}
+.s6 { color: #5f826b; font-style: italic;}
+.s7 { color: #67a37c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#1e1f22">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#606060" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+watchEventSource.js</font>
+</center></td></tr></table>
+<pre><span class="s0">/* 
+    MIT License http://www.opensource.org/licenses/mit-license.php 
+    Author Tobias Koppers @sokra 
+*/</span>
+<span class="s2">&quot;use strict&quot;</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">fs </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;fs&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">path </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;path&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s3">{ </span><span class="s1">EventEmitter </span><span class="s3">} = </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;events&quot;</span><span class="s3">);</span>
+<span class="s4">const </span><span class="s1">reducePlan </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;./reducePlan&quot;</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">IS_OSX </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;os&quot;</span><span class="s3">).</span><span class="s1">platform</span><span class="s3">() === </span><span class="s2">&quot;darwin&quot;</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">IS_WIN </span><span class="s3">= </span><span class="s1">require</span><span class="s3">(</span><span class="s2">&quot;os&quot;</span><span class="s3">).</span><span class="s1">platform</span><span class="s3">() === </span><span class="s2">&quot;win32&quot;</span><span class="s3">;</span>
+<span class="s4">const </span><span class="s1">SUPPORTS_RECURSIVE_WATCHING </span><span class="s3">= </span><span class="s1">IS_OSX </span><span class="s3">|| </span><span class="s1">IS_WIN</span><span class="s3">;</span>
+
+<span class="s4">const </span><span class="s1">watcherLimit </span><span class="s3">=</span>
+	<span class="s3">+</span><span class="s1">process</span><span class="s3">.</span><span class="s1">env</span><span class="s3">.</span><span class="s1">WATCHPACK_WATCHER_LIMIT </span><span class="s3">|| (</span><span class="s1">IS_OSX </span><span class="s3">? </span><span class="s5">2000 </span><span class="s3">: </span><span class="s5">10000</span><span class="s3">);</span>
+
+<span class="s4">const </span><span class="s1">recursiveWatcherLogging </span><span class="s3">= !!</span><span class="s1">process</span><span class="s3">.</span><span class="s1">env</span>
+	<span class="s3">.</span><span class="s1">WATCHPACK_RECURSIVE_WATCHER_LOGGING</span><span class="s3">;</span>
+
+<span class="s4">let </span><span class="s1">isBatch </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+<span class="s4">let </span><span class="s1">watcherCount </span><span class="s3">= </span><span class="s5">0</span><span class="s3">;</span>
+
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{Map&lt;Watcher, string&gt;} */</span>
+<span class="s4">const </span><span class="s1">pendingWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{Map&lt;string, RecursiveWatcher&gt;} */</span>
+<span class="s4">const </span><span class="s1">recursiveWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{Map&lt;string, DirectWatcher&gt;} */</span>
+<span class="s4">const </span><span class="s1">directWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{Map&lt;Watcher, RecursiveWatcher | DirectWatcher&gt;} */</span>
+<span class="s4">const </span><span class="s1">underlyingWatcher </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+
+<span class="s4">class </span><span class="s1">DirectWatcher </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">filePath </span><span class="s3">= </span><span class="s1">filePath</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">try </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">fs</span><span class="s3">.</span><span class="s1">watch</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">watcher</span><span class="s3">;</span>
+			<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, (</span><span class="s1">type</span><span class="s3">, </span><span class="s1">filename</span><span class="s3">) =&gt; {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watchers</span><span class="s3">) {</span>
+					<span class="s1">w</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, </span><span class="s1">type</span><span class="s3">, </span><span class="s1">filename</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+			<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">error </span><span class="s3">=&gt; {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watchers</span><span class="s3">) {</span>
+					<span class="s1">w</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">error</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">} </span><span class="s4">catch </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+			<span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(() =&gt; {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watchers</span><span class="s3">) {</span>
+					<span class="s1">w</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">}</span>
+		<span class="s1">watcherCount</span><span class="s3">++;</span>
+	<span class="s3">}</span>
+
+	<span class="s1">add</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">) {</span>
+		<span class="s1">underlyingWatcher</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">, </span><span class="s4">this</span><span class="s3">);</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watchers</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+	<span class="s3">}</span>
+
+	<span class="s1">remove</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watchers</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">watchers</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+			<span class="s1">directWatchers</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">filePath</span><span class="s3">);</span>
+			<span class="s1">watcherCount</span><span class="s3">--;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcher</span><span class="s3">) </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcher</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">getWatchers</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">watchers</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">class </span><span class="s1">RecursiveWatcher </span><span class="s3">{</span>
+	<span class="s1">constructor</span><span class="s3">(</span><span class="s1">rootPath</span><span class="s3">) {</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">rootPath </span><span class="s3">= </span><span class="s1">rootPath</span><span class="s3">;</span>
+		<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{Map&lt;Watcher, string&gt;} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{Map&lt;string, Set&lt;Watcher&gt;&gt;} */</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">mapPathToWatchers </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">undefined</span><span class="s3">;</span>
+		<span class="s4">try </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">fs</span><span class="s3">.</span><span class="s1">watch</span><span class="s3">(</span><span class="s1">rootPath</span><span class="s3">, {</span>
+				<span class="s1">recursive</span><span class="s3">: </span><span class="s4">true</span>
+			<span class="s3">});</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">watcher</span><span class="s3">;</span>
+			<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, (</span><span class="s1">type</span><span class="s3">, </span><span class="s1">filename</span><span class="s3">) =&gt; {</span>
+				<span class="s4">if </span><span class="s3">(!</span><span class="s1">filename</span><span class="s3">) {</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">recursiveWatcherLogging</span><span class="s3">) {</span>
+						<span class="s1">process</span><span class="s3">.</span><span class="s1">stderr</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span>
+							<span class="s2">`[watchpack] dispatch </span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">} </span><span class="s2">event in recursive watcher (</span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">rootPath</span><span class="s3">}</span><span class="s2">) to all watchers</span><span class="s4">\n</span><span class="s2">`</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">()) {</span>
+						<span class="s1">w</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, </span><span class="s1">type</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+					<span class="s4">const </span><span class="s1">dir </span><span class="s3">= </span><span class="s1">path</span><span class="s3">.</span><span class="s1">dirname</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">);</span>
+					<span class="s4">const </span><span class="s1">watchers </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapPathToWatchers</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">dir</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">recursiveWatcherLogging</span><span class="s3">) {</span>
+						<span class="s1">process</span><span class="s3">.</span><span class="s1">stderr</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span>
+							<span class="s2">`[watchpack] dispatch </span><span class="s1">$</span><span class="s3">{</span><span class="s1">type</span><span class="s3">} </span><span class="s2">event in recursive watcher (</span><span class="s1">$</span><span class="s3">{</span>
+								<span class="s4">this</span><span class="s3">.</span><span class="s1">rootPath</span>
+							<span class="s3">}</span><span class="s2">) for '</span><span class="s1">$</span><span class="s3">{</span><span class="s1">filename</span><span class="s3">}</span><span class="s2">' to </span><span class="s1">$</span><span class="s3">{</span>
+								<span class="s1">watchers </span><span class="s3">? </span><span class="s1">watchers</span><span class="s3">.</span><span class="s1">size </span><span class="s3">: </span><span class="s5">0</span>
+							<span class="s3">} </span><span class="s2">watchers</span><span class="s4">\n</span><span class="s2">`</span>
+						<span class="s3">);</span>
+					<span class="s3">}</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">watchers </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of watchers</span><span class="s3">) {</span>
+						<span class="s1">w</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;change&quot;</span><span class="s3">, </span><span class="s1">type</span><span class="s3">, </span><span class="s1">path</span><span class="s3">.</span><span class="s1">basename</span><span class="s3">(</span><span class="s1">filename</span><span class="s3">));</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+			<span class="s1">watcher</span><span class="s3">.</span><span class="s1">on</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">error </span><span class="s3">=&gt; {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">()) {</span>
+					<span class="s1">w</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">error</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">} </span><span class="s4">catch </span><span class="s3">(</span><span class="s1">err</span><span class="s3">) {</span>
+			<span class="s1">process</span><span class="s3">.</span><span class="s1">nextTick</span><span class="s3">(() =&gt; {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of </span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">()) {</span>
+					<span class="s1">w</span><span class="s3">.</span><span class="s1">emit</span><span class="s3">(</span><span class="s2">&quot;error&quot;</span><span class="s3">, </span><span class="s1">err</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">});</span>
+		<span class="s3">}</span>
+		<span class="s1">watcherCount</span><span class="s3">++;</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">recursiveWatcherLogging</span><span class="s3">) {</span>
+			<span class="s1">process</span><span class="s3">.</span><span class="s1">stderr</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span>
+				<span class="s2">`[watchpack] created recursive watcher at </span><span class="s1">$</span><span class="s3">{</span><span class="s1">rootPath</span><span class="s3">}</span><span class="s4">\n</span><span class="s2">`</span>
+			<span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">add</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">) {</span>
+		<span class="s1">underlyingWatcher</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">, </span><span class="s4">this</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">subpath </span><span class="s3">= </span><span class="s1">filePath</span><span class="s3">.</span><span class="s1">slice</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">rootPath</span><span class="s3">.</span><span class="s1">length </span><span class="s3">+ </span><span class="s5">1</span><span class="s3">) || </span><span class="s2">&quot;.&quot;</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">subpath</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">set </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapPathToWatchers</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">subpath</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">set </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">newSet </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">();</span>
+			<span class="s1">newSet</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">mapPathToWatchers</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">subpath</span><span class="s3">, </span><span class="s1">newSet</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">set</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">remove</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">) {</span>
+		<span class="s4">const </span><span class="s1">subpath </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(!</span><span class="s1">subpath</span><span class="s3">) </span><span class="s4">return</span><span class="s3">;</span>
+		<span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s4">const </span><span class="s1">set </span><span class="s3">= </span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapPathToWatchers</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">subpath</span><span class="s3">);</span>
+		<span class="s1">set</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">set</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+			<span class="s4">this</span><span class="s3">.</span><span class="s1">mapPathToWatchers</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s1">subpath</span><span class="s3">);</span>
+		<span class="s3">}</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s5">0</span><span class="s3">) {</span>
+			<span class="s1">recursiveWatchers</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">rootPath</span><span class="s3">);</span>
+			<span class="s1">watcherCount</span><span class="s3">--;</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcher</span><span class="s3">) </span><span class="s4">this</span><span class="s3">.</span><span class="s1">watcher</span><span class="s3">.</span><span class="s1">close</span><span class="s3">();</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">recursiveWatcherLogging</span><span class="s3">) {</span>
+				<span class="s1">process</span><span class="s3">.</span><span class="s1">stderr</span><span class="s3">.</span><span class="s1">write</span><span class="s3">(</span>
+					<span class="s2">`[watchpack] closed recursive watcher at </span><span class="s1">$</span><span class="s3">{</span><span class="s4">this</span><span class="s3">.</span><span class="s1">rootPath</span><span class="s3">}</span><span class="s4">\n</span><span class="s2">`</span>
+				<span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s1">getWatchers</span><span class="s3">() {</span>
+		<span class="s4">return this</span><span class="s3">.</span><span class="s1">mapWatcherToPath</span><span class="s3">;</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">class </span><span class="s1">Watcher </span><span class="s4">extends </span><span class="s1">EventEmitter </span><span class="s3">{</span>
+	<span class="s1">close</span><span class="s3">() {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">pendingWatchers</span><span class="s3">.</span><span class="s1">has</span><span class="s3">(</span><span class="s4">this</span><span class="s3">)) {</span>
+			<span class="s1">pendingWatchers</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+			<span class="s4">return</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">watcher </span><span class="s3">= </span><span class="s1">underlyingWatcher</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+		<span class="s1">watcher</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+		<span class="s1">underlyingWatcher</span><span class="s3">.</span><span class="s1">delete</span><span class="s3">(</span><span class="s4">this</span><span class="s3">);</span>
+	<span class="s3">}</span>
+<span class="s3">}</span>
+
+<span class="s4">const </span><span class="s1">createDirectWatcher </span><span class="s3">= </span><span class="s1">filePath </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">existing </span><span class="s3">= </span><span class="s1">directWatchers</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">existing </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">existing</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">w </span><span class="s3">= </span><span class="s4">new </span><span class="s1">DirectWatcher</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+	<span class="s1">directWatchers</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">, </span><span class="s1">w</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">w</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">createRecursiveWatcher </span><span class="s3">= </span><span class="s1">rootPath </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">existing </span><span class="s3">= </span><span class="s1">recursiveWatchers</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">rootPath</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">existing </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s4">return </span><span class="s1">existing</span><span class="s3">;</span>
+	<span class="s4">const </span><span class="s1">w </span><span class="s3">= </span><span class="s4">new </span><span class="s1">RecursiveWatcher</span><span class="s3">(</span><span class="s1">rootPath</span><span class="s3">);</span>
+	<span class="s1">recursiveWatchers</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">rootPath</span><span class="s3">, </span><span class="s1">w</span><span class="s3">);</span>
+	<span class="s4">return </span><span class="s1">w</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s4">const </span><span class="s1">execute </span><span class="s3">= () =&gt; {</span>
+	<span class="s6">/** </span><span class="s7">@type </span><span class="s6">{Map&lt;string, Watcher[] | Watcher&gt;} */</span>
+	<span class="s4">const </span><span class="s1">map </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Map</span><span class="s3">();</span>
+	<span class="s4">const </span><span class="s1">addWatcher </span><span class="s3">= (</span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">filePath</span><span class="s3">) =&gt; {</span>
+		<span class="s4">const </span><span class="s1">entry </span><span class="s3">= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">entry </span><span class="s3">=== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">)) {</span>
+			<span class="s1">entry</span><span class="s3">.</span><span class="s1">push</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s1">map</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">, [</span><span class="s1">entry</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">]);</span>
+		<span class="s3">}</span>
+	<span class="s3">};</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">filePath</span><span class="s3">] </span><span class="s1">of pendingWatchers</span><span class="s3">) {</span>
+		<span class="s1">addWatcher</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">filePath</span><span class="s3">);</span>
+	<span class="s3">}</span>
+	<span class="s1">pendingWatchers</span><span class="s3">.</span><span class="s1">clear</span><span class="s3">();</span>
+
+	<span class="s0">// Fast case when we are not reaching the limit</span>
+	<span class="s4">if </span><span class="s3">(!</span><span class="s1">SUPPORTS_RECURSIVE_WATCHING </span><span class="s3">|| </span><span class="s1">watcherLimit </span><span class="s3">- </span><span class="s1">watcherCount </span><span class="s3">&gt;= </span><span class="s1">map</span><span class="s3">.</span><span class="s1">size</span><span class="s3">) {</span>
+		<span class="s0">// Create watchers for all entries in the map</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">filePath</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">] </span><span class="s1">of map</span><span class="s3">) {</span>
+			<span class="s4">const </span><span class="s1">w </span><span class="s3">= </span><span class="s1">createDirectWatcher</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">Array</span><span class="s3">.</span><span class="s1">isArray</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">)) {</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">item of entry</span><span class="s3">) </span><span class="s1">w</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">item</span><span class="s3">);</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s1">w</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+		<span class="s4">return</span><span class="s3">;</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// Reconsider existing watchers to improving watch plan</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">watcher of recursiveWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">w</span><span class="s3">, </span><span class="s1">subpath</span><span class="s3">] </span><span class="s1">of watcher</span><span class="s3">.</span><span class="s1">getWatchers</span><span class="s3">()) {</span>
+			<span class="s1">addWatcher</span><span class="s3">(</span><span class="s1">w</span><span class="s3">, </span><span class="s1">path</span><span class="s3">.</span><span class="s1">join</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">.</span><span class="s1">rootPath</span><span class="s3">, </span><span class="s1">subpath</span><span class="s3">));</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">watcher of directWatchers</span><span class="s3">.</span><span class="s1">values</span><span class="s3">()) {</span>
+		<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">w of watcher</span><span class="s3">.</span><span class="s1">getWatchers</span><span class="s3">()) {</span>
+			<span class="s1">addWatcher</span><span class="s3">(</span><span class="s1">w</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">.</span><span class="s1">filePath</span><span class="s3">);</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+
+	<span class="s0">// Merge map entries to keep watcher limit</span>
+	<span class="s0">// Create a 10% buffer to be able to enter fast case more often</span>
+	<span class="s4">const </span><span class="s1">plan </span><span class="s3">= </span><span class="s1">reducePlan</span><span class="s3">(</span><span class="s1">map</span><span class="s3">, </span><span class="s1">watcherLimit </span><span class="s3">* </span><span class="s5">0.9</span><span class="s3">);</span>
+
+	<span class="s0">// Update watchers for all entries in the map</span>
+	<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">filePath</span><span class="s3">, </span><span class="s1">entry</span><span class="s3">] </span><span class="s1">of plan</span><span class="s3">) {</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">size </span><span class="s3">=== </span><span class="s5">1</span><span class="s3">) {</span>
+			<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">filePath</span><span class="s3">] </span><span class="s1">of entry</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">w </span><span class="s3">= </span><span class="s1">createDirectWatcher</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+				<span class="s4">const </span><span class="s1">old </span><span class="s3">= </span><span class="s1">underlyingWatcher</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">old </span><span class="s3">=== </span><span class="s1">w</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+				<span class="s1">w</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+				<span class="s4">if </span><span class="s3">(</span><span class="s1">old </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">old</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+			<span class="s3">}</span>
+		<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+			<span class="s4">const </span><span class="s1">filePaths </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Set</span><span class="s3">(</span><span class="s1">entry</span><span class="s3">.</span><span class="s1">values</span><span class="s3">());</span>
+			<span class="s4">if </span><span class="s3">(</span><span class="s1">filePaths</span><span class="s3">.</span><span class="s1">size </span><span class="s3">&gt; </span><span class="s5">1</span><span class="s3">) {</span>
+				<span class="s4">const </span><span class="s1">w </span><span class="s3">= </span><span class="s1">createRecursiveWatcher</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s3">[</span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">watcherPath</span><span class="s3">] </span><span class="s1">of entry</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">old </span><span class="s3">= </span><span class="s1">underlyingWatcher</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">old </span><span class="s3">=== </span><span class="s1">w</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+					<span class="s1">w</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">watcherPath</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">);</span>
+					<span class="s4">if </span><span class="s3">(</span><span class="s1">old </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">old</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+				<span class="s3">}</span>
+			<span class="s3">} </span><span class="s4">else </span><span class="s3">{</span>
+				<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">filePath of filePaths</span><span class="s3">) {</span>
+					<span class="s4">const </span><span class="s1">w </span><span class="s3">= </span><span class="s1">createDirectWatcher</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+					<span class="s4">for </span><span class="s3">(</span><span class="s4">const </span><span class="s1">watcher of entry</span><span class="s3">.</span><span class="s1">keys</span><span class="s3">()) {</span>
+						<span class="s4">const </span><span class="s1">old </span><span class="s3">= </span><span class="s1">underlyingWatcher</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">old </span><span class="s3">=== </span><span class="s1">w</span><span class="s3">) </span><span class="s4">continue</span><span class="s3">;</span>
+						<span class="s1">w</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+						<span class="s4">if </span><span class="s3">(</span><span class="s1">old </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) </span><span class="s1">old</span><span class="s3">.</span><span class="s1">remove</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+					<span class="s3">}</span>
+				<span class="s3">}</span>
+			<span class="s3">}</span>
+		<span class="s3">}</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">watch </span><span class="s3">= </span><span class="s1">filePath </span><span class="s3">=&gt; {</span>
+	<span class="s4">const </span><span class="s1">watcher </span><span class="s3">= </span><span class="s4">new </span><span class="s1">Watcher</span><span class="s3">();</span>
+	<span class="s0">// Find an existing watcher</span>
+	<span class="s4">const </span><span class="s1">directWatcher </span><span class="s3">= </span><span class="s1">directWatchers</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(</span><span class="s1">directWatcher </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+		<span class="s1">directWatcher</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">);</span>
+		<span class="s4">return </span><span class="s1">watcher</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s4">let </span><span class="s1">current </span><span class="s3">= </span><span class="s1">filePath</span><span class="s3">;</span>
+	<span class="s4">for </span><span class="s3">(;;) {</span>
+		<span class="s4">const </span><span class="s1">recursiveWatcher </span><span class="s3">= </span><span class="s1">recursiveWatchers</span><span class="s3">.</span><span class="s1">get</span><span class="s3">(</span><span class="s1">current</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">recursiveWatcher </span><span class="s3">!== </span><span class="s1">undefined</span><span class="s3">) {</span>
+			<span class="s1">recursiveWatcher</span><span class="s3">.</span><span class="s1">add</span><span class="s3">(</span><span class="s1">filePath</span><span class="s3">, </span><span class="s1">watcher</span><span class="s3">);</span>
+			<span class="s4">return </span><span class="s1">watcher</span><span class="s3">;</span>
+		<span class="s3">}</span>
+		<span class="s4">const </span><span class="s1">parent </span><span class="s3">= </span><span class="s1">path</span><span class="s3">.</span><span class="s1">dirname</span><span class="s3">(</span><span class="s1">current</span><span class="s3">);</span>
+		<span class="s4">if </span><span class="s3">(</span><span class="s1">parent </span><span class="s3">=== </span><span class="s1">current</span><span class="s3">) </span><span class="s4">break</span><span class="s3">;</span>
+		<span class="s1">current </span><span class="s3">= </span><span class="s1">parent</span><span class="s3">;</span>
+	<span class="s3">}</span>
+	<span class="s0">// Queue up watcher for creation</span>
+	<span class="s1">pendingWatchers</span><span class="s3">.</span><span class="s1">set</span><span class="s3">(</span><span class="s1">watcher</span><span class="s3">, </span><span class="s1">filePath</span><span class="s3">);</span>
+	<span class="s4">if </span><span class="s3">(!</span><span class="s1">isBatch</span><span class="s3">) </span><span class="s1">execute</span><span class="s3">();</span>
+	<span class="s4">return </span><span class="s1">watcher</span><span class="s3">;</span>
+<span class="s3">};</span>
+
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">batch </span><span class="s3">= </span><span class="s1">fn </span><span class="s3">=&gt; {</span>
+	<span class="s1">isBatch </span><span class="s3">= </span><span class="s4">true</span><span class="s3">;</span>
+	<span class="s4">try </span><span class="s3">{</span>
+		<span class="s1">fn</span><span class="s3">();</span>
+	<span class="s3">} </span><span class="s4">finally </span><span class="s3">{</span>
+		<span class="s1">isBatch </span><span class="s3">= </span><span class="s4">false</span><span class="s3">;</span>
+		<span class="s1">execute</span><span class="s3">();</span>
+	<span class="s3">}</span>
+<span class="s3">};</span>
+
+<span class="s1">exports</span><span class="s3">.</span><span class="s1">getNumberOfWatchers </span><span class="s3">= () =&gt; {</span>
+	<span class="s4">return </span><span class="s1">watcherCount</span><span class="s3">;</span>
+<span class="s3">};</span>
+</pre>
+</body>
+</html>

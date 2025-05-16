@@ -356,7 +356,7 @@ export default function TopIcons() {
 
             <div className="menuLine contentLine">
                 <NavLink
-                    to="/explore"
+                    to="/login"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                     }

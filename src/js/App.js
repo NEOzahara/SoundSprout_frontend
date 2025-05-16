@@ -9,11 +9,13 @@ import HomePage from "./Pages/HomePage";
 import ExplorePage from './Pages/ExplorePage';
 
 import PlayerPage from './Pages/PlayerPage';
+import LoginPage from "./Pages/LoginPage";
 
 export default function App() {
     return (
         <BrowserRouter>
             <Routes>
+                <Route path="login" element={<LoginPage />} />
                 <Route element={<Layout />}>
                     <Route index element={<HomePage />} />
                     <Route path="explore" element={<ExplorePage />} />

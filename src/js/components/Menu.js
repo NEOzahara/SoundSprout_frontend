@@ -114,30 +114,53 @@ export default function TopIcons() {
 
             {/* Submenu de Playlists */}
             <div className={`subMenu ${playlistsOpen ? 'open' : ''}`}>
-                <p className="subItem">
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiPlus className="Icon" /></span>
                     <span className="subText">New Playlist</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiFolder className="Icon" /></span>
                     <span className="subText">Playlist 1</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiFolder className="Icon" /></span>
                     <span className="subText">Playlist 2</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiFolder className="Icon" /></span>
                     <span className="subText">Playlist 3</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiFolder className="Icon" /></span>
                     <span className="subText">Playlist 4</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiFolder className="Icon" /></span>
                     <span className="subText">Playlist 5</span>
-                </p>
+                </NavLink>
                 {/* ... mais itens ... */}
             </div>
 
@@ -171,30 +194,53 @@ export default function TopIcons() {
 
             {/* Submenu de Music */}
             <div className={`subMenu ${musicOpen ? 'open' : ''}`}>
-                <p className="subItem">
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiPlus className="Icon" /></span>
                     <span className="subText">New Song</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiMusic className="Icon" /></span>
                     <span className="subText">Posted Song 1</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiMusic className="Icon" /></span>
                     <span className="subText">Posted Song 2</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiMusic className="Icon" /></span>
                     <span className="subText">Posted Song 3</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiMusic className="Icon" /></span>
                     <span className="subText">Posted Song 4</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiMusic className="Icon" /></span>
                     <span className="subText">Posted Song 5</span>
-                </p>
+                </NavLink>
                 {/* ... mais itens ... */}
             </div>
 
@@ -229,30 +275,53 @@ export default function TopIcons() {
 
             {/* Submenu de Likes */}
             <div className={`subMenu ${likesOpen ? 'open' : ''}`}>
-                <p className="subItem">
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiPlus className="Icon" /></span>
                     <span className="subText">New Song</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiHeart className="Icon" /></span>
                     <span className="subText">Posted Song 1</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiHeart className="Icon" /></span>
                     <span className="subText">Posted Song 2</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiHeart className="Icon" /></span>
                     <span className="subText">Posted Song 3</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiHeart className="Icon" /></span>
                     <span className="subText">Posted Song 4</span>
-                </p>
-                <p className="subItem">
+                </NavLink>
+
+                <NavLink
+                    to="/explore"
+                    className="subItem"
+                >
                     <span className="subIcon"><FiHeart className="Icon" /></span>
                     <span className="subText">Posted Song 5</span>
-                </p>
+                </NavLink>
                 {/* ... mais itens ... */}
             </div>
 

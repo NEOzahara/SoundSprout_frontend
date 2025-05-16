@@ -7,7 +7,11 @@ export default function TopIcons() {
 
     const renderCards = (start) =>
         Array.from({ length: 6 }, (_, i) => i + start).map((n) => (
-            <div key={n} className="cardItem">
+            <div
+                key={n}
+                className="cardItem"
+                onClick={() => console.log('clicou em Music', n)}
+            >
                 <FiHome className="cardIcon" />
                 <div className="cardText">
                     <span className="cardTitle">Music {n}</span>

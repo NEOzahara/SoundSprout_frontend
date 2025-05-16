@@ -49,16 +49,28 @@ export default function PlayerBar() {
                 to="/player"
                 className="playerBarBackgroundLink"
             />
-            <FiSkipBack className="controlIcon"/>
+            <FiSkipBack
+                className="controlIcon"
+                onClick={() => console.log('Skip Back clicado!')}
+            />
             <button className="playButton" onClick={togglePlay}>
                 {isPlaying
                     ? <FiPause className="icon pauseIcon"/>    // mostra o ícone de pausa
                     : <FiPlay  className="icon playIcon"/>   // mostra o ícone de play
                 }
             </button>
-            <FiSkipForward className="controlIcon"/>
-            <FiShuffle className="controlIcon"/>
-            <FiRepeat className="controlIcon"/>
+            <FiSkipForward
+                className="controlIcon"
+                onClick={() => console.log('Skip Forward clicado!')}
+            />
+            <FiShuffle
+                className="controlIcon"
+                onClick={() => console.log('Shuffle clicado!')}
+            />
+            <FiRepeat
+                className="controlIcon"
+                onClick={() => console.log('Repeat clicado!')}
+            />
 
             <span className="currentTime">0:12</span>
 
@@ -98,10 +110,22 @@ export default function PlayerBar() {
                 </span>
             </div>
 
-            <FiHeart className="actionIcon"/>
-            <FiPlus className="actionIcon"/>
-            <FiMessageCircle className="actionIcon"/>
-            <FiList className="actionIcon"/>
+            <FiHeart
+                className="actionIcon"
+                onClick={() => console.log('Heart clicado!')}
+            />
+            <FiPlus
+                className="actionIcon"
+                onClick={() => console.log('Plus clicado!')}
+            />
+            <FiMessageCircle
+                className="actionIcon"
+                onClick={() => console.log('MessageCircle clicado!')}
+            />
+            <FiList
+               className="actionIcon"
+               onClick={() => console.log('List clicado!')}
+            />
         </div>
     )
 }

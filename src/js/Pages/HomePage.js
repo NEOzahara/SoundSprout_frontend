@@ -4,15 +4,28 @@ import '../../css/Home.css';
 
 export default function HomePage () {
 
-    const [activeTab, setActiveTab] = useState('Playlist');
-    const [currentPage, setCurrentPage] = useState('Home');
+    const handleCoverClick  = n => console.log(`Music ${n} clicado!`);
+    const handleArtistClick = n => console.log(`Artist ${n} clicado!`);
 
     const renderCovers = (count) =>
         Array.from({ length: count }, (_, i) => i + 1).map((n) => (
             <div key={n} className="coverCard">
-                <div className="coverPlaceholder" />
-                <span className="coverTitle">Song {n}</span>
-                <span className="coverArtist">Artist {n}</span>
+                <div
+                    className="coverPlaceholder"
+                    onClick={() => handleCoverClick(n)}
+                />
+                <span
+                    className="coverTitle"
+                    onClick={() => handleCoverClick(n)}
+                >
+                    Song {n}
+                </span>
+                <span
+                    className="coverArtist"
+                    onClick={() => handleArtistClick(n)}
+                >
+                    Artist {n}
+                </span>
             </div>
         ));
 

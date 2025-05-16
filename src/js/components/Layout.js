@@ -40,8 +40,10 @@ export default function Layout() {
                 <div className="pageHeader">
                     <h1>{title}</h1>
                 </div>
-                {/* é aqui que o HomePage ou ExplorePage aparece */}
-                <Outlet />
+                <div className="centerWrapper">
+                    {/* é aqui que o HomePage ou ExplorePage aparece */}
+                    <Outlet />
+                </div>
             </div>
 
             {/* player fixo em baixo */}

@@ -1,103 +1,96 @@
-import React from 'react';
-import { ReactComponent as Logo } from '../../images/logo.svg'
+import React, { useState } from 'react';
+import { ReactComponent as Logo } from '../../images/logo.svg';
+import { useNavigate } from 'react-router-dom';
+import api from '../services/api';
 import '../../css/LoginPage.css';
 
 export default function LoginPage() {
-    return (
-        // usa a .background do Common.css e acrescenta classe para o gradiente
-        <div className="background loginBackground">
+    const [identifier, setIdentifier] = useState(''); // email ou username
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState(null);
+    const navigate = useNavigate();
 
-            {/* ==== SECÇÃO CENTRAL ==== */}
+    const handleLogin = async (e) => {
+        e.preventDefault();
+        setError(null);
+
+        try {
+            const { data } = await api.post('/auth/login', {
+                email: identifier,
+                password
+            });
+            localStorage.setItem('token', data.token);
+            // redireciona para a página principal ou dashboard
+            navigate('/');
+        } catch (err) {
+            console.error('Erro no login:', err);
+            setError('Credenciais inválidas.');
+        }
+    };
+
+    return (
+        <div className="background loginBackground">
             <div className="loginCentral">
                 <div className="loginPanel">
                     <Logo className="loginLogo" />
+                    <h1 className="loginTitle">Entrar no SoundSprout</h1>
 
-                    <h1 className="loginTitle">Log in to SoundSprout</h1>
+                    <form onSubmit={handleLogin} className="loginForm">
+                        <label className="field">
+                            <span className="fieldLabel">Email</span>
+                            <input
+                                type="text"
+                                className="fieldInput"
+                                placeholder="email@exemplo.com "
+                                value={identifier}
+                                onChange={e => setIdentifier(e.target.value)}
+                                required
+                            />
+                        </label>
+
+                        <label className="field">
+                            <span className="fieldLabel">Password</span>
+                            <input
+                                type="password"
+                                className="fieldInput"
+                                placeholder="•••••••••••••••••••"
+                                value={password}
+                                onChange={e => setPassword(e.target.value)}
+                                required
+                            />
+                        </label>
+
+                        {error && <div className="errorMessage">{error}</div>}
+
+                        <button type="submit" className="loginButton">Entrar</button>
+                    </form>
 
                     <button
                         className="googleButton"
-                        onClick={() => console.log('Continue with Google clicked')}>
-
-                        <span className="googleIcon">{/* icon SVG ou componente */}</span>
-                        Continue with Google
+                        onClick={() => console.log('Continue with Google clicked')}
+                    >
+                        <span className="googleIcon" />
+                        Continuar com Google
                     </button>
 
-                    <div className="divider" />
-
-                    <label className="field">
-                        <span className="fieldLabel">Email or username</span>
-                        <input
-                            type="email"
-                            className="fieldInput"
-                            placeholder="emailexemplo@gmail.com"
-                        />
-                    </label>
-
-                    <label className="field">
-                        <span className="fieldLabel">Password</span>
-                        <input
-                            type="password"
-                            className="fieldInput"
-                            placeholder="•••••••••••••••••••"
-                        />
-                    </label>
-
-                    <button
-                        className="loginButton"
-                        onClick={() => console.log('Login button clicked')}
-                    >
-                        Login
-                    </button>
-
-                    <a
-                        href="/forgot-password"
-                        className="forgotLink"
-                        onClick={e => {
-                            e.preventDefault();
-                            console.log('Forgot your password clicked');
-                        }}
-                    >
-                        Forgot your password?
+                    <a href="/forgot-password" className="forgotLink" onClick={e => e.preventDefault()}>
+                        Esqueceste-te da password?
                     </a>
 
                     <p className="signupText">
-                        Don’t have an account?{' '}
-                        <a
-                            href="/signup"
-                            className="signupLink"
-                            onClick={e => {
-                                e.preventDefault();
-                                console.log('Sign up for SoundSprout clicked');
-                            }}
-                        >
-                            Sign up for SoundSprout
+                        Ainda não tens conta?{' '}
+                        <a href="/signup" className="signupLink" onClick={e => e.preventDefault()}>
+                            Registar no SoundSprout
                         </a>
                     </p>
                 </div>
             </div>
 
-            {/* ==== SECÇÃO DE BAIXO ==== */}
             <div className="loginFooter">
                 This site is protected by reCAPTCHA and the Google{' '}
-                <a
-                    href="#"
-                    className="footerLink"
-                    onClick={e => {
-                        e.preventDefault();
-                        console.log('Privacy Policy clicked');
-                    }}
-                >
-                    Privacy Policy
-                </a> and{' '}
-                <a
-                    href="#"
-                    className="footerLink"
-                    onClick={e => {
-                        e.preventDefault();
-                        console.log('Terms of Service clicked');
-                    }}
-                >Terms of Service
-                </a>{' '}
+                <a href="#" className="footerLink" onClick={e => e.preventDefault()}>Privacy Policy</a>{' '}
+                and{' '}
+                <a href="#" className="footerLink" onClick={e => e.preventDefault()}>Terms of Service</a>{' '}
                 apply.
             </div>
         </div>

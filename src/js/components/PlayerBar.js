@@ -1,131 +1,136 @@
-import React, {useState, useRef, useEffect} from 'react'
-import {FiSkipBack, FiPause, FiPlay, FiSkipForward, FiShuffle, FiRepeat, FiVolume2, FiHeart, FiPlus, FiMessageCircle, FiList
-} from 'react-icons/fi'
-
-import { NavLink } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
+import {
+    FiSkipBack,
+    FiPause,
+    FiPlay,
+    FiSkipForward,
+    FiShuffle,
+    FiRepeat,
+    FiVolume2,
+    FiHeart,
+    FiPlus,
+    FiMessageCircle,
+    FiList
+} from 'react-icons/fi';
+import api from '../services/api';
 
 export default function PlayerBar() {
-
+    const [playlist, setPlaylist] = useState([]);
+    const [trackIndex, setTrackIndex] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
-    const togglePlay = () => setIsPlaying(p => !p);
-    const [progress, setProgress] = useState(40); // inicial 40%
-    const progressRef = useRef(null);
-    const dragging = useRef(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const audioRef = useRef(null);
 
-    // quando o mouse for solto, deixa de arrastar
+    // Carregar playlist do utilizador 'joao'
     useEffect(() => {
-        const onUp = () => { dragging.current = false; };
-        window.addEventListener('mouseup', onUp);
-        return () => window.removeEventListener('mouseup', onUp);
+        api.get(`/musicas/utilizador/joao`)
+            .then(({ data }) => {
+                const list = Array.isArray(data) ? data : data ? [data] : [];
+                setPlaylist(list);
+            })
+            .catch(err => console.error('Erro ao carregar playlist:', err));
     }, []);
 
-    // se estiver em arraste, atualiza o progress
+    const currentTrack = playlist[trackIndex] || {};
+    const streamUrl = currentTrack.titulo
+        ? `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/` +
+        `${currentTrack.features}/${encodeURIComponent(currentTrack.titulo)}/${currentTrack.username}`
+        : '';
+
+    // Atualizar áudio ao mudar de faixa
     useEffect(() => {
-        const onMove = e => {
-            if (!dragging.current || !progressRef.current) return;
-            const rect = progressRef.current.getBoundingClientRect();
-            let pct = ((e.clientX - rect.left) / rect.width) * 100;
-            pct = Math.max(0, Math.min(100, pct));
-            setProgress(pct);
+        const audio = audioRef.current;
+        if (audio && streamUrl) {
+            audio.src = streamUrl;
+            audio.load();
+            if (isPlaying) audio.play();
+        }
+    }, [streamUrl]);
+
+    // Eventos: metadata, progresso e fim da faixa
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        const onLoaded = () => setDuration(audio.duration);
+        const onTimeUpdate = () => setCurrentTime(audio.currentTime);
+        const onEnded = () => handleNext();
+        audio.addEventListener('loadedmetadata', onLoaded);
+        audio.addEventListener('timeupdate', onTimeUpdate);
+        audio.addEventListener('ended', onEnded);
+        return () => {
+            audio.removeEventListener('loadedmetadata', onLoaded);
+            audio.removeEventListener('timeupdate', onTimeUpdate);
+            audio.removeEventListener('ended', onEnded);
         };
-        window.addEventListener('mousemove', onMove);
-        return () => window.removeEventListener('mousemove', onMove);
-    }, []);
+    }, [playlist, trackIndex]);
 
-    // ao clicar ou tocar na barra, inicia arraste e define novo valor
-    const startDrag = e => {
-        e.preventDefault();            // ⬅️ evita seleção de texto
-        if (!progressRef.current) return;
-        dragging.current = true;
-        const rect = progressRef.current.getBoundingClientRect();
-        let pct = ((e.clientX - rect.left) / rect.width) * 100;
-        pct = Math.max(0, Math.min(100, pct));
-        setProgress(pct);
+    const togglePlay = () => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        if (isPlaying) audio.pause(); else audio.play();
+        setIsPlaying(prev => !prev);
+    };
+
+    const handlePrev = () => {
+        if (!playlist.length) return;
+        setTrackIndex(prev => (prev - 1 + playlist.length) % playlist.length);
+        setIsPlaying(true);
+    };
+
+    const handleNext = () => {
+        if (!playlist.length) return;
+        setTrackIndex(prev => (prev + 1) % playlist.length);
+        setIsPlaying(true);
+    };
+
+    const formatTime = time => {
+        const minutes = Math.floor(time / 60);
+        const seconds = String(Math.floor(time % 60)).padStart(2, '0');
+        return `${minutes}:${seconds}`;
     };
 
     return (
         <div className="playerBar">
-            <NavLink
-                to="/player"
-                className="playerBarBackgroundLink"
-            />
-            <FiSkipBack
-                className="controlIcon"
-                onClick={() => console.log('Skip Back clicado!')}
-            />
+            <audio ref={audioRef} preload="metadata" />
+
+            <FiSkipBack className="controlIcon" onClick={handlePrev} />
             <button className="playButton" onClick={togglePlay}>
                 {isPlaying
-                    ? <FiPause className="icon pauseIcon"/>    // mostra o ícone de pausa
-                    : <FiPlay  className="icon playIcon"/>   // mostra o ícone de play
+                    ? <FiPause className="icon pauseIcon" />
+                    : <FiPlay className="icon playIcon" />
                 }
             </button>
-            <FiSkipForward
-                className="controlIcon"
-                onClick={() => console.log('Skip Forward clicado!')}
-            />
-            <FiShuffle
-                className="controlIcon"
-                onClick={() => console.log('Shuffle clicado!')}
-            />
-            <FiRepeat
-                className="controlIcon"
-                onClick={() => console.log('Repeat clicado!')}
-            />
+            <FiSkipForward className="controlIcon" onClick={handleNext} />
+            <FiShuffle className="controlIcon" onClick={() => console.log('Shuffle clicado!')} />
+            <FiRepeat className="controlIcon" onClick={() => {
+                const audio = audioRef.current;
+                if (audio) audio.loop = !audio.loop;
+                console.log('Loop toggled');
+            }} />
 
-            <span className="currentTime">0:12</span>
-
-            <div
-                className="progressContainer"
-                ref={progressRef}
-                onMouseDown={startDrag}
-            >
-                <div className="progressTrack"/>
-                <div className="progressFill"
-                     style={{
-                         width: `${progress}%`,
-                         backgroundColor: isPlaying ? '#B08D57' : '#B0B0B0'
-                     }}></div>
+            <span className="currentTime">{formatTime(currentTime)}</span>
+            <div className="progressContainer" onClick={e => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const pct = (e.clientX - rect.left) / rect.width;
+                if (audioRef.current) audioRef.current.currentTime = pct * duration;
+            }}>
+                <div className="progressTrack" />
+                <div className="progressFill" style={{ width: `${(currentTime / duration) * 100}%` }} />
             </div>
-            <span className="totalTime">3:45</span>
-            <FiVolume2
-                className="volumeIcon"
-                onClick={() => {
-                  /* aqui a tua função de volume, por ex: */
-                    console.log('Volume clicado!')
-                }}
-            />
+            <span className="totalTime">{formatTime(duration)}</span>
+            <FiVolume2 className="volumeIcon" onClick={() => console.log('Volume clicado!')} />
 
-            <div className="albumArt"></div>
+            <div className="albumArt" />
             <div className="trackInfo">
-                <span
-                    className="trackTitle"
-                    onClick={() => console.log('Título clicado!')}
-                >
-                    Song Name
-                </span>
-                <span className="trackArtist"
-                      onClick={() => console.log('Artista clicado!')}
-                >
-                    Artist Name
-                </span>
+                <span className="trackTitle">{currentTrack.titulo}</span>
+                <span className="trackArtist">{currentTrack.username}</span>
             </div>
 
-            <FiHeart
-                className="actionIcon"
-                onClick={() => console.log('Heart clicado!')}
-            />
-            <FiPlus
-                className="actionIcon"
-                onClick={() => console.log('Plus clicado!')}
-            />
-            <FiMessageCircle
-                className="actionIcon"
-                onClick={() => console.log('MessageCircle clicado!')}
-            />
-            <FiList
-               className="actionIcon"
-               onClick={() => console.log('List clicado!')}
-            />
+            <FiHeart className="actionIcon" onClick={() => console.log('Heart clicado!')} />
+            <FiPlus className="actionIcon" onClick={() => console.log('Plus clicado!')} />
+            <FiMessageCircle className="actionIcon" onClick={() => console.log('MessageCircle clicado!')} />
+            <FiList className="actionIcon" onClick={() => console.log('List clicado!')} />
         </div>
-    )
+    );
 }

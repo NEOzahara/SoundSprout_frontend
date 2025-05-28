@@ -1,26 +1,115 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import '../../css/Home.css';
+import '../../css/Explore.css';
+import { FiUser } from 'react-icons/fi';
 
 export default function ExplorePage() {
-    const [songs, setSongs] = useState([]);
-    const username = 'joao';
 
-    useEffect(() => {
+    const handleCoverClick  = n => console.log(`Music ${n} clicado!`);
+
+    const sections = [
+        { title: 'Discover',   render: count => renderDiscover(count) },
+        { title: 'Genres',      render: count => renderGenres(count) },
+        { title: 'Playlists',         render: count => renderPlaylists(count) },
+        { title: 'Artists',   render: count => renderArtists(count) },
+    ];
+
+    function renderDiscover(count) {
+        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
+            <div key={n} className="coverCard">
+                <div className="coverPlaceholder" onClick={() => handleCoverClick(n)} />
+                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Song {n}</span>
+            </div>
+        ));
+    }
+
+    function renderGenres(count) {
+        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
+            <div key={n} className="coverCard">
+                <div className="coverPlaceholder" onClick={() => handleCoverClick(n)} />
+                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Playlist {n}</span>
+            </div>
+        ));
+    }
+
+    function renderPlaylists(count) {
+        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
+            <div key={n} className="coverCard">
+                <div className="coverPlaceholder" onClick={() => handleCoverClick(n)} />
+                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Artist {n}</span>
+            </div>
+        ));
+    }
+
+    function renderArtists(count) {
+        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
+            <div key={n} className="coverCard">
+                <div
+                    className="profilePlaceholder"
+                    onClick={() => handleCoverClick(n)}
+                >
+                    <FiUser className="profileIcon" />
+                </div>
+                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Artist {n}</span>
+            </div>
+        ));
+    }
+
+    return (
+        <div className="exploreSection">
+            {sections.map(({ title, render }, idx) => (
+                <React.Fragment key={idx}>
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">{title}</span>
+                        <button className="seeAll" onClick={() => console.log('see all clicked')}>
+                            see all
+                        </button>
+                    </div>
+                    <div className="carouselWrapper">
+                        <div className="carousel">{render(7)}</div>
+                    </div>
+                    {idx < sections.length - 1 && (
+                        <div className="exploreSpacer" />
+                    )}
+                </React.Fragment>
+            ))}
+        </div>
+    );
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    //const [songs, setSongs] = useState([]);
+    //const username = 'joao';
+
+    /*useEffect(() => {
         api.get(`/musicas/utilizador/${username}`)
             .then(({ data }) => {
                 const list = Array.isArray(data) ? data : data ? [data] : [];
                 setSongs(list);
             })
             .catch(err => console.error('Erro ao listar músicas:', err));
-    }, [username]);
+    }, [username]);*/
 
     // Base URL do backend (sem o /api)
-    const baseUrl = process.env.REACT_APP_API_BASE_URL
+    /*const baseUrl = process.env.REACT_APP_API_BASE_URL
         ? process.env.REACT_APP_API_BASE_URL.replace('/api', '')
-        : 'http://localhost:5000';
+        : 'http://localhost:5000';*/
 
-    return (
+    /*return (
         <div className="recommendSection">
             <div className="recommendHeader">
                 <span className="sectionTitle">Músicas Recomendadas</span>
@@ -54,5 +143,7 @@ export default function ExplorePage() {
                 </div>
             </div>
         </div>
-    );
+    );*/
+
+
 }

@@ -1,5 +1,4 @@
 import React from 'react'
-import { NavLink } from 'react-router-dom';
 import { Outlet, useLocation } from 'react-router-dom';
 import { ReactComponent as Logo } from '../../images/logo.svg'
 import TopIcons from './TopIcons'
@@ -17,9 +16,13 @@ export default function Layout() {
         '/':           'Home',
         '/explore':    'Explore',
         // '/following': 'Following',
-        '/player':    'Player',
+        //'/player':    'Player',
         // ...
     };
+    // páginas onde NÃO queremos o título
+    const hideTitleOn = ['/player'];
+    const showTitle = !hideTitleOn.includes(pathname);
+
     const title = titleMap[pathname] || '';
 
     return (
@@ -37,9 +40,11 @@ export default function Layout() {
 
             {/* área central com header comum */}
             <div className="contentArea">
-                <div className="pageHeader">
-                    <h1>{title}</h1>
-                </div>
+                {showTitle && (
+                    <div className="pageHeader">
+                        <h1>{title}</h1>
+                    </div>
+                )}
                 <div className="centerWrapper">
                     {/* é aqui que o HomePage ou ExplorePage aparece */}
                     <Outlet />

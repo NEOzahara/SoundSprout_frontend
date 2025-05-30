@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, {useState, useRef, useEffect, useLayoutEffect} from 'react';
+import { NavLink } from 'react-router-dom';
 import {
     FiSkipBack,
     FiPause,
@@ -20,7 +21,13 @@ export default function PlayerBar() {
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
+
     const audioRef = useRef(null);
+    const titleInnerRef = useRef(null);
+    const artistInnerRef = useRef(null);
+
+    const [titleOverflow, setTitleOverflow] = useState(false);
+    const [artistOverflow, setArtistOverflow] = useState(false);
 
     // Carregar playlist do utilizador 'joao'
     useEffect(() => {
@@ -37,6 +44,16 @@ export default function PlayerBar() {
         ? `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/` +
         `${currentTrack.features}/${encodeURIComponent(currentTrack.titulo)}/${currentTrack.username}`
         : '';
+
+    // Sempre que a faixa muda, verifica overflow
+    // detecta overflow logo após o layout
+    useLayoutEffect(() => {
+        const t = titleInnerRef.current;
+        const a = artistInnerRef.current;
+        if (t) setTitleOverflow(t.scrollWidth > t.clientWidth);
+        if (a) setArtistOverflow(a.scrollWidth > a.clientWidth);
+        console.log("titleOverflow:", titleOverflow, "artistOverflow:", artistOverflow);
+    }, [playlist, trackIndex]);
 
     // Atualizar áudio ao mudar de faixa
     useEffect(() => {
@@ -121,10 +138,25 @@ export default function PlayerBar() {
             <span className="totalTime">{formatTime(duration)}</span>
             <FiVolume2 className="volumeIcon" onClick={() => console.log('Volume clicado!')} />
 
-            <div className="albumArt" />
+            <NavLink to="/player" className="albumArtLink">
+                <div className="albumArt" />
+            </NavLink>
+
             <div className="trackInfo">
-                <span className="trackTitle">{currentTrack.titulo}</span>
-                <span className="trackArtist">{currentTrack.username}</span>
+                <NavLink
+                    to="/player"
+                    className={`trackTitle ${titleOverflow ? "marquee-hover" : ""}`}
+                    ref={titleInnerRef}
+                 >
+                    {currentTrack.titulo || "TESTEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"}
+                </NavLink>
+                <NavLink
+                   to="/player"
+                   className={`trackArtist ${artistOverflow ? "marquee-hover" : ""}`}
+                   ref={artistInnerRef}
+                >
+                    {currentTrack.username || "Artista"}
+                </NavLink>
             </div>
 
             <FiHeart className="actionIcon" onClick={() => console.log('Heart clicado!')} />

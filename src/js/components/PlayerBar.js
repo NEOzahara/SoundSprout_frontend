@@ -50,10 +50,16 @@ export default function PlayerBar() {
     useLayoutEffect(() => {
         const t = titleInnerRef.current;
         const a = artistInnerRef.current;
-        if (t) setTitleOverflow(t.scrollWidth > t.clientWidth);
-        if (a) setArtistOverflow(a.scrollWidth > a.clientWidth);
+        if (t) {
+            const parentWidth = t.parentElement.clientWidth;
+            setTitleOverflow(t.scrollWidth > parentWidth);
+        }
+        if (a) {
+            const parentWidth = a.parentElement.clientWidth;
+            setArtistOverflow(a.scrollWidth > parentWidth);
+        }
         console.log("titleOverflow:", titleOverflow, "artistOverflow:", artistOverflow);
-    }, [playlist, trackIndex]);
+    }, [currentTrack.titulo, currentTrack.username]);
 
     // Atualizar áudio ao mudar de faixa
     useEffect(() => {
@@ -155,7 +161,7 @@ export default function PlayerBar() {
                    className={`trackArtist ${artistOverflow ? "marquee-hover" : ""}`}
                    ref={artistInnerRef}
                 >
-                    {currentTrack.username || "Artista"}
+                    {currentTrack.username || "ARTISTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
                 </NavLink>
             </div>
 

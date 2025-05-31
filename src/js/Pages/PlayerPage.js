@@ -59,7 +59,7 @@ export default function PlayerPage () {
                                 <div className="playGlow" />
                                 <button className="playIcon" onClick={togglePlay}>
                                     {isPlaying ? <FiPause className="icon pauseIcon" />
-                                        : <FiPlay  className="icon playIcon"  />
+                                                : <FiPlay  className="icon playIcon"  />
                                     }
                                 </button>
                             </div>
@@ -91,17 +91,47 @@ export default function PlayerPage () {
                 </div>
 
                 {/* === PARTE INFERIOR === */}
-                <div className="playerTabs">
-                    {['Credits','More Like This','Lyrics'].map(t => (
-                        <button
-                            key={t}
-                            className={`tab${activeTab===t?' active':''}`}
-                            onClick={()=>setActiveTab(t)}
-                        >{t}</button>
-                    ))}
+                <div className="tabsContainer">
+                    <div className="playerTabs">
+                        {['Lyrics','More Like This','Credits'].map(t => (
+                            <button
+                                key={t}
+                                className={`tab${activeTab===t?' active':''}`}
+                                onClick={()=>setActiveTab(t)}
+                            >{t}</button>
+                        ))}
+                    </div>
+                    <hr className="tabDivider"/>
                 </div>
-                <hr className="tabDivider"/>
 
+                {/* === CONTEÚDO ABAIXO DAS TABS === */}
+                {activeTab === 'Lyrics' ? (
+                    <div className="lyricsBox">
+                        <p className="lyricsText">
+                            {/* Aqui você pode colar toda a letra da música. Exemplo de texto longo: */}
+                            Mais, mais um verso que seja suficientemente grande para testar o scroll vertical. Lorem ipsum dolor sit amet,
+                            consectetur adipiscing elit. Vivamus luctus urna sed urna ultricies ac tempor dui sagittis. In condimentum
+                            facilisis porta. Sed nec diam eu diam mattis viverra. Nulla fringilla, orci ac euismod semper, magna
+                            diam porttitor mauris, quis sollicitudin sapien justo in libero. Fusce vel dui. Donec purus orci, porta
+                            quis lacinia ut, interdum a nibh. Aenean at elit in tellus imperdiet ullamcorper. Quisque eu turpis
+                            euismod, sodales elit quis, dictum sem. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices
+                            posuere cubilia curae; Integer blandit lectus mauris, nec ultricies orci vehicula quis. Vivamus non
+                            posuere risus. Fusce facilisis nisl turpis, at dictum risus sodales eu. Etiam at volutpat magna. In id
+                            libero quis libero suscipit dignissim in nec nunc. Integer pretium augue vitae magna iaculis, sit amet
+                            vulputate sapien pharetra. testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+                        </p>
+                    </div>
+                ) : (
                 <div className="songList">
                     {credits.map((item, idx) => (
                         <div key={idx} className="trackRow">
@@ -136,6 +166,7 @@ export default function PlayerPage () {
                         </div>
                     ))}
                 </div>
+                )}
             </div>
         </div>
     );

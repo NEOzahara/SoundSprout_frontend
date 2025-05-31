@@ -4,26 +4,24 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import '../../css/Login.css';
 
-export default function LoginPage() {
-    const [identifier, setIdentifier] = useState(''); // email ou username
+export default function ForgotPasswordPage() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState(null);
     const navigate = useNavigate();
 
-    const handleLogin = async (e) => {
+    const handleResetPassword = async (e) => {
         e.preventDefault();
         setError(null);
 
         try {
-            const { data } = await api.post('/auth/login', {
-                email: identifier,
+            const { data } = await api.post('/auth/forgot-password', {
                 password
             });
             localStorage.setItem('token', data.token);
             // redireciona para a página principal ou dashboard
-            navigate('/');
+            navigate('/login');
         } catch (err) {
-            console.error('Erro no login:', err);
+            console.error('Erro no forgot-password:', err);
             setError('Credenciais inválidas.');
         }
     };
@@ -33,21 +31,13 @@ export default function LoginPage() {
             <div className="loginCentral">
                 <div className="loginPanel">
                     <Logo className="loginLogo" />
-                    <h1 className="loginTitle">Login to SoundSprout</h1>
+                    <h1 className="loginTitle">Reset your Password</h1>
 
-                    <form onSubmit={handleLogin} className="loginForm">
-                        <label className="field">
-                            <span className="fieldLabel">Email</span>
-                            <input
-                                type="text"
-                                className="fieldInput"
-                                placeholder="email@exemplo.com "
-                                value={identifier}
-                                onChange={e => setIdentifier(e.target.value)}
-                                required
-                            />
-                        </label>
+                    <p className="resetPasswordText">
+                        Enter the email address or username linked to your SoundSprout account and we'll send you an email.
+                    </p>
 
+                    <form onSubmit={handleResetPassword} className="forgotPasswordForm">
                         <label className="field">
                             <span className="fieldLabel">Password</span>
                             <input
@@ -62,7 +52,7 @@ export default function LoginPage() {
 
                         {error && <div className="errorMessage">{error}</div>}
 
-                        <button type="submit" className="loginButton">Log In</button>
+                        <button type="submit" className="loginButton">Send Link</button>
                     </form>
 
                     {/*
@@ -75,30 +65,6 @@ export default function LoginPage() {
                     </button>
                     */}
 
-                    <a
-                        href="/forgot-password"
-                        className="forgotLink"
-                        onClick={e => {
-                            e.preventDefault();
-                            navigate('/forgot-password');
-                        }}
-                    >
-                        Esqueceste-te da password?
-                    </a>
-
-                    <p className="signupText">
-                        Ainda não tens conta?{' '}
-                        <a
-                            href="/signup"
-                            className="signupLink"
-                            onClick={e => {
-                                e.preventDefault();
-                                navigate('/signup');
-                            }}
-                        >
-                            Signup to SoundSprout
-                        </a>
-                    </p>
                 </div>
             </div>
 

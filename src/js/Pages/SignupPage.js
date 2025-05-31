@@ -4,26 +4,28 @@ import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import '../../css/Login.css';
 
-export default function LoginPage() {
-    const [identifier, setIdentifier] = useState(''); // email ou username
+export default function SignupPage() {
+    const [email, setEmail] = useState(''); // email ou username
+    const [username, setUsername] = useState(''); // email ou username
     const [password, setPassword] = useState('');
     const [error, setError] = useState(null);
     const navigate = useNavigate();
 
-    const handleLogin = async (e) => {
+    const handleSignup = async (e) => {
         e.preventDefault();
         setError(null);
 
         try {
-            const { data } = await api.post('/auth/login', {
-                email: identifier,
+            const { data } = await api.post('/auth/signup', {
+                email,
+                username,
                 password
             });
             localStorage.setItem('token', data.token);
             // redireciona para a página principal ou dashboard
-            navigate('/');
+            navigate('/login');
         } catch (err) {
-            console.error('Erro no login:', err);
+            console.error('Erro no signup:', err);
             setError('Credenciais inválidas.');
         }
     };
@@ -33,17 +35,28 @@ export default function LoginPage() {
             <div className="loginCentral">
                 <div className="loginPanel">
                     <Logo className="loginLogo" />
-                    <h1 className="loginTitle">Login to SoundSprout</h1>
+                    <h1 className="loginTitle">Signup to SoundSprout</h1>
+                    <form onSubmit={handleSignup} className="signupForm">
+                        <label className="field">
+                            <span className="fieldLabel">Username</span>
+                            <input
+                                type="text"
+                                className="fieldInput"
+                                placeholder="example123 "
+                                value={username}
+                                onChange={e => setUsername(e.target.value)}
+                                required
+                            />
+                        </label>
 
-                    <form onSubmit={handleLogin} className="loginForm">
                         <label className="field">
                             <span className="fieldLabel">Email</span>
                             <input
                                 type="text"
                                 className="fieldInput"
                                 placeholder="email@exemplo.com "
-                                value={identifier}
-                                onChange={e => setIdentifier(e.target.value)}
+                                value={email}
+                                onChange={e => setEmail(e.target.value)}
                                 required
                             />
                         </label>
@@ -62,7 +75,7 @@ export default function LoginPage() {
 
                         {error && <div className="errorMessage">{error}</div>}
 
-                        <button type="submit" className="loginButton">Log In</button>
+                        <button type="submit" className="loginButton">Sign Up</button>
                     </form>
 
                     {/*
@@ -75,28 +88,17 @@ export default function LoginPage() {
                     </button>
                     */}
 
-                    <a
-                        href="/forgot-password"
-                        className="forgotLink"
-                        onClick={e => {
-                            e.preventDefault();
-                            navigate('/forgot-password');
-                        }}
-                    >
-                        Esqueceste-te da password?
-                    </a>
-
-                    <p className="signupText">
-                        Ainda não tens conta?{' '}
+                    <p className="loginText">
+                        Já tens conta?{' '}
                         <a
-                            href="/signup"
-                            className="signupLink"
+                            href="/login"
+                            className="loginLink"
                             onClick={e => {
                                 e.preventDefault();
-                                navigate('/signup');
+                                navigate('/login');
                             }}
                         >
-                            Signup to SoundSprout
+                            Login to SoundSprout
                         </a>
                     </p>
                 </div>

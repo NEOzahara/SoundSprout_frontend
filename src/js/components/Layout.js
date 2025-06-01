@@ -6,7 +6,6 @@ import Menu from './Menu'
 import RightScroll from './RightScroll'
 import PlayerBar from './PlayerBar'
 import '../../css/Common.css'
-//import HomePage from "../../HomePage";
 
 export default function Layout() {
 
@@ -15,7 +14,7 @@ export default function Layout() {
     const titleMap = {
         '/':           'Home',
         '/explore':    'Explore',
-        // '/following': 'Following',
+        '/following': 'Following',
         //'/player':    'Player',
         // ...
     };

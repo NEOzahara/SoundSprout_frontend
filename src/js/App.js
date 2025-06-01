@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
 import HomePage from "./Pages/HomePage";
 import ExplorePage from './Pages/ExplorePage';
+import FollowingPage from './Pages/FollowingPage';
 
 import PlayerPage from './Pages/PlayerPage';
 import LoginPage from "./Pages/LoginPage";
@@ -23,6 +24,7 @@ export default function App() {
                 <Route element={<Layout />}>
                     <Route index element={<HomePage />} />
                     <Route path="explore" element={<ExplorePage />} />
+                    <Route path="following" element={<FollowingPage />} />
 
                     <Route path="player" element={<PlayerPage />} />
                     {/* <Route path="following" element={<FollowingPage />} /> */}

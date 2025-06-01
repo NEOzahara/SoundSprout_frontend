@@ -1,4 +1,3 @@
-import '../../css/Home.css';
 import React, {useRef, useState} from "react";
 import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUser, FiPause} from 'react-icons/fi';
 import '../../css/Player.css';
@@ -55,9 +54,13 @@ export default function PlayerPage () {
     const [isPlaying, setIsPlaying] = useState(false);
     const togglePlay = () => {
         const audio = audioRef.current;
-        if (!audio) return;
-        if (isPlaying) audio.pause(); else audio.play();
+
+        /*Teste*/
         setIsPlaying(prev => !prev);
+
+        /*if (!audio) return;
+        if (isPlaying) audio.pause(); else audio.play();
+        setIsPlaying(prev => !prev);*/
     };
 
     return (
@@ -77,7 +80,7 @@ export default function PlayerPage () {
                         <div className="playerIcons">
                             <div className="playButtonWrapper">
                                 <div className="playGlow" />
-                                <button className="playIcon" onClick={togglePlay}>
+                                <button className="pagePlayButton" onClick={togglePlay}>
                                     {isPlaying ? <FiPause className="icon pauseIcon" />
                                                 : <FiPlay  className="icon playIcon"  />
                                     }

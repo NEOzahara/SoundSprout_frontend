@@ -31,6 +31,26 @@ export default function PlayerPage () {
         // ... mais items
     ];
 
+    // --- DADOS DE CREDITS (para a tab “Credits”) ---
+    const creditsInfo = [
+        {
+            label: 'Interpreted by',
+            names: ['Artist X', 'Artist Y', 'Artist Z']
+        },
+        {
+            label: 'Written by',
+            names: ['Artist A', 'Artist B', 'Artist C', 'Testeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee']
+        },
+        {
+            label: 'Produced by',
+            names: ['Producer X', 'Producer Y']
+        },
+        {
+            label: 'Source',
+            names: ['Source X', 'Source Y', 'Source Z']
+        }
+    ];
+
     const audioRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const togglePlay = () => {
@@ -105,7 +125,7 @@ export default function PlayerPage () {
                 </div>
 
                 {/* === CONTEÚDO ABAIXO DAS TABS === */}
-                {activeTab === 'Lyrics' ? (
+                {activeTab === 'Lyrics' && (
                     <div className="lyricsBox">
                         <p className="lyricsText">
                             {/* Aqui você pode colar toda a letra da música. Exemplo de texto longo: */}
@@ -131,41 +151,58 @@ export default function PlayerPage () {
                             testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                         </p>
                     </div>
-                ) : (
-                <div className="songList">
-                    {credits.map((item, idx) => (
-                        <div key={idx} className="trackRow">
-                            <span className="trackNumber">{idx+1}</span>
-                            <div
-                                className="coverPlaceholderSmall"
-                                onClick={() => console.log(`Cover ${idx+1} clicked`)}
-                            />
-                            <div className="trackInfoSmall">
-                                <span
-                                    className="smallTitle"
-                                    onClick={() => console.log(`Title ${idx+1} clicked`)}
-                                >
-                                    {item.title}
+                )}
+
+                {activeTab === 'More Like This' && (
+                    <div className="songList">
+                        {credits.map((item, idx) => (
+                            <div key={idx} className="trackRow">
+                                <span className="trackNumber">{idx+1}</span>
+                                <div
+                                    className="coverPlaceholderSmall"
+                                    onClick={() => console.log(`Cover ${idx+1} clicked`)}
+                                />
+                                <div className="trackInfoSmall">
+                                    <span
+                                        className="smallTitle"
+                                        onClick={() => console.log(`Title ${idx+1} clicked`)}
+                                    >
+                                        {item.title}
+                                    </span>
+                                    <span
+                                       className="smallArtist"
+                                       onClick={() => console.log(`Artist ${idx+1} clicked`)}
+                                    >
+                                        {item.artist}
+                                    </span>
+                                </div>
+                                <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
+                                <FiMessageCircle className="actionIcon" onClick={() => console.log('Comment')} />
+                                <span className="smallDuration" onClick={() => console.log(`Duration ${idx+1}`)}>
+                                    {item.duration}
                                 </span>
-                                <span
-                                   className="smallArtist"
-                                   onClick={() => console.log(`Artist ${idx+1} clicked`)}
-                                >
-                                    {item.artist}
+                                <span className="smallListens"  onClick={() => console.log(`Listens ${idx+1}`)}>
+                                    {item.listens}
                                 </span>
+                                <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
                             </div>
-                            <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
-                            <FiMessageCircle className="actionIcon" onClick={() => console.log('Comment')} />
-                            <span className="smallDuration" onClick={() => console.log(`Duration ${idx+1}`)}>
-                                {item.duration}
-                            </span>
-                            <span className="smallListens"  onClick={() => console.log(`Listens ${idx+1}`)}>
-                                {item.listens}
-                            </span>
-                            <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
-                        </div>
-                    ))}
-                </div>
+                        ))}
+                    </div>
+                )}
+
+                {activeTab === 'Credits' && (
+                    <div className="creditsBox">
+                        {creditsInfo.map((section, idx) => (
+                            <div key={idx} className="creditSection">
+                                <h3 className="creditLabel">{section.label}:</h3>
+                                {section.names.map((name, i) => (
+                                    <p key={i} className="creditName">
+                                        {name}
+                                    </p>
+                                ))}
+                            </div>
+                        ))}
+                    </div>
                 )}
             </div>
         </div>

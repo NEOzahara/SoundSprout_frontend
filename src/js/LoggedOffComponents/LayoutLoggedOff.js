@@ -1,21 +1,21 @@
 import React from 'react'
 import { Outlet, useLocation } from 'react-router-dom';
 import { ReactComponent as Logo } from '../../images/logo.svg'
-import TopIcons from './TopIcons'
-import Menu from './Menu'
-import RightScroll from './RightScroll'
-import PlayerBar from './PlayerBar'
-import '../../css/Common.css'
+import TopIconsLoggedOff from '../LoggedOffComponents/TopIconsLoggedOff'
+import MenuLoggedOff from '../LoggedOffComponents/MenuLoggedOff'
+import RightScrollLoggedOff from '../LoggedOffComponents/RightScrollLoggedOff'
+import PlayerBarLoggedOff from '../LoggedOffComponents/PlayerBarLoggedOff'
+import '../../css/Components/Common.css'
+import '../../css/Components/CommonLoggedOff.css'
 
-export default function Layout() {
+export default function LayoutLoggedOff() {
 
     // opcional: derivar o título da página da rota atual
     const { pathname } = useLocation();
     const titleMap = {
-        '/':           'Home',
+        '/homeLoggedOff':     'Home',
         '/explore':    'Explore',
-        '/following': 'Following',
-        //'/player':    'Player',
+        //'/settings':    'Settings',
         // ...
     };
     // páginas onde NÃO queremos o título
@@ -29,13 +29,13 @@ export default function Layout() {
             <Logo className="logo" />
 
             {/* icones topo */}
-            <TopIcons />
+            <TopIconsLoggedOff />
 
             {/* menu esquerdo */}
-            <Menu />
+            <MenuLoggedOff />
 
             {/* painel direito (cardLists) */}
-            <RightScroll />
+            <RightScrollLoggedOff />
 
             {/* área central com header comum */}
             <div className="contentArea">
@@ -51,7 +51,7 @@ export default function Layout() {
             </div>
 
             {/* player fixo em baixo */}
-            <PlayerBar />
+            <PlayerBarLoggedOff />
         </div>
     )
 }

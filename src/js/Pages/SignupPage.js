@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ReactComponent as Logo } from '../../images/logo.svg';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
-import '../../css/Login.css';
+import '../../css/Pages/Login.css';
 
 export default function SignupPage() {
     const [email, setEmail] = useState(''); // email ou username

@@ -1,7 +1,7 @@
 import React, {useState} from 'react'
 import {FiSearch, FiBell, FiAward, FiUser, FiHome, FiChevronDown} from 'react-icons/fi'
 
-export default function TopIcons() {
+export default function RightScroll() {
 
     const [activeTab, setActiveTab] = useState('Playlist');
 

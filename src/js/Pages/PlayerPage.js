@@ -1,6 +1,6 @@
 import React, {useRef, useState} from "react";
 import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUser, FiPause} from 'react-icons/fi';
-import '../../css/Player.css';
+import '../../css/Pages/Player.css';
 export default function PlayerPage () {
 
     const genres = ['Rock', 'Pop', 'Jazz'];// ... mais items

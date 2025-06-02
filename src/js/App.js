@@ -4,12 +4,16 @@ import React from 'react';
 
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 
-import Layout from './components/Layout';
+import Layout from './LoggedInComponents/Layout';
+import LayoutLoggedOff from './LoggedOffComponents/LayoutLoggedOff';
+
 import HomePage from "./Pages/HomePage";
 import ExplorePage from './Pages/ExplorePage';
 import FollowingPage from './Pages/FollowingPage';
-
 import PlayerPage from './Pages/PlayerPage';
+
+import HomeLoggedOffPage from "./Pages/HomeLoggedOffPage";
+
 import LoginPage from "./Pages/LoginPage";
 import SignupPage from "./Pages/SignupPage";
 import ForgotPasswordPage from "./Pages/ForgotPasswordPage";
@@ -28,6 +32,11 @@ export default function App() {
 
                     <Route path="player" element={<PlayerPage />} />
                     {/* <Route path="following" element={<FollowingPage />} /> */}
+                </Route>
+                <Route element={<LayoutLoggedOff />}>
+                    <Route path="homeLoggedOff" element={<HomeLoggedOffPage />} />
+                    <Route path="explore" element={<ExplorePage />} />
+                    {/* <Route path="settings" element={<SettingsPage />} /> */}
                 </Route>
             </Routes>
         </BrowserRouter>

@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {FiHome, FiGlobe, FiUsers, FiRss, FiFolder, FiPlus, FiMusic, FiHeart, FiSettings, FiCheckSquare, FiLogOut
 } from 'react-icons/fi'
 
-export default function TopIcons() {
+export default function Menu() {
 
     const [playlistsOpen, setPlaylistsOpen] = useState(false);
     const [musicOpen, setMusicOpen] = useState(false);
@@ -356,7 +356,7 @@ export default function TopIcons() {
 
             <div className="menuLine contentLine">
                 <NavLink
-                    to="/login"
+                    to="/homeLoggedOff"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                     }

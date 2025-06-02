@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import '../../css/Following.css';
+import '../../css/Pages/Following.css';
 import {FiBarChart, FiSearch, FiUser, FiUserPlus, FiX} from 'react-icons/fi';
 
 export default function FollowingPage() {

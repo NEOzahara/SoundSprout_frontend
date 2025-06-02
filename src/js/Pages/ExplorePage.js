@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
-import '../../css/Explore.css';
+import '../../css/Pages/Explore.css';
 import {FiSearch, FiUser, FiUserPlus} from 'react-icons/fi';
 
 export default function ExplorePage() {

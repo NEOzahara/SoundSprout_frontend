@@ -161,7 +161,7 @@ export default function PlayerBar() {
                    className={`trackArtist ${artistOverflow ? "marquee-hover" : ""}`}
                    ref={artistInnerRef}
                 >
-                    {currentTrack.username || "ARTISTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+                    {currentTrack.username || "ARTISTA"}
                 </NavLink>
             </div>
 

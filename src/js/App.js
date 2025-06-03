@@ -13,6 +13,7 @@ import FollowingPage from './Pages/FollowingPage';
 import PlayerPage from './Pages/PlayerPage';
 
 import HomeLoggedOffPage from "./Pages/HomeLoggedOffPage";
+import ExploreLoggedOffPage from './Pages/ExploreLoggedOffPage';
 
 import LoginPage from "./Pages/LoginPage";
 import SignupPage from "./Pages/SignupPage";
@@ -35,7 +36,7 @@ export default function App() {
                 </Route>
                 <Route element={<LayoutLoggedOff />}>
                     <Route path="homeLoggedOff" element={<HomeLoggedOffPage />} />
-                    <Route path="explore" element={<ExplorePage />} />
+                    <Route path="exploreLoggedOff" element={<ExploreLoggedOffPage />} />
                     {/* <Route path="settings" element={<SettingsPage />} /> */}
                 </Route>
             </Routes>

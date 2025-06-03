@@ -16,7 +16,7 @@ export default function MenuLoggedOff() {
 
             <div className="menuLine contentLine">
                 <NavLink
-                    to="/"
+                    to="/homeLoggedOff"
                     end
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
@@ -29,7 +29,7 @@ export default function MenuLoggedOff() {
 
             <div className="menuLine contentLine">
                 <NavLink
-                    to="/explore"
+                    to="/exploreLoggedOff"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                     }
@@ -48,12 +48,9 @@ export default function MenuLoggedOff() {
                 <p className="loginSolicitationText">
                     Log in / Sign up to create your first playlist or publish your first song
                 </p>
-                <button
-                    className="btnLogin"
-                    onClick={() => console.log('Log In clicked')}
-                >
+                <NavLink to="/login" className="btnLogin">
                     Log In / Sign Up
-                </button>
+                </NavLink>
             </div>
 
             <p className="menuLine titleLine">
@@ -75,13 +72,13 @@ export default function MenuLoggedOff() {
 
             <div className="menuLine contentLine">
                 <NavLink
-                    to="/homeLoggedOff"
+                    to="/login"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                     }
                 >
                     <span className="houseMinimal"><FiLogOut className="Icon" /></span>
-                    <span className="lineText">Logout</span>
+                    <span className="lineText">Log In</span>
                 </NavLink>
             </div>
         </div>

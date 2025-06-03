@@ -18,6 +18,7 @@ import ExploreLoggedOffPage from './Pages/ExploreLoggedOffPage';
 import LoginPage from "./Pages/LoginPage";
 import SignupPage from "./Pages/SignupPage";
 import ForgotPasswordPage from "./Pages/ForgotPasswordPage";
+import ResetPasswordPage  from './Pages/ResetPasswordPage';
 
 export default function App() {
     return (
@@ -26,6 +27,8 @@ export default function App() {
                 <Route path="login" element={<LoginPage />} />
                 <Route path="signup" element={<SignupPage />} />
                 <Route path="forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="/reset-password"  element={<ResetPasswordPage />} />
+
                 <Route element={<Layout />}>
                     <Route index element={<HomePage />} />
                     <Route path="explore" element={<ExplorePage />} />

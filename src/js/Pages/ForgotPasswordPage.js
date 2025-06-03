@@ -1,28 +1,24 @@
 import React, { useState } from 'react';
 import { ReactComponent as Logo } from '../../images/logo.svg';
-import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import '../../css/Pages/Login.css';
 
 export default function ForgotPasswordPage() {
-    const [password, setPassword] = useState('');
+    const [identifier, setIdentifier] = useState('');
+    const [message, setMessage] = useState(null);
     const [error, setError] = useState(null);
-    const navigate = useNavigate();
 
-    const handleResetPassword = async (e) => {
+    const handleResetRequest = async e => {
         e.preventDefault();
         setError(null);
+        setMessage(null);
 
         try {
-            const { data } = await api.post('/auth/forgot-password', {
-                password
-            });
-            localStorage.setItem('token', data.token);
-            // redireciona para a página principal ou dashboard
-            navigate('/login');
+            const { data } = await api.post('/auth/forgot-password', { identifier });
+            setMessage(data.message);
         } catch (err) {
             console.error('Erro no forgot-password:', err);
-            setError('Credenciais inválidas.');
+            setError(err.response?.data?.error || 'Erro ao enviar email.');
         }
     };
 
@@ -31,40 +27,30 @@ export default function ForgotPasswordPage() {
             <div className="loginCentral">
                 <div className="loginPanel">
                     <Logo className="loginLogo" />
-                    <h1 className="loginTitle">Reset your Password</h1>
+                    <h1 className="loginTitle">Redefinir Password</h1>
 
                     <p className="resetPasswordText">
-                        Enter the email address or username linked to your SoundSprout account and we'll send you an email.
+                        Insere o email ou username associado ao teu SoundSprout, e enviaremos um link para redefinição.
                     </p>
 
-                    <form onSubmit={handleResetPassword} className="forgotPasswordForm">
+                    <form onSubmit={handleResetRequest} className="forgotPasswordForm">
                         <label className="field">
-                            <span className="fieldLabel">Password</span>
+                            <span className="fieldLabel">Email ou Username</span>
                             <input
-                                type="password"
+                                type="text"
                                 className="fieldInput"
-                                placeholder="•••••••••••••••••••"
-                                value={password}
-                                onChange={e => setPassword(e.target.value)}
+                                placeholder="email@exemplo.com ou username"
+                                value={identifier}
+                                onChange={e => setIdentifier(e.target.value)}
                                 required
                             />
                         </label>
 
+                        {message && <div className="successMessage">{message}</div>}
                         {error && <div className="errorMessage">{error}</div>}
 
-                        <button type="submit" className="loginButton">Send Link</button>
+                        <button type="submit" className="loginButton">Enviar Link</button>
                     </form>
-
-                    {/*
-                    <button
-                        className="googleButton"
-                        onClick={() => console.log('Continue with Google clicked')}
-                    >
-                        <span className="googleIcon" />
-                        Continuar com Google
-                    </button>
-                    */}
-
                 </div>
             </div>
 

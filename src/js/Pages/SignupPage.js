@@ -16,7 +16,7 @@ export default function SignupPage() {
         setError(null);
 
         try {
-            const { data } = await api.post('/auth/signup', {
+            const { data } = await api.post('/auth/register', {
                 email,
                 username,
                 password

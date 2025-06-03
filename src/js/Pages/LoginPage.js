@@ -19,7 +19,7 @@ export default function LoginPage() {
                 email: identifier,
                 password
             });
-            localStorage.setItem('token', data.accessToken); //trocar para data.accessToken
+            localStorage.setItem('token', data.accessToken);
             // redireciona para a página principal ou dashboard
             navigate('/');
         } catch (err) {

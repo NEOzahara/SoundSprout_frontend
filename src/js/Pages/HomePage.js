@@ -1,30 +1,34 @@
-import React, {useEffect, useState} from 'react';
+import React, { useEffect, useState } from 'react';
 import Layout from '../LoggedInComponents/Layout';
 import '../../css/Pages/Home.css';
 import api from "../services/api";
 
-export default function HomePage () {
+export default function HomePage() {
+    // Estado para Top Artists
+    const [topArtists, setTopArtists] = useState([]);
+    const topCount = 7; // número de artistas a mostrar
 
-    const [songs, setSongs] = useState([]);
-    const username = 'joao';
-
+    // Handler genérico de clique (pode navegar para perfil, por exemplo)
     const handleCoverClick  = n => console.log(`Music ${n} clicado!`);
-    const handleArtistClick = n => console.log(`Artist ${n} clicado!`);
+    const handleArtistClick = artist => console.log(`Artist ${artist.username} clicado!`);
 
+    // Fetch de Top Artists
     useEffect(() => {
-        api.get(`/musicas/utilizador/${username}`)
+        console.log(`-> A pedir Top Artists: /utilizadores/top-artists?limit=${topCount}`);
+        api.get(`/utilizadores/top-artists?limit=${topCount}`)
             .then(({ data }) => {
-                const list = Array.isArray(data) ? data : data ? [data] : [];
-                setSongs(list);
+                console.log('◀ Top Artists recebidos do servidor:', data);
+                setTopArtists(data);
             })
-            .catch(err => console.error('Erro ao listar músicas:', err));
-    }, [username]);
+            .catch(err => console.error('Erro ao carregar Top Artists:', err));
+    }, []);
 
     // Base URL do backend (sem o /api)
     const baseUrl = process.env.REACT_APP_API_BASE_URL
         ? process.env.REACT_APP_API_BASE_URL.replace('/api', '')
         : 'http://localhost:5000';
 
+    // Renderiza cards de capa (sempre estático neste ponto)
     const renderCovers = (count) =>
         Array.from({ length: count }, (_, i) => i + 1).map((n) => (
             <div key={n} className="coverCard">
@@ -36,17 +40,18 @@ export default function HomePage () {
                     className="coverTitle"
                     onClick={() => handleCoverClick(n)}
                 >
-                    Song {n}
-                </span>
+          Song {n}
+        </span>
                 <span
                     className="coverArtist"
-                    onClick={() => handleArtistClick(n)}
+                    onClick={() => handleCoverClick(n)}
                 >
-                    Artist {n}
-                </span>
+          Artist {n}
+        </span>
             </div>
         ));
 
+    // Renderiza playlists fictícias
     const renderCharts = (count) =>
         Array.from({ length: count }, (_, i) => i + 1).map((n) => (
             <div key={n} className="coverCard">
@@ -58,27 +63,44 @@ export default function HomePage () {
                     className="coverTitle"
                     onClick={() => handleCoverClick(n)}
                 >
-                    Playlist {n}
-                </span>
+          Playlist {n}
+        </span>
             </div>
         ));
 
-    const renderTopArtists = (count) =>
-        Array.from({ length: count }, (_, i) => i + 1).map((n) => (
-            <div key={n} className="coverCard">
-                <div
-                    className="coverPlaceholder"
-                    onClick={() => handleCoverClick(n)}
-                />
+    // Renderiza Top Artists dinamicamente
+    const renderTopArtists = () =>
+        topArtists.map((artist) => (
+            <div key={artist.username} className="coverCard">
+                {artist.foto ? (
+                    <img
+                        className="coverPlaceholder"
+                        src={`${baseUrl}/${artist.foto}`}
+                        alt={`Foto de ${artist.username}`}
+                        onClick={() => handleArtistClick(artist)}
+                    />
+                ) : (
+                    <div
+                        className="coverPlaceholder"
+                        onClick={() => handleArtistClick(artist)}
+                    />
+                )}
                 <span
                     className="coverTitle"
-                    onClick={() => handleCoverClick(n)}
+                    onClick={() => handleArtistClick(artist)}
                 >
-                    Artist {n}
-                </span>
+          {artist.username}
+
+        </span>
+                <span className="coverInfo">
+             {/*
+          {Number(artist.totalviews).toLocaleString('pt-PT')} visualizações
+          */}
+        </span>
             </div>
         ));
 
+    // Mantém a seção de Favourite Artists estática ou pode ser preenchida de outra forma
     const renderFavArtists = (count) =>
         Array.from({ length: count }, (_, i) => i + 1).map((n) => (
             <div key={n} className="coverCard">
@@ -90,8 +112,8 @@ export default function HomePage () {
                     className="coverTitle"
                     onClick={() => handleCoverClick(n)}
                 >
-                    Artist {n}
-                </span>
+          Artist {n}
+        </span>
             </div>
         ));
 
@@ -110,7 +132,7 @@ export default function HomePage () {
                 </div>
             </div>
 
-            {/* Segunda caixa, 20px abaixo */}
+            {/* Segunda caixa */}
             <div className="chartsSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Charts: Top 50</span>
@@ -123,7 +145,7 @@ export default function HomePage () {
                 </div>
             </div>
 
-            {/* Terceira caixa, 20px abaixo */}
+            {/* Terceira caixa: Top Artists */}
             <div className="chartsSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Top Artists</span>
@@ -131,12 +153,15 @@ export default function HomePage () {
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
-                        {renderTopArtists(7)}
+                        {topArtists.length > 0
+                            ? renderTopArtists()
+                            : <p>Carregando artistas...</p>
+                        }
                     </div>
                 </div>
             </div>
 
-            {/* Quarta caixa, 20px abaixo */}
+            {/* Quarta caixa */}
             <div className="chartsSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Favourite Artists</span>
@@ -150,4 +175,4 @@ export default function HomePage () {
             </div>
         </>
     );
-};
+}

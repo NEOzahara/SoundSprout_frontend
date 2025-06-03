@@ -60,7 +60,7 @@ export default function MenuLoggedOff() {
 
             <div className="menuLine contentLine">
                 <NavLink
-                    to="/explore"
+                    to="/settingsLoggedOff"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                     }

@@ -11,6 +11,7 @@ import HomePage from "./Pages/HomePage";
 import ExplorePage from './Pages/ExplorePage';
 import FollowingPage from './Pages/FollowingPage';
 import PlayerPage from './Pages/PlayerPage';
+import SettingsPage from './Pages/SettingsPage';
 
 import HomeLoggedOffPage from "./Pages/HomeLoggedOffPage";
 import ExploreLoggedOffPage from './Pages/ExploreLoggedOffPage';
@@ -30,6 +31,7 @@ export default function App() {
                     <Route index element={<HomePage />} />
                     <Route path="explore" element={<ExplorePage />} />
                     <Route path="following" element={<FollowingPage />} />
+                    <Route path="settings" element={<SettingsPage />} />
 
                     <Route path="player" element={<PlayerPage />} />
                     {/* <Route path="following" element={<FollowingPage />} /> */}

@@ -332,7 +332,7 @@ export default function Menu() {
 
             <div className="menuLine contentLine">
                 <NavLink
-                    to="/explore"
+                    to="/settings"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                     }

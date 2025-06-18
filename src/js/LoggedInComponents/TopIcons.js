@@ -1,4 +1,5 @@
 import React from 'react'
+import { NavLink } from 'react-router-dom';
 import { FiSearch, FiBell, FiAward, FiUser } from 'react-icons/fi'
 
 export default function TopIcons() {
@@ -7,7 +8,16 @@ export default function TopIcons() {
             <FiSearch className="topIcon" />
             <FiBell   className="topIcon" />
             <FiAward  className="topIcon" />
-            <FiUser   className="userIcon" />
+            <NavLink
+                to="/profile"
+                className={({ isActive }) =>
+                    // mantém sempre a class userIcon, mas adiciona `active` quando on profile
+                    `userIcon${isActive ? ' active' : ''}`
+                }
+                title="Profile"
+            >
+                <FiUser />
+            </NavLink>
         </div>
     )
 }

@@ -7,7 +7,16 @@ export default function TopIcons() {
         <div className="topIcons">
             <FiSearch className="topIcon" />
             <FiBell   className="topIcon" />
-            <FiAward  className="topIcon" />
+            <NavLink
+                to="/achievements"
+                className={({ isActive }) =>
+                    // mantém sempre a class userIcon, mas adiciona `active` quando on profile
+                    `topIcon${isActive ? ' active' : ''}`
+                }
+                title="Achievements"
+            >
+                <FiAward />
+            </NavLink>
             <NavLink
                 to="/profile"
                 className={({ isActive }) =>

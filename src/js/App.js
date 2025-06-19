@@ -13,6 +13,7 @@ import FollowingPage from './Pages/FollowingPage';
 import PlayerPage from './Pages/PlayerPage';
 import SettingsPage from './Pages/SettingsPage';
 import ProfilePage from './Pages/ProfilePage';
+import AchievementsPage from './Pages/AchievementsPage';
 
 import HomeLoggedOffPage from "./Pages/HomeLoggedOffPage";
 import ExploreLoggedOffPage from './Pages/ExploreLoggedOffPage';
@@ -40,6 +41,7 @@ export default function App() {
 
                     <Route path="player" element={<PlayerPage />} />
                     <Route path="profile" element={<ProfilePage />} />
+                    <Route path="achievements" element={<AchievementsPage />} />
                 </Route>
                 <Route element={<LayoutLoggedOff />}>
                     <Route path="homeLoggedOff" element={<HomeLoggedOffPage />} />

@@ -49,6 +49,15 @@ export default function ProfilePage({
         </div>
     ));
 
+    // Playlists (a substituir por dados da BD mais tarde)
+    const likedPlaylistsList = Array.from({ length: 7 }, (_, i) => `Playlist ${i+1}`);
+    const renderLikedPlaylists = () => likedPlaylistsList.map((name, i) => (
+        <div key={i} className="coverCard">
+            <div className="coverPlaceholder" onClick={() => console.log(name)} />
+            <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
+        </div>
+    ));
+
     const followersList = Array.from({ length: 7 }, (_, i) => `Follower ${i+1}`);
     const renderFollowers = () => followersList.map((name, i) => (
             <div key={i} className="coverCard followerCard">
@@ -72,6 +81,31 @@ export default function ProfilePage({
             <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
         </div>
     ));
+
+    const topTracks = [
+        { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
+        { title: 'Song B', artist: 'Artist B', duration: '04:12', listens: '980K' },
+        { title: 'Song C', artist: 'Artist C', duration: '03:31', listens: '292K' },
+        { title: 'Song D', artist: 'Artist D', duration: '04:44', listens: '1.4K' },
+        { title: 'Song E', artist: 'Artist E', duration: '05:11', listens: '431K' },
+        // … etc …
+    ];
+    const renderTopTracks = () =>
+        topTracks.map((item, idx) => (
+            <div key={idx} className="trackRow verticalRow">
+                <span className="trackNumber">{idx + 1}</span>
+                <div className="coverPlaceholderSmall" onClick={() => console.log(item.title)} />
+                <div className="trackInfoSmall">
+                    <span className="smallTitle" onClick={() => console.log(item.title)}>{item.title}</span>
+                    <span className="smallArtist" onClick={() => console.log(item.artist)}>{item.artist}</span>
+                </div>
+                <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
+                <FiMessageCircle className="actionIcon" onClick={() => console.log('Comment')} />
+                <span className="smallDuration" onClick={() => console.log(item.duration)}>{item.duration}</span>
+                <span className="smallListens" onClick={() => console.log(item.listens)}>{item.listens}</span>
+                <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
+            </div>
+        ));
 
     const recentTracks = [
         { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
@@ -185,7 +219,29 @@ export default function ProfilePage({
 
             <div className="verticalSection">
                 <div className="recommendHeader">
-                    <span className="sectionTitle">Recent tracks</span>
+                    <span className="sectionTitle">Top tracks this month</span>
+                    <button className="seeAll">see all</button>
+                </div>
+                <div className="verticalWrapper">
+                    {renderTopTracks()}
+                </div>
+            </div>
+
+            <div className="playlistsScroll">
+                <div className="recommendHeader">
+                    <span className="sectionTitle">Recently Liked Playlists</span>
+                    <button className="seeAll">see all</button>
+                </div>
+                <div className="carouselWrapper">
+                    <div className="carousel">
+                        {renderLikedPlaylists()}
+                    </div>
+                </div>
+            </div>
+
+            <div className="verticalSection">
+                <div className="recommendHeader">
+                    <span className="sectionTitle">Recently Liked Songs</span>
                     <button className="seeAll">see all</button>
                 </div>
                 <div className="verticalWrapper">

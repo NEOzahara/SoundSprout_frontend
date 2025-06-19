@@ -49,6 +49,30 @@ export default function ProfilePage({
         </div>
     ));
 
+    const followersList = Array.from({ length: 7 }, (_, i) => `Follower ${i+1}`);
+    const renderFollowers = () => followersList.map((name, i) => (
+            <div key={i} className="coverCard followerCard">
+                <div className="followerPlaceholder" onClick={() => console.log(name)}/>
+                <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
+            </div>
+        ));
+
+    const followingList = Array.from({ length: 7 }, (_, i) => `Following ${i+1}`);
+    const renderFollowing = () => followingList.map((name, i) => (
+        <div key={i} className="coverCard followerCard">
+            <div className="followerPlaceholder" onClick={() => console.log(name)}/>
+            <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
+        </div>
+    ));
+
+    const achievementsList = Array.from({ length: 7 }, (_, i) => `Achievement ${i+1}`);
+    const renderAchievements = () => achievementsList.map((name, i) => (
+        <div key={i} className="coverCard">
+            <div className="coverPlaceholder" onClick={() => console.log(name)} />
+            <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
+        </div>
+    ));
+
     const recentTracks = [
         { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
         { title: 'Song B', artist: 'Artist B', duration: '04:12', listens: '980K' },
@@ -166,6 +190,42 @@ export default function ProfilePage({
                 </div>
                 <div className="verticalWrapper">
                     {renderRecentTracks()}
+                </div>
+            </div>
+
+            <div className="followersScroll">
+                <div className="recommendHeader">
+                    <span className="sectionTitle">Followers</span>
+                    <button className="seeAll">see all</button>
+                </div>
+                <div className="carouselWrapper">
+                    <div className="carousel">
+                        {renderFollowers()}
+                    </div>
+                </div>
+            </div>
+
+            <div className="followersScroll">
+                <div className="recommendHeader">
+                    <span className="sectionTitle">Following</span>
+                    <button className="seeAll">see all</button>
+                </div>
+                <div className="carouselWrapper">
+                    <div className="carousel">
+                        {renderFollowing()}
+                    </div>
+                </div>
+            </div>
+
+            <div className="playlistsScroll">
+                <div className="recommendHeader">
+                    <span className="sectionTitle">Achievements</span>
+                    <button className="seeAll">see all</button>
+                </div>
+                <div className="carouselWrapper">
+                    <div className="carousel">
+                        {renderAchievements()}
+                    </div>
                 </div>
             </div>
         </div>

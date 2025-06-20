@@ -1,4 +1,4 @@
-import React, {useLayoutEffect, useRef, useState} from 'react';
+import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import { FiEdit2, FiShare2, FiHeart, FiMessageCircle, FiList, FiMoreHorizontal } from 'react-icons/fi';
 import '../../css/Pages/Profile.css';
 
@@ -15,11 +15,16 @@ export default function ProfilePage({
             .catch(() => console.error('Falha ao copiar link'));
     };
 
-    const badges = [
-        { text: 'Achievement 1', tier: 'bronze' },
-        { text: 'Achievement 2', tier: 'silver' },
-        { text: 'Achievement 3', tier: 'gold' }
-    ];
+    const [badges, setBadges] = useState([]);
+
+    useEffect(() => {
+        const stored = localStorage.getItem('profileBadges');
+        if (stored) {
+            // cada item já é { title, tier, … }
+            setBadges(JSON.parse(stored));
+        }
+    }, []);
+
     const badgeRefs = useRef([]);
     const [overflowFlags, setOverflowFlags] = useState([false, false, false]);
 
@@ -176,16 +181,13 @@ export default function ProfilePage({
             </div>
 
             <div className="profileBadges">
-                {badges.map((badge, i) => (
-                    <div
-                        key={i}
-                        className={`profileBadge ${badge.tier}`}
-                    >
+                {badges.map((b, i) => (
+                    <div key={i} className={`profileBadge ${b.tier}`}>
                         <span
                             ref={el => badgeRefs.current[i] = el}
                             className={`badgeText${overflowFlags[i] ? " marquee-hover" : ""}`}
                         >
-                        {badge.text}
+                        {b.title}
                         </span>
                     </div>
                 ))}

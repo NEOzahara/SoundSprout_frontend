@@ -1,4 +1,4 @@
-import React, {useLayoutEffect, useRef, useState} from 'react';
+import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import { FiEdit2, FiShare2, FiBookmark } from 'react-icons/fi';
 import '../../css/Pages/Achievements.css';
 
@@ -13,12 +13,6 @@ export default function AchievementsPage({
             .then(() => console.log('Link copiado!'))
             .catch(() => console.error('Falha ao copiar link'));
     };
-
-    const badges = [
-        { text: 'Achievement 1', tier: 'bronze' },
-        { text: 'Achievement 2', tier: 'silver' },
-        { text: 'Achievement 3', tier: 'gold' }
-    ];
 
     const badgeRefs = useRef([]);
     const [overflowFlags, setOverflowFlags] = useState([false, false, false]);
@@ -35,6 +29,27 @@ export default function AchievementsPage({
 
     const [badgeMap, setBadgeMap] = useState({});
 
+    // carrega do localStorage no mount
+    useEffect(() => {
+        const stored = localStorage.getItem('profileBadges');
+        if (!stored) return;
+        try {
+            const savedArr = JSON.parse(stored);
+            // savedArr é algo como [{ title, tier, … }, …] na ordem dos slots 0,1,2
+            const newMap = {};
+            savedArr.forEach((item, badgeIdx) => {
+                // encontra o ownedIdx cujo title bate
+                const ownedIdx = owned_achievements.findIndex(a => a.title === item.title);
+                if (ownedIdx >= 0) {
+                    newMap[ownedIdx] = badgeIdx;
+                }
+            });
+            setBadgeMap(newMap);
+        } catch (e) {
+            console.error('Não consegui parsear profileBadges:', e);
+        }
+    }, []);
+
     const toggleOwned = (ownedIdx) => {
         setBadgeMap(prev => {
             const next = { ...prev };
@@ -50,6 +65,12 @@ export default function AchievementsPage({
                 }
                 // se não houver slot livre, não faz nada
             }
+            const selected = Object.entries(next)
+                .sort((a,b) => a[1] - b[1]) // ordena pelo slot (0,1,2)
+                .map(([ownedIdx]) => owned_achievements[ownedIdx]);
+            localStorage.setItem('profileBadges',
+                JSON.stringify(selected)
+            );
             return next;
         });
     };

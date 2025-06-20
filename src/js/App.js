@@ -12,6 +12,7 @@ import ExplorePage from './Pages/ExplorePage';
 import FollowingPage from './Pages/FollowingPage';
 import PlayerPage from './Pages/PlayerPage';
 import SettingsPage from './Pages/SettingsPage';
+import SubscriptionPage from './Pages/SubscriptionPage';
 import ProfilePage from './Pages/ProfilePage';
 import AchievementsPage from './Pages/AchievementsPage';
 
@@ -38,6 +39,7 @@ export default function App() {
                     <Route path="explore" element={<ExplorePage />} />
                     <Route path="following" element={<FollowingPage />} />
                     <Route path="settings" element={<SettingsPage />} />
+                    <Route path="subscription" element={<SubscriptionPage />} />
 
                     <Route path="player" element={<PlayerPage />} />
                     <Route path="profile" element={<ProfilePage />} />

@@ -1,7 +1,18 @@
-import React, {useRef, useState} from "react";
+import React, {useEffect, useRef, useState} from "react";
 import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUser, FiPause} from 'react-icons/fi';
 import '../../css/Pages/Player.css';
+import {NavLink, useParams} from "react-router-dom";
 export default function PlayerPage () {
+
+    const { songId } = useParams();
+    const idx = parseInt(songId, 10) || 0;
+    // cria o ref pro container rolável
+    const scrollRef = useRef(null);
+
+    // sempre que mudar o idx, retorna pro topo
+    useEffect(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    }, [songId]);
 
     const genres = ['Rock', 'Pop', 'Jazz'];// ... mais items
     const userRoles = [
@@ -29,6 +40,8 @@ export default function PlayerPage () {
 
         // ... mais items
     ];
+
+    const current = credits[idx] || credits[0];
 
     // --- DADOS DE CREDITS (para a tab “Credits”) ---
     const creditsInfo = [
@@ -64,17 +77,17 @@ export default function PlayerPage () {
     };
 
     return (
-        <div className="playerScroll">
+        <div key={songId} className="playerScroll" ref={scrollRef}>
             <div className="playerSection">
                 {/* === PARTE SUPERIOR === */}
                 <div className="playerDetail">
                     <div className="coverLarge" onClick={() => console.log('Cover clicked')} />
 
                     <div className="detailInfo">
-                        <h1 className="songTitle">Song Name</h1>
+                        <h1 className="songTitle">{current.title}</h1>
                         <p className="songMeta">
-                            <span className="metaArtist">Artist Name</span>
-                            <span className="metaRest"> — 2025-05-29 — 04:20 — 1.5M listens</span>
+                            <span className="metaArtist">{current.artist}</span>
+                            <span className="metaRest"> — 2025-05-29 — {current.duration} — {current.listens} listens</span>
                         </p>
 
                         <div className="playerIcons">
@@ -158,33 +171,28 @@ export default function PlayerPage () {
 
                 {activeTab === 'More Like This' && (
                     <div className="songList">
-                        {credits.map((item, idx) => (
-                            <div key={idx} className="trackRow">
-                                <span className="trackNumber">{idx+1}</span>
-                                <div
-                                    className="coverPlaceholderSmall"
-                                    onClick={() => console.log(`Cover ${idx+1} clicked`)}
-                                />
+                        {credits.map((item, i) => (
+                            <div key={i} className="trackRow">
+                                <span className="trackNumber">{i+1}</span>
+
+                                <NavLink to={`/player/${i}`}>
+                                    <div className="coverPlaceholderSmall" />
+                                </NavLink>
+
                                 <div className="trackInfoSmall">
-                                    <span
-                                        className="smallTitle"
-                                        onClick={() => console.log(`Title ${idx+1} clicked`)}
-                                    >
-                                        {item.title}
-                                    </span>
-                                    <span
-                                       className="smallArtist"
-                                       onClick={() => console.log(`Artist ${idx+1} clicked`)}
-                                    >
-                                        {item.artist}
-                                    </span>
+                                    <NavLink to={`/player/${i}`} className="infoLink">
+                                        <span className="smallTitle">{item.title}</span>
+                                    </NavLink>
+                                    <NavLink to={`/player/${i}`} className="infoLink">
+                                        <span className="smallArtist">{item.artist}</span>
+                                    </NavLink>
                                 </div>
                                 <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
                                 <FiMessageCircle className="actionIcon" onClick={() => console.log('Comment')} />
-                                <span className="smallDuration" onClick={() => console.log(`Duration ${idx+1}`)}>
+                                <span className="smallDuration" onClick={() => console.log(`Duration ${i+1}`)}>
                                     {item.duration}
                                 </span>
-                                <span className="smallListens"  onClick={() => console.log(`Listens ${idx+1}`)}>
+                                <span className="smallListens"  onClick={() => console.log(`Listens ${i+1}`)}>
                                     {item.listens}
                                 </span>
                                 <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />

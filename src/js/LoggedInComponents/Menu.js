@@ -85,7 +85,7 @@ export default function Menu() {
 
             <div className="menuLine contentLine hasSubmenu">
                 <NavLink
-                    to="/explore"
+                    to="/playlists"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                 }

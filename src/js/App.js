@@ -15,6 +15,7 @@ import SettingsPage from './Pages/SettingsPage';
 import SubscriptionPage from './Pages/SubscriptionPage';
 import ProfilePage from './Pages/ProfilePage';
 import AchievementsPage from './Pages/AchievementsPage';
+import LibraryPlaylistsPage from './Pages/LibraryPlaylistsPage';
 
 import HomeLoggedOffPage from "./Pages/HomeLoggedOffPage";
 import ExploreLoggedOffPage from './Pages/ExploreLoggedOffPage';
@@ -40,8 +41,10 @@ export default function App() {
                     <Route path="following" element={<FollowingPage />} />
                     <Route path="settings" element={<SettingsPage />} />
                     <Route path="subscription" element={<SubscriptionPage />} />
+                    <Route path="playlists" element={<LibraryPlaylistsPage />} />
 
-                    <Route path="player" element={<PlayerPage />} />
+
+                    <Route path="player/:songId?" element={<PlayerPage />} />
                     <Route path="profile" element={<ProfilePage />} />
                     <Route path="achievements" element={<AchievementsPage />} />
                 </Route>

@@ -2,7 +2,7 @@ import React, {useState} from 'react'
 import { NavLink } from 'react-router-dom';
 import {FiHome, FiGlobe, FiUsers, FiRss, FiFolder, FiPlus, FiMusic, FiHeart, FiSettings, FiCheckSquare, FiLogOut
 } from 'react-icons/fi'
-
+import { playlists } from '../../data/playlists';
 export default function Menu() {
 
     const [playlistsOpen, setPlaylistsOpen] = useState(false);
@@ -122,46 +122,16 @@ export default function Menu() {
                     <span className="subText">New Playlist</span>
                 </NavLink>
 
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiFolder className="Icon" /></span>
-                    <span className="subText">Playlist 1</span>
+                {playlists.map(pl => (
+                    <NavLink
+                        key={pl.id}
+                        to={`/playlist/${pl.id}`}
+                        className="subItem"
+                    >
+                        <span className="subIcon"><FiFolder className="Icon" /></span>
+                        <span className="subText">{pl.title}</span>
                 </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiFolder className="Icon" /></span>
-                    <span className="subText">Playlist 2</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiFolder className="Icon" /></span>
-                    <span className="subText">Playlist 3</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiFolder className="Icon" /></span>
-                    <span className="subText">Playlist 4</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiFolder className="Icon" /></span>
-                    <span className="subText">Playlist 5</span>
-                </NavLink>
-                {/* ... mais itens ... */}
+                ))}
             </div>
 
             <div className="menuLine contentLine hasSubmenu">

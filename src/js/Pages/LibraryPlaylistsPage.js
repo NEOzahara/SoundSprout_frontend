@@ -9,6 +9,8 @@ import {
     FiPlus, FiHeart, FiMessageCircle, FiMoreHorizontal,
 } from 'react-icons/fi';
 import '../../css/Pages/LibraryPlaylists.css';
+import {NavLink} from "react-router-dom";
+import { playlists } from '../../data/playlists';
 
 export default function LibraryPlaylistsPage() {
     // qual view está ativa: 'list' ou 'grid'
@@ -29,28 +31,10 @@ export default function LibraryPlaylistsPage() {
 
     const toggleRecent = () => setRecentAsc((p) => !p);
 
-    const playlists = [
-        { title: 'Roadtrip Classics', owner: 'Alice', songs: 42, duration: '2:35:12', likes: '1.2K' },
-        { title: 'Jazz Vibes', owner: 'Bob', songs: 27, duration: '1:47:05', likes: '980'  },
-        { title: 'Top Hits', owner: 'Carol', songs: 50, duration: '3:05:33', likes: '2.3K' },
-        { title: 'Country Classics', owner: 'Steve', songs: 42, duration: '2:35:12', likes: '1.2K' },
-        { title: 'House Vibes', owner: 'Larry', songs: 27, duration: '1:47:05', likes: '980'  },
-        { title: 'Classic Hits', owner: 'John', songs: 50, duration: '3:05:33', likes: '2.3K' },
-        { title: 'Blues Classics', owner: 'Matilda', songs: 42, duration: '2:35:12', likes: '1.2K' },
-        { title: 'Rock Concerts', owner: 'Daniel', songs: 27, duration: '1:47:05', likes: '980'  },
-        { title: 'Hip-Pop Hits', owner: 'Henry', songs: 50, duration: '3:05:33', likes: '2.3K' },
-        { title: 'Old Classics', owner: 'Maria', songs: 42, duration: '2:35:12', likes: '1.2K' },
-        { title: 'Study Vibes', owner: 'Jeff', songs: 27, duration: '1:47:05', likes: '980'  },
-        { title: 'Radio Hits', owner: 'Sammy', songs: 50, duration: '3:05:33', likes: '2.3K' },
-
-        // ... mais items
-    ];
-
     return (
         <div className="librarySection">
             <h1 className="libraryTitle">Library &gt; Playlists</h1>
             <div className="libraryToolbar">
-                {/* wrapper view-toggle com glow */}
                 <div className="viewToggleWrapper">
                     <div
                         className={`iconButtonWrapper${view==='list' ? ' active' : ''}`}
@@ -121,7 +105,11 @@ export default function LibraryPlaylistsPage() {
             <div className="libraryContent">
                 <div className="songList">
                     {playlists.map((pl, idx) => (
-                        <div key={idx} className="trackRow">
+                        <NavLink
+                            key={idx}
+                            to={`/playlist/${pl.id}`}
+                            className="trackRow"
+                        >
                             <span className="trackNumber">{idx+1}</span>
                             <div
                                 className="coverPlaceholderSmall"
@@ -143,9 +131,9 @@ export default function LibraryPlaylistsPage() {
                             </div>
                             <span className="playlistSongsCount">{pl.songs}</span>
                             <span className="playlistTotalDuration">{pl.duration}</span>
-                            <span className="playlistLikesCount">{pl.likes}</span>
+                            <span className="playlistLikesCount">{pl.listens}</span>
                             <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
-                        </div>
+                        </NavLink>
                     ))}
                 </div>
             </div>

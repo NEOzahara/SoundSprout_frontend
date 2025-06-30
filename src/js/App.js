@@ -17,6 +17,7 @@ import ProfilePage from './Pages/ProfilePage';
 import AchievementsPage from './Pages/AchievementsPage';
 import LibraryPlaylistsPage from './Pages/LibraryPlaylistsPage';
 import PlaylistPage from './Pages/PlaylistPage';
+import LiveStreamsPage from './Pages/LiveStreamsPage';
 
 import HomeLoggedOffPage from "./Pages/HomeLoggedOffPage";
 import ExploreLoggedOffPage from './Pages/ExploreLoggedOffPage';
@@ -44,6 +45,7 @@ export default function App() {
                     <Route path="subscription" element={<SubscriptionPage />} />
                     <Route path="playlists" element={<LibraryPlaylistsPage />} />
                     <Route path="playlist/:id" element={<PlaylistPage />} />
+                    <Route path="liveStreams" element={<LiveStreamsPage />} />
 
                     <Route path="player/:songId?" element={<PlayerPage />} />
                     <Route path="profile" element={<ProfilePage />} />

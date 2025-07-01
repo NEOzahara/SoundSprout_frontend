@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { NavLink } from 'react-router-dom';
 import { FiSearch } from 'react-icons/fi';
 import '../../css/Pages/LiveStreams.css';
 import { streams } from '../../data/liveStreams';
@@ -24,10 +25,10 @@ export default function LiveStreamsPage() {
         streams
             .slice(0, count)               // pega só os primeiros 'count'
             .map(({ id, owner, type, imageUrl }) => (
-                <div
+                <NavLink
                     key={id}
+                    to={`/livestream/${id}`}
                     className="liveCoverCard"
-                    onClick={() => handleStreamClick(id)}
                 >
                     <div
                         className="liveCoverCircle"
@@ -35,7 +36,7 @@ export default function LiveStreamsPage() {
                     />
                     <span className="liveCoverOwner">{owner}</span>
                     <span className="liveCoverType">{type}</span>
-                </div>
+                </NavLink>
             ));
 
     return (

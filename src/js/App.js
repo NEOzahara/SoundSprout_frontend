@@ -17,6 +17,8 @@ import ProfilePage from './Pages/ProfilePage';
 import AchievementsPage from './Pages/AchievementsPage';
 import LibraryPlaylistsPage from './Pages/LibraryPlaylistsPage';
 import PlaylistPage from './Pages/PlaylistPage';
+import LibraryMusicsPage from './Pages/LibraryMusicsPage';
+import LibraryLikesPage from './Pages/LibraryLikesPage';
 import LiveStreamsPage from './Pages/LiveStreamsPage';
 import LiveStreamPage from './Pages/LiveStreamPage';
 
@@ -46,11 +48,14 @@ export default function App() {
                     <Route path="subscription" element={<SubscriptionPage />} />
                     <Route path="playlists" element={<LibraryPlaylistsPage />} />
                     <Route path="playlist/:id" element={<PlaylistPage />} />
+                    <Route path="musics" element={<LibraryMusicsPage />} />
+                    <Route path="likes" element={<LibraryLikesPage />} />
                     <Route path="liveStreams" element={<LiveStreamsPage />} />
                     <Route path="liveStream/:id" element={<LiveStreamPage />} />
 
                     <Route path="player/:songId?" element={<PlayerPage />} />
                     <Route path="profile" element={<ProfilePage />} />
+                    <Route path="profile/:username" element={<ProfilePage />} />
                     <Route path="achievements" element={<AchievementsPage />} />
                 </Route>
                 <Route element={<LayoutLoggedOff />}>

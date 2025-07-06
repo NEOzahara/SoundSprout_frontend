@@ -2,25 +2,17 @@ import React, {useEffect, useRef, useState} from "react";
 import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUser, FiPause} from 'react-icons/fi';
 import '../../css/Pages/Player.css';
 import {NavLink, useParams} from "react-router-dom";
+import { musics } from '../../data/musics';
 export default function PlayerPage () {
 
     const { songId } = useParams();
-    const idx = parseInt(songId, 10) || 0;
-    // cria o ref pro container rolável
-    const scrollRef = useRef(null);
+    const id = parseInt(songId, 10) || 0;
+    const music = musics.find(m => m.id === id) || musics[0];
 
-    // sempre que mudar o idx, retorna pro topo
+    const scrollRef = useRef(null);
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = 0;
     }, [songId]);
-
-    const genres = ['Rock', 'Pop', 'Jazz'];// ... mais items
-    const userRoles = [
-        { name: 'Alice', role: 'Vocal' },
-        { name: 'Bob',   role: 'Guitar' },
-        { name: 'Carol', role: 'Drums' },
-        // ... mais items
-    ];
 
     const [activeTab, setActiveTab] = useState('More Like This');
 
@@ -41,33 +33,10 @@ export default function PlayerPage () {
         // ... mais items
     ];
 
-    const current = credits[idx] || credits[0];
-
-    // --- DADOS DE CREDITS (para a tab “Credits”) ---
-    const creditsInfo = [
-        {
-            label: 'Interpreted by',
-            names: ['Artist X', 'Artist Y', 'Artist Z']
-        },
-        {
-            label: 'Written by',
-            names: ['Artist A', 'Artist B', 'Artist C', 'Testeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee']
-        },
-        {
-            label: 'Produced by',
-            names: ['Producer X', 'Producer Y']
-        },
-        {
-            label: 'Source',
-            names: ['Source X', 'Source Y', 'Source Z']
-        }
-    ];
-
     const audioRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const togglePlay = () => {
         const audio = audioRef.current;
-
         /*Teste*/
         setIsPlaying(prev => !prev);
 
@@ -75,6 +44,9 @@ export default function PlayerPage () {
         if (isPlaying) audio.pause(); else audio.play();
         setIsPlaying(prev => !prev);*/
     };
+
+    // usa diretamente do objeto music
+    const { title, artist, date, duration, listens, genres, participants, creditsInfo } = music;
 
     return (
         <div key={songId} className="playerScroll" ref={scrollRef}>
@@ -84,10 +56,13 @@ export default function PlayerPage () {
                     <div className="coverLarge" onClick={() => console.log('Cover clicked')} />
 
                     <div className="detailInfo">
-                        <h1 className="songTitle">{current.title}</h1>
+                        <h1 className="songTitle">{title}</h1>
                         <p className="songMeta">
-                            <span className="metaArtist">{current.artist}</span>
-                            <span className="metaRest"> — 2025-05-29 — {current.duration} — {current.listens} listens</span>
+                            <span className="metaArtist">{artist}</span>
+                            <span className="metaRest">
+                                {' '}
+                                — {date} — {duration} — {listens} listens
+                            </span>
                         </p>
 
                         <div className="playerIcons">
@@ -107,15 +82,15 @@ export default function PlayerPage () {
                         </div>
 
                         <div className="genres">
-                            {genres.map((g,i) => (
+                            {genres.map((g, i) => (
                                 <span key={i} className="genreTag">{g}</span>
                             ))}
                         </div>
 
                         <div className="userRoles">
-                            {userRoles.map((u,i) => (
+                            {participants.map((u, i) => (
                                 <div key={i} className="userRole">
-                                    <FiUser className="userIconPlayer"/>
+                                    <FiUser className="userIconPlayer" />
                                     <div className="userText">
                                         <span className="userName">{u.name}</span>
                                         <span className="userRoleText">{u.role}</span>
@@ -183,8 +158,11 @@ export default function PlayerPage () {
                                     <NavLink to={`/player/${i}`} className="infoLink">
                                         <span className="smallTitle">{item.title}</span>
                                     </NavLink>
-                                    <NavLink to={`/player/${i}`} className="infoLink">
-                                        <span className="smallArtist">{item.artist}</span>
+                                    <NavLink
+                                        to={`/profile/${encodeURIComponent(item.artist)}`}
+                                        className="smallArtist"
+                                    >
+                                        {item.artist}
                                     </NavLink>
                                 </div>
                                 <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
@@ -203,13 +181,11 @@ export default function PlayerPage () {
 
                 {activeTab === 'Credits' && (
                     <div className="creditsBox">
-                        {creditsInfo.map((section, idx) => (
-                            <div key={idx} className="creditSection">
-                                <h3 className="creditLabel">{section.label}:</h3>
-                                {section.names.map((name, i) => (
-                                    <p key={i} className="creditName">
-                                        {name}
-                                    </p>
+                        {creditsInfo.map((sec, i) => (
+                            <div key={i} className="creditSection">
+                                <h3 className="creditLabel">{sec.label}:</h3>
+                                {sec.names.map((n, j) => (
+                                    <p key={j} className="creditName">{n}</p>
                                 ))}
                             </div>
                         ))}

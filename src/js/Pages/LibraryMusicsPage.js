@@ -6,39 +6,35 @@ import {
     FiArrowDown,
     FiFilter,
     FiSearch,
-    FiPlus, FiHeart, FiMessageCircle, FiMoreHorizontal,
+    FiPlus,
+    FiHeart,
+    FiMessageCircle,
+    FiMoreHorizontal,
 } from 'react-icons/fi';
 import '../../css/Pages/LibraryPlaylists.css';
 import {NavLink} from "react-router-dom";
-import { playlists } from '../../data/playlists';
+import { musics } from '../../data/musics';
 
-export default function LibraryPlaylistsPage() {
-    // qual view está ativa: 'list' ou 'grid'
+export default function LibraryMusicsPage() {
     const [view, setView] = useState('list');
-
-    // ordem de recent: asc/desc
     const [recentAsc, setRecentAsc] = useState(true);
-
-    // refs para medir overflow de texto "Filter: All" se for o caso
     const filterRef = useRef(null);
     const [filterOverflow, setFilterOverflow] = useState(false);
+
     useLayoutEffect(() => {
         const el = filterRef.current;
-        if (el) {
-            setFilterOverflow(el.scrollWidth > el.clientWidth);
-        }
+        if (el) setFilterOverflow(el.scrollWidth > el.clientWidth);
     }, []);
 
-    const toggleRecent = () => setRecentAsc((p) => !p);
+    const toggleRecent = () => setRecentAsc(p => !p);
 
     return (
         <div className="librarySection">
-            <h1 className="libraryTitle">Library &gt; Playlists</h1>
+            <h1 className="libraryTitle">Library &gt; Music</h1>
+
             <div className="libraryToolbar">
                 <div className="viewToggleWrapper">
-                    <div
-                        className={`iconButtonWrapper${view==='list' ? ' active' : ''}`}
-                    >
+                    <div className={`iconButtonWrapper${view === 'list' ? ' active' : ''}`}>
                         {view === 'list' && <div className="iconGlow" />}
                         <button
                             className={`pageIconButton${view === 'list' ? '' : ' inactive'}`}
@@ -47,10 +43,7 @@ export default function LibraryPlaylistsPage() {
                             <FiList className="icon playIcon" />
                         </button>
                     </div>
-
-                    <div
-                        className={`iconButtonWrapper${view==='grid' ? ' active' : ''}`}
-                    >
+                    <div className={`iconButtonWrapper${view === 'grid' ? ' active' : ''}`}>
                         {view === 'grid' && <div className="iconGlow" />}
                         <button
                             className={`pageIconButton${view === 'grid' ? '' : ' inactive'}`}
@@ -61,17 +54,10 @@ export default function LibraryPlaylistsPage() {
                     </div>
                 </div>
 
-                {/* espaçamento 10px após este wrapper */}
-
-                {/* toggle Recent asc/desc */}
                 <div className="toolbarItem recentItem" onClick={toggleRecent}>
                     <div className="orderIcons">
-                        <FiArrowUp
-                            className={`orderIcon${recentAsc ? ' active' : ''}`}
-                        />
-                        <FiArrowDown
-                            className={`orderIcon${recentAsc ? '' : ' active'}`}
-                        />
+                        <FiArrowUp className={`orderIcon${recentAsc ? ' active' : ''}`} />
+                        <FiArrowDown className={`orderIcon${recentAsc ? '' : ' active'}`} />
                     </div>
                     <span className="toolbarText">Recent</span>
                 </div>
@@ -86,53 +72,58 @@ export default function LibraryPlaylistsPage() {
 
                 <FiSearch className="toolbarIcon toolbarItem searchItem" />
 
-                {/* empurra o "+" para a borda direita */}
                 <FiPlus className="toolbarIcon addIcon" />
             </div>
 
-            {/* === NOVO HEADER STICKY COM COLUNAS === */}
             <div className="libraryTabsContainer">
-                <div className="libraryColumnHeaders">
-                    <span className="columnHeader titleHeader">Title</span>
-                    <span className="columnHeader songsHeader">Songs</span>
-                    <span className="columnHeader durationHeader">Duration</span>
-                    <span className="columnHeader likesHeader">Likes</span>
-                </div>
-                <hr className="tabDivider"/>
+                <div className="libraryColumnHeaders"></div>
+                <hr className="tabDivider" />
             </div>
 
-            {/* === AQUI VEM O TEU CONTEÚDO/SONGLIST === */}
             <div className="libraryContent">
                 <div className="songList">
-                    {playlists.map((pl, idx) => (
+                    {musics.map((m, idx) => (
                         <NavLink
-                            key={idx}
-                            to={`/playlist/${pl.id}`}
+                            key={m.id}
+                            to={`/player/${m.id}`}
                             className="trackRow"
                         >
-                            <span className="trackNumber">{idx+1}</span>
+                            <span className="trackNumber">{idx + 1}</span>
+
                             <div
                                 className="coverPlaceholderSmall"
-                                onClick={() => console.log(`Cover ${idx+1} clicked`)}
+                                onClick={() => console.log(`Cover ${idx + 1} clicked`)}
                             />
+
                             <div className="trackInfoSmall">
-                                    <span
-                                        className="smallTitle"
-                                        onClick={() => console.log(`Title ${idx+1} clicked`)}
-                                    >
-                                        {pl.title}
-                                    </span>
+                                <span
+                                    className="smallTitle"
+                                    onClick={() => console.log(`Title ${idx + 1} clicked`)}
+                                >
+                                    {m.title}
+                                </span>
                                 <NavLink
-                                    to={`/profile/${encodeURIComponent(pl.owner)}`}
+                                    to={`/profile/${encodeURIComponent(m.artist)}`}
                                     className="smallArtist"
                                 >
-                                    {pl.owner}
+                                    {m.artist}
                                 </NavLink>
                             </div>
-                            <span className="playlistSongsCount">{pl.songs}</span>
-                            <span className="playlistTotalDuration">{pl.duration}</span>
-                            <span className="playlistLikesCount">{pl.listens}</span>
-                            <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
+
+                            <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
+                            <FiMessageCircle className="actionIcon" onClick={() => console.log('Comment')} />
+
+                            <span className="smallDuration" onClick={() => console.log(`Duration ${idx+1}`)}>
+                                {m.duration}
+                            </span>
+                            <span className="smallListens" onClick={() => console.log(`Listens ${idx+1}`)}>
+                                {m.listens}
+                            </span>
+
+                            <FiMoreHorizontal
+                                className="actionIcon"
+                                onClick={() => console.log('Options')}
+                            />
                         </NavLink>
                     ))}
                 </div>

@@ -1,6 +1,7 @@
 import React, {useState} from 'react';
 import '../../css/Pages/Playlist.css';
 import { playlists } from '../../data/playlists';
+import { musics } from '../../data/musics';
 import {
     FiShuffle,
     FiArrowUp,
@@ -17,35 +18,24 @@ export default function PlaylistPage() {
 
     const { id } = useParams();
     const playlist = playlists.find(pl => pl.id === Number(id)) || {};
+
     const {
         type = 'Public',
         title = 'Unknown Playlist',
         owner = '',
         listens = '',
         songs = '',
-        duration = ''
+        duration = '',
+        trackIds
     } = playlist;
 
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [recentAsc, setRecentAsc] = useState(true);
 
-    const playlistSongs = [
-        { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
-        { title: 'Song B', artist: 'Artist B', duration: '04:12', listens: '980K' },
-        { title: 'Song C', artist: 'Artist B', duration: '03:31', listens: '292K' },
-        { title: 'Song D', artist: 'Artist C', duration: '04:44', listens: '1.4K' },
-        { title: 'Song E', artist: 'Artist D', duration: '05:11', listens: '431K' },
-        { title: 'Song F', artist: 'Artist E', duration: '03:45', listens: '775K' },
-        { title: 'Song G', artist: 'Artist E', duration: '03:22', listens: '324K' },
-        { title: 'Song H', artist: 'Artist E', duration: '05:37', listens: '2.0K' },
-        { title: 'Song I', artist: 'Artist F', duration: '04:15', listens: '858K' },
-        { title: 'Song J', artist: 'Artist G', duration: '05:28', listens: '925K' },
-        { title: 'Song K', artist: 'Artist H', duration: '04:57', listens: '540K' },
-        { title: 'Song L', artist: 'Artist I', duration: '03:36', listens: '716K' },
-
-        // ... mais items
-    ];
+    const playlistSongs = trackIds
+        ? musics.filter(m => trackIds.includes(m.id))
+        : musics;
 
     return (
         <div className="playlistSection">
@@ -145,32 +135,42 @@ export default function PlaylistPage() {
             {/* === Song list === */}
             <div className="playlistContent">
                 <div className="playlistSongList">
-                    {playlistSongs.map((item, i) => (
-                        <div key={i} className="trackRow">
-                            <span className="trackNumber">{i+1}</span>
+                    {playlistSongs.map((track, idx) => (
+                        <NavLink
+                            key={track.id}
+                            to={`/player/${track.id}`}
+                            className="trackRow"
+                        >
+                            <span className="trackNumber">{idx + 1}</span>
 
-                            <NavLink to={`/player/${i}`}>
-                                <div className="coverPlaceholderSmall" />
-                            </NavLink>
+                            <div
+                                className="coverPlaceholderSmall"
+                                onClick={() => console.log(`Cover ${idx + 1} clicked`)}
+                            />
 
                             <div className="trackInfoSmall">
-                                <NavLink to={`/player/${i}`} className="infoLink">
-                                    <span className="smallTitle">{item.title}</span>
-                                </NavLink>
-                                <NavLink to={`/player/${i}`} className="infoLink">
-                                    <span className="smallArtist">{item.artist}</span>
+                                <span
+                                    className="smallTitle"
+                                    onClick={() => console.log(`Title ${idx+1} clicked`)}
+                                >
+                                    {track.title}
+                                </span>
+                                <NavLink
+                                    to={`/profile/${encodeURIComponent(track.artist)}`}
+                                    className="smallArtist"
+                                >
+                                    {track.artist}
                                 </NavLink>
                             </div>
-                            <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
-                            <FiMessageCircle className="actionIcon" onClick={() => console.log('Comment')} />
-                            <span className="smallDuration" onClick={() => console.log(`Duration ${i+1}`)}>
-                                    {item.duration}
-                                </span>
-                            <span className="smallListens"  onClick={() => console.log(`Listens ${i+1}`)}>
-                                    {item.listens}
-                                </span>
-                            <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
-                        </div>
+
+                            <span className="playlistTotalDuration">{track.duration}</span>
+                            <span className="playlistLikesCount">{track.listens}</span>
+
+                            <FiMoreHorizontal
+                                className="actionIcon"
+                                onClick={() => console.log('Options')}
+                            />
+                        </NavLink>
                     ))}
                 </div>
             </div>

@@ -19,6 +19,7 @@ export default function TopIcons() {
             </NavLink>
             <NavLink
                 to="/profile"
+                end
                 className={({ isActive }) =>
                     // mantém sempre a class userIcon, mas adiciona `active` quando on profile
                     `userIcon${isActive ? ' active' : ''}`

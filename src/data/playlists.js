@@ -7,6 +7,7 @@ export const playlists = [
         songs: 42,
         duration: '2:35:12',
         listens: '1.2K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
     },
     {
         id: 1,
@@ -15,6 +16,7 @@ export const playlists = [
         songs: 27,
         duration: '1:47:05',
         listens: '980',
+        trackIds: [2,5,7,9]
     },
     {
         id: 2,
@@ -23,6 +25,7 @@ export const playlists = [
         songs: 50,
         duration: '3:05:33',
         listens: '2.3K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
     },
     {
         id: 3,
@@ -31,6 +34,7 @@ export const playlists = [
         songs: 42,
         duration: '2:35:12',
         listens: '1.2K',
+        trackIds: [2,5,7,9]
     },
     {
         id: 4,
@@ -39,6 +43,7 @@ export const playlists = [
         songs: 27,
         duration: '1:47:05',
         listens: '980',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
     },
     {
         id: 5,
@@ -47,6 +52,7 @@ export const playlists = [
         songs: 50,
         duration: '3:05:33',
         listens: '2.3K',
+        trackIds: [2,5,7,9]
     },
     {
         id: 6,
@@ -55,6 +61,7 @@ export const playlists = [
         songs: 42,
         duration: '2:35:12',
         listens: '1.2K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
     },
     {
         id: 7,
@@ -63,6 +70,7 @@ export const playlists = [
         songs: 27,
         duration: '1:47:05',
         listens: '980',
+        trackIds: [2,5,7,9]
     },
     {
         id: 8,
@@ -71,6 +79,7 @@ export const playlists = [
         songs: 50,
         duration: '3:05:33',
         listens: '2.3K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
     },
     {
         id: 9,
@@ -79,6 +88,7 @@ export const playlists = [
         songs: 42,
         duration: '2:35:12',
         listens: '1.2K',
+        trackIds: [2,5,7,9]
     },
     {
         id: 10,
@@ -87,6 +97,7 @@ export const playlists = [
         songs: 27,
         duration: '1:47:05',
         listens: '980',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
     },
     {
         id: 11,
@@ -95,5 +106,6 @@ export const playlists = [
         songs: 50,
         duration: '3:05:33',
         listens: '2.3K',
+        trackIds: [2,5,7,9]
     },
 ];

@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import {FiHome, FiGlobe, FiUsers, FiRss, FiFolder, FiPlus, FiMusic, FiHeart, FiSettings, FiCheckSquare, FiLogOut
 } from 'react-icons/fi'
 import { playlists } from '../../data/playlists';
+import { musics } from '../../data/musics';
 export default function Menu() {
 
     const [playlistsOpen, setPlaylistsOpen] = useState(false);
@@ -136,7 +137,7 @@ export default function Menu() {
 
             <div className="menuLine contentLine hasSubmenu">
                 <NavLink
-                    to="/explore"
+                    to="/musics"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
                     }
@@ -164,63 +165,29 @@ export default function Menu() {
 
             {/* Submenu de Music */}
             <div className={`subMenu ${musicOpen ? 'open' : ''}`}>
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
+                <NavLink to="/explore" className="subItem">
                     <span className="subIcon"><FiPlus className="Icon" /></span>
                     <span className="subText">New Song</span>
                 </NavLink>
 
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiMusic className="Icon" /></span>
-                    <span className="subText">Posted Song 1</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiMusic className="Icon" /></span>
-                    <span className="subText">Posted Song 2</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiMusic className="Icon" /></span>
-                    <span className="subText">Posted Song 3</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiMusic className="Icon" /></span>
-                    <span className="subText">Posted Song 4</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiMusic className="Icon" /></span>
-                    <span className="subText">Posted Song 5</span>
-                </NavLink>
-                {/* ... mais itens ... */}
+                {musics.map(m => (
+                    <NavLink
+                        key={m.id}
+                        to={`/player/${m.id}`}
+                        className="subItem"
+                    >
+                        <span className="subIcon"><FiMusic className="Icon" /></span>
+                        <span className="subText">{m.title}</span>
+                    </NavLink>
+                ))}
             </div>
 
             <div className="menuLine contentLine hasSubmenu">
                 <NavLink
-                    to="/explore"
+                    to="/likes"
                     className={({isActive}) =>
                         `menuLineLink${isActive ? ' active' : ''}`
-                    }
-
+                }
                     onClick={e => {
                         const el = e.target
                         /* não queremos navegar ao clicar na seta, só no resto */
@@ -233,6 +200,7 @@ export default function Menu() {
                     <span className="houseMinimal"><FiHeart className="Icon" /></span>
                     <span className="lineText">Likes</span>
                 </NavLink>
+
                     <button
                         className={`arrowMinimal ${likesOpen ? 'rotated' : ''}`}
                         onClick={e => {
@@ -245,53 +213,16 @@ export default function Menu() {
 
             {/* Submenu de Likes */}
             <div className={`subMenu ${likesOpen ? 'open' : ''}`}>
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiPlus className="Icon" /></span>
-                    <span className="subText">New Song</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiHeart className="Icon" /></span>
-                    <span className="subText">Posted Song 1</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiHeart className="Icon" /></span>
-                    <span className="subText">Posted Song 2</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiHeart className="Icon" /></span>
-                    <span className="subText">Posted Song 3</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiHeart className="Icon" /></span>
-                    <span className="subText">Posted Song 4</span>
-                </NavLink>
-
-                <NavLink
-                    to="/explore"
-                    className="subItem"
-                >
-                    <span className="subIcon"><FiHeart className="Icon" /></span>
-                    <span className="subText">Posted Song 5</span>
-                </NavLink>
+                {musics.map(m => (
+                    <NavLink
+                        key={m.id}
+                        to={`/player/${m.id}`}
+                        className="subItem"
+                    >
+                        <span className="subIcon"><FiHeart className="Icon" /></span>
+                        <span className="subText">{m.title}</span>
+                    </NavLink>
+                ))}
                 {/* ... mais itens ... */}
             </div>
 

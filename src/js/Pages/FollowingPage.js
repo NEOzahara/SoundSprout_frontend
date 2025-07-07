@@ -2,8 +2,32 @@ import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import '../../css/Pages/Following.css';
 import {FiBarChart, FiSearch, FiUser, FiUserPlus, FiX} from 'react-icons/fi';
+import { testPlaylists, testMusics, testUsers } from '../../data/test';
 
 export default function FollowingPage() {
+
+    // estados para o autocomplete
+    const [query, setQuery] = useState('');
+    const [results, setResults] = useState([]);
+
+    // filtra os dados sempre que a query muda
+    useEffect(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) {
+            setResults([]);
+            return;
+        }
+        const pMatches = testPlaylists
+            .filter(p => p.title.toLowerCase().includes(q))
+            .map(p => ({ type: 'Playlist', id: p.id }));
+        const mMatches = testMusics
+            .filter(m => m.title.toLowerCase().includes(q))
+            .map(m => ({ type: 'Song', id: m.id }));
+        const uMatches = testUsers
+            .filter(u => u.name.toLowerCase().includes(q))
+            .map(u => ({ type: 'User', id: u.id }));
+        setResults([ ...pMatches, ...mMatches, ...uMatches ]);
+    }, [query]);
 
     const handleCoverClick = (n) => console.log(`Music ${n} clicado!`);
     const handleFollowedClick = (name) => console.log(`Clicked Followed: ${name}`);
@@ -60,21 +84,63 @@ export default function FollowingPage() {
 
     return (
         <>
-            <div className="searchBarContainer">
+            <div className="searchBarContainerFollowing">
                 {/*  Ícone de lupa à esquerda, colado na borda interna */}
-                <div className="searchWrapper">
+                <div className="searchWrapperFollowing searchContainerFollowing">
                     <div
-                        className="searchIconWrapper"
+                        className="searchIconWrapperFollowing"
                         onClick={() => console.log('Clique na lupa de busca!')}
                     >
-                        <FiSearch className="searchIcon" />
+                        <FiSearch className="searchIconFollowing" />
                     </div>
                     <input
                         type="text"
-                        className="searchInput"
+                        className="searchInputFollowing"
                         placeholder="Search"
-                        onChange={e => console.log('buscando por:', e.target.value)}
+                        value={query}
+                        onChange={e => setQuery(e.target.value)}
+                        autoFocus
                     />
+
+                    {results.length > 0 && (
+                        <ul className="suggestions">
+                            {results.map(r => {
+                                let item, subtitle, thumbClass, imageUrl;
+                                if (r.type === 'Playlist') {
+                                    item = testPlaylists.find(p => p.id === r.id);
+                                    subtitle = item.owner;
+                                    thumbClass = 'playlistThumb';
+                                    imageUrl = item.imageUrl;
+                                } else if (r.type === 'Song') {
+                                    item = testMusics.find(m => m.id === r.id);
+                                    subtitle = item.artist;
+                                    thumbClass = 'songThumb';
+                                    imageUrl = item.imageUrl;
+                                } else {
+                                    item = testUsers.find(u => u.id === r.id);
+                                    subtitle = 'Artista';
+                                    thumbClass = 'userThumb';
+                                    imageUrl = item.avatarUrl;
+                                }
+                                return (
+                                    <li key={`${r.type}-${r.id}`} className="suggestionItem">
+                                        <div
+                                            className={`suggestionThumb ${thumbClass}`}
+                                            style={{ backgroundImage: `url(${imageUrl||'/placeholder.png'})` }}
+                                        />
+                                        <div className="suggestionText">
+                                            <div className="suggestionTitle">
+                                                {item.title || item.name}
+                                            </div>
+                                            <div className="suggestionSubtitle">
+                                                {subtitle}
+                                            </div>
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
                 </div>
 
                 {/*  Ícone de “adicionar pessoa” à direita da barra */}

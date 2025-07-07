@@ -31,10 +31,10 @@ export default function TopIcons() {
 
     return (
         <div className="topIcons">
-            <div className={`searchContainer${showSearch ? ' active' : ''}`}>
+            <div className={`searchContainerIcon${showSearch ? ' active' : ''}`}>
                 {showSearch && (
                     <input
-                        className="searchInput"
+                        className="searchInputIcon"
                         type="text"
                         value={query}
                         onChange={e => setQuery(e.target.value)}

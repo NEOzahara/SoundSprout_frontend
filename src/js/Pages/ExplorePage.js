@@ -1,17 +1,42 @@
 import React, { useState, useEffect } from 'react';
 import api from '../services/api';
 import '../../css/Pages/Explore.css';
-import {FiSearch, FiUser, FiUserPlus} from 'react-icons/fi';
+import {FiSearch, FiUser} from 'react-icons/fi';
+import { testPlaylists, testMusics, testUsers } from '../../data/test';
 
 export default function ExplorePage() {
+
+    const [query, setQuery] = useState('');
+    const [results, setResults] = useState([]);
+
+    // Filtra sempre que o utilizador escreve
+    useEffect(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) {
+            setResults([]);
+            return;
+        }
+
+        const pMatches = testPlaylists
+            .filter(p => p.title.toLowerCase().includes(q))
+            .map(p => ({ type: 'Playlist', id: p.id }));
+        const mMatches = testMusics
+            .filter(m => m.title.toLowerCase().includes(q))
+            .map(m => ({ type: 'Song', id: m.id }));
+        const uMatches = testUsers
+            .filter(u => u.name.toLowerCase().includes(q))
+            .map(u => ({ type: 'User', id: u.id }));
+
+        setResults([ ...pMatches, ...mMatches, ...uMatches ]);
+    }, [query]);
 
     const handleCoverClick  = n => console.log(`Music ${n} clicado!`);
 
     const sections = [
-        { title: 'Discover',   render: count => renderDiscover(count) },
-        { title: 'Genres',      render: count => renderGenres(count) },
-        { title: 'Playlists',         render: count => renderPlaylists(count) },
-        { title: 'Artists',   render: count => renderArtists(count) },
+        { title: 'Discover', render: count => renderDiscover(count) },
+        { title: 'Genres', render: count => renderGenres(count) },
+        { title: 'Playlists', render: count => renderPlaylists(count) },
+        { title: 'Artists', render: count => renderArtists(count) },
     ];
 
     function renderDiscover(count) {
@@ -57,7 +82,7 @@ export default function ExplorePage() {
         <>
             <div className="searchBarContainer">
                 {/*  Ícone de lupa à esquerda, colado na borda interna */}
-                <div className="searchWrapper">
+                <div className="searchWrapper searchContainerExplore">
                     <div
                         className="searchIconWrapper"
                         onClick={() => console.log('Clique na lupa de busca!')}
@@ -68,17 +93,50 @@ export default function ExplorePage() {
                         type="text"
                         className="searchInput"
                         placeholder="Search"
-                        onChange={e => console.log('buscando por:', e.target.value)}
+                        value={query}
+                        onChange={e => setQuery(e.target.value)}
+                        autoFocus
                     />
+                    {results.length > 0 && (
+                        <ul className="suggestions">
+                            {results.map(r => {
+                                let item, subtitle, thumbClass, imageUrl;
+                                if (r.type === 'Playlist') {
+                                    item       = testPlaylists.find(p => p.id === r.id);
+                                    subtitle   = item.owner;
+                                    thumbClass = 'playlistThumb';
+                                    imageUrl   = item.imageUrl;
+                                } else if (r.type === 'Song') {
+                                    item       = testMusics.find(m => m.id === r.id);
+                                    subtitle   = item.artist;
+                                    thumbClass = 'songThumb';
+                                    imageUrl   = item.imageUrl;
+                                } else {
+                                    item       = testUsers.find(u => u.id === r.id);
+                                    subtitle   = 'Artista';
+                                    thumbClass = 'userThumb';
+                                    imageUrl   = item.avatarUrl;
+                                }
+                                return (
+                                    <li key={`${r.type}-${r.id}`} className="suggestionItem">
+                                        <div
+                                            className={`suggestionThumb ${thumbClass}`}
+                                            style={{ backgroundImage: `url(${imageUrl || '/placeholder.png'})` }}
+                                        />
+                                        <div className="suggestionText">
+                                            <div className="suggestionTitle">
+                                                {item.title || item.name}
+                                            </div>
+                                            <div className="suggestionSubtitle">
+                                                {subtitle}
+                                            </div>
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
                 </div>
-
-                {/*  Ícone de “adicionar pessoa” à direita da barra */}
-                <button
-                    className="addPersonButton"
-                    onClick={() => console.log('Adicionar pessoa')}
-                >
-                    <FiUserPlus className="addPersonIcon" />
-                </button>
             </div>
 
             <div className="exploreSection">

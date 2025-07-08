@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
+import React, { useState, useRef, useLayoutEffect, useEffect, useMemo } from 'react';
 import {
     FiList,
     FiGrid,
@@ -31,22 +31,17 @@ export default function LibraryMusicsPage() {
     // === estados do autocomplete ===
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
-    const [results, setResults] = useState([]);
-
-    // filtra as músicas sempre que a query muda
-    useEffect(() => {
+    const results = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) return setResults([]);
-        setResults(
-            musics
-                .filter(m => m.title.toLowerCase().includes(q))
-                .map(m => ({
-                    id: m.id,
-                    title: m.title,
-                    artist: m.artist,
-                    imageUrl: m.imageUrl
-                }))
-        );
+        if (!q) return [];
+        return musics
+            .filter(m => m.title.toLowerCase().includes(q))
+            .map(m => ({
+                id: m.id,
+                title: m.title,
+                artist: m.artist,
+                imageUrl: m.imageUrl
+            }));
     }, [query]);
 
     // --- estados do modal “New Song” ---
@@ -149,18 +144,25 @@ export default function LibraryMusicsPage() {
                         {showSearch && results.length > 0 && (
                             <ul className="suggestionsLib">
                                 {results.map(m => (
-                                    <li key={m.id} className="suggestionItem">
+                                    <NavLink
+                                        key={m.id}
+                                        to={`/player/${m.id}`}
+                                        className="suggestionItem"
+                                        onClick={() => {
+                                            // fecha o autocomplete
+                                            setShowSearch(false);
+                                            setQuery('');
+                                        }}
+                                    >
                                         <div
                                             className="suggestionThumb songThumb"
-                                            style={{
-                                                backgroundImage: `url(${m.imageUrl || '/placeholder.png'})`
-                                            }}
+                                            style={{ backgroundImage: `url(${m.imageUrl||'/placeholder.png'})` }}
                                         />
                                         <div className="suggestionText">
                                             <div className="suggestionTitle">{m.title}</div>
                                             <div className="suggestionSubtitle">{m.artist}</div>
                                         </div>
-                                    </li>
+                                    </NavLink>
                                 ))}
                             </ul>
                         )}

@@ -1,4 +1,4 @@
-import { useState, useRef, useLayoutEffect, useEffect } from "react";
+import { useState, useRef, useLayoutEffect, useEffect, useMemo } from "react";
 import { FiList, FiGrid, FiArrowUp, FiArrowDown, FiFilter, FiSearch, FiPlus, FiMoreHorizontal, FiHeart, FiMessageCircle } from "react-icons/fi";
 import { NavLink, useLocation } from "react-router-dom";
 import { playlists } from "../../data/playlists";
@@ -24,13 +24,11 @@ export default function LibraryLikesPage() {
 
     // === autocomplete ===
     const [showSearch, setShowSearch] = useState(false);
-    const [query, setQuery]           = useState("");
-    const [results, setResults]       = useState([]);
+    const [query, setQuery] = useState("");
 
-    useEffect(() => {
+    const results = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) return setResults([]);
-        // filtra playlists + músicas
+        if (!q) return [];
         const pMatches = playlists
             .filter(p => p.title.toLowerCase().includes(q))
             .map(p => ({
@@ -49,7 +47,7 @@ export default function LibraryLikesPage() {
                 subtitle:  m.artist,
                 imageUrl:  m.imageUrl
             }));
-        setResults([ ...pMatches, ...mMatches ]);
+        return [ ...pMatches, ...mMatches ];
     }, [query]);
 
     const location = useLocation();
@@ -196,19 +194,33 @@ export default function LibraryLikesPage() {
                             setQuery('');
                         }}
                     />
-                    {showSearch && results.length>0 && (
+                    {showSearch && results.length > 0 && (
                         <ul className="suggestionsLib">
-                            {results.map(r=>(
-                                <li key={`${r.type}-${r.id}`} className="suggestionItem">
+                            {results.map(r => (
+                                <NavLink
+                                    key={`${r.type}-${r.id}`}
+                                    to={ r.type === 'Playlist'
+                                        ? `/playlist/${r.id}`
+                                        : `/player/${r.id}` }
+                                    className="suggestionItem"
+                                    onClick={() => {
+                                        setShowSearch(false);
+                                        setQuery('');
+                                    }}
+                                >
                                     <div
-                                        className={`suggestionThumb ${r.type==='Playlist'? 'playlistThumb':'songThumb'}`}
-                                        style={{ backgroundImage: `url(${r.imageUrl||'/placeholder.png'})` }}
+                                        className={`suggestionThumb ${
+                                            r.type === 'Playlist' ? 'playlistThumb' : 'songThumb'
+                                        }`}
+                                        style={{
+                                            backgroundImage: `url(${r.imageUrl || '/placeholder.png'})`
+                                    }}
                                     />
                                     <div className="suggestionText">
                                         <div className="suggestionTitle">{r.title}</div>
                                         <div className="suggestionSubtitle">{r.subtitle}</div>
                                     </div>
-                                </li>
+                                </NavLink>
                             ))}
                         </ul>
                     )}

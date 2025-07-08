@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
+import React, { useState, useRef, useLayoutEffect, useEffect, useMemo } from 'react';
 import {
     FiList,
     FiGrid,
@@ -31,17 +31,12 @@ export default function LibraryPlaylistsPage() {
     // === estados para o search-autocomplete ===
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
-    const [results, setResults] = useState([]);
-
-    // filtra as playlists sempre que query muda
-    useEffect(() => {
+    const results = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) return setResults([]);
-        setResults(
-            playlists
-                .filter(pl => pl.title.toLowerCase().includes(q))
-                .map(pl => ({ id: pl.id, title: pl.title, owner: pl.owner, imageUrl: pl.imageUrl }))
-        );
+        if (!q) return [];
+        return playlists
+            .filter(pl => pl.title.toLowerCase().includes(q))
+            .map(pl => ({ id: pl.id, title: pl.title, owner: pl.owner, imageUrl: pl.imageUrl }));
     }, [query]);
 
     // --- novos estados para o modal “New Playlist” ---
@@ -146,7 +141,16 @@ export default function LibraryPlaylistsPage() {
                         {showSearch && results.length > 0 && (
                             <ul className="suggestionsLib">
                                 {results.map(pl => (
-                                    <li key={pl.id} className="suggestionItem">
+                                    <NavLink
+                                        key={pl.id}
+                                        to={`/playlist/${pl.id}`}
+                                        className="suggestionItem"
+                                        onClick={() => {
+                                            // fecha a autocomplete ao navegar
+                                            setShowSearch(false);
+                                            setQuery('');
+                                        }}
+                                    >
                                         <div
                                             className="suggestionThumb playlistThumb"
                                             style={{
@@ -157,7 +161,7 @@ export default function LibraryPlaylistsPage() {
                                             <div className="suggestionTitle">{pl.title}</div>
                                             <div className="suggestionSubtitle">{pl.owner}</div>
                                         </div>
-                                    </li>
+                                    </NavLink>
                                 ))}
                             </ul>
                         )}

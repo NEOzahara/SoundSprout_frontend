@@ -1,5 +1,5 @@
 // src/pages/QueuePage.js
-import React, { useState, useRef, useLayoutEffect, useEffect } from 'react';
+import React, { useState, useRef, useLayoutEffect, useEffect, useMemo } from 'react';
 import {
     FiList,
     FiGrid,
@@ -31,21 +31,17 @@ export default function QueuePage() {
     // === estados do autocomplete ===
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
-    const [results, setResults] = useState([]);
-
-    useEffect(() => {
+    const results = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) return setResults([]);
-        setResults(
-            musics
-                .filter(m => m.title.toLowerCase().includes(q))
-                .map(m => ({
-                    id: m.id,
-                    title: m.title,
-                    artist: m.artist,
-                    imageUrl: m.imageUrl
-                }))
-        );
+        if (!q) return [];
+        return musics
+            .filter(m => m.title.toLowerCase().includes(q))
+            .map(m => ({
+                id: m.id,
+                title: m.title,
+                artist: m.artist,
+                imageUrl: m.imageUrl
+            }));
     }, [query]);
 
     const toggleRecent = () => setRecentAsc(p => !p);
@@ -118,18 +114,26 @@ export default function QueuePage() {
                         {showSearch && results.length > 0 && (
                             <ul className="suggestionsLib">
                                 {results.map(m => (
-                                    <li key={m.id} className="suggestionItem">
+                                    <NavLink
+                                        key={m.id}
+                                        to={`/player/${m.id}`}
+                                        className="suggestionItem"
+                                        onClick={() => {
+                                            setShowSearch(false);
+                                            setQuery('');
+                                        }}
+                                    >
                                         <div
                                             className="suggestionThumb songThumb"
                                             style={{
                                                 backgroundImage: `url(${m.imageUrl || '/placeholder.png'})`
-                                            }}
+                                        }}
                                         />
                                         <div className="suggestionText">
                                             <div className="suggestionTitle">{m.title}</div>
                                             <div className="suggestionSubtitle">{m.artist}</div>
                                         </div>
-                                    </li>
+                                    </NavLink>
                                 ))}
                             </ul>
                         )}

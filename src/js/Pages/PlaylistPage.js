@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useMemo } from 'react';
 import '../../css/Pages/Playlist.css';
 import { playlists } from '../../data/playlists';
 import { musics } from '../../data/musics';
@@ -18,7 +18,6 @@ export default function PlaylistPage() {
 
     const { id } = useParams();
     const playlist = playlists.find(pl => pl.id === Number(id)) || {};
-
     const {
         type = 'Public',
         title = 'Unknown Playlist',
@@ -32,10 +31,20 @@ export default function PlaylistPage() {
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [recentAsc, setRecentAsc] = useState(true);
-
     const playlistSongs = trackIds
         ? musics.filter(m => trackIds.includes(m.id))
         : musics;
+
+    // === autocomplete ===
+    const [showSearch, setShowSearch] = useState(false);
+    const [query, setQuery] = useState('');
+    const results = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return [];
+        return playlistSongs
+            .filter(m => m.title.toLowerCase().includes(q))
+            .map(m => ({ id: m.id, title: m.title, artist: m.artist }));
+    }, [query, playlistSongs]);
 
     return (
         <div className="playlistSection">
@@ -128,7 +137,44 @@ export default function PlaylistPage() {
                 </div>
                 <FiFilter className="playlistToolbarIcon playlistToolbarItem playlistFilterItem" />
                 <span className="playlistToolbarText playlistToolbarItem">Filter: All</span>
-                <FiSearch className="playlistToolbarIcon playlistToolbarItem playlistSearchItem" />
+
+                {/* === autocomplete search === */}
+                <div className={`searchContainerLib${showSearch ? ' active' : ''}`}>
+                    {showSearch && (
+                        <input
+                            className="searchInputLib"
+                            type="text"
+                            value={query}
+                            onChange={e => setQuery(e.target.value)}
+                            placeholder="Search music..."
+                            autoFocus
+                        />
+                    )}
+                    <FiSearch
+                        className="playlistToolbarIcon playlistToolbarItem playlistSearchItem"
+                        onClick={() => {
+                            setShowSearch(b => !b);
+                            setQuery('');
+                        }}
+                    />
+                    {showSearch && results.length > 0 && (
+                        <ul className="suggestionsLib">
+                            {results.map(m => (
+                                <li key={m.id} className="suggestionItem">
+                                    <NavLink
+                                        to={`/player/${m.id}`}
+                                        onClick={() => setShowSearch(false)}
+                                        className="suggestionText"
+                                    >
+                                        <div className="suggestionTitle">{m.title}</div>
+                                        <div className="suggestionSubtitle">{m.artist}</div>
+                                    </NavLink>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+
                 <FiMoreHorizontal className="playlistToolbarIcon playlistAddIcon" />
             </div>
 

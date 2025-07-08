@@ -21,6 +21,7 @@ import LibraryMusicsPage from './Pages/LibraryMusicsPage';
 import LibraryLikesPage from './Pages/LibraryLikesPage';
 import LiveStreamsPage from './Pages/LiveStreamsPage';
 import LiveStreamPage from './Pages/LiveStreamPage';
+import QueuePage from './Pages/QueuePage';
 
 import HomeLoggedOffPage from "./Pages/HomeLoggedOffPage";
 import ExploreLoggedOffPage from './Pages/ExploreLoggedOffPage';
@@ -52,6 +53,7 @@ export default function App() {
                     <Route path="likes" element={<LibraryLikesPage />} />
                     <Route path="liveStreams" element={<LiveStreamsPage />} />
                     <Route path="liveStream/:id" element={<LiveStreamPage />} />
+                    <Route path="queue" element={<QueuePage />} />
 
                     <Route path="player/:songId?" element={<PlayerPage />} />
                     <Route path="profile" element={<ProfilePage />} />

@@ -106,7 +106,7 @@ export default function RightScroll() {
             </div>
 
             {/* Queue */}
-            <div className="section">
+            {/*<div className="section">
                 <div className="sectionHeader">
                     <h2>Queue</h2>
                     <button className="seeAll">
@@ -114,7 +114,7 @@ export default function RightScroll() {
                     </button>
                 </div>
                 <div className="cardList">{renderOtherCards()}</div>
-            </div>
+            </div>*/}
         </div>
     )
 }

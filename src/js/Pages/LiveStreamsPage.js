@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import { FiSearch } from 'react-icons/fi';
 import '../../css/Pages/LiveStreams.css';
@@ -7,28 +7,20 @@ import { streams } from '../../data/liveStreams';
 export default function LiveStreamsPage() {
 
     const [searchTerm, setSearchTerm] = useState('');
-    const [results, setResults] = useState([]);
-
-    // filtra sempre que o utilizador escreve
-    useEffect(() => {
+    const results = useMemo(() => {
         const q = searchTerm.trim().toLowerCase();
-        if (!q) {
-            setResults([]);
-            return;
-        }
-        setResults(
-            streams
-                .filter(s =>
-                    s.owner.toLowerCase().includes(q) ||
-                    s.type.toLowerCase().includes(q)
-                )
-                .map(s => ({
-                    id: s.id,
-                    owner: s.owner,
-                    type: s.type,
-                    imageUrl: s.imageUrl
-                }))
-        );
+        if (!q) return [];
+        return streams
+            .filter(s =>
+                s.owner.toLowerCase().includes(q) ||
+                s.type.toLowerCase().includes(q)
+            )
+            .map(s => ({
+                id:       s.id,
+                owner:    s.owner,
+                type:     s.type,
+                imageUrl: s.imageUrl
+            }));
     }, [searchTerm]);
 
     const [recAll, setRecAll] = useState(false);
@@ -78,29 +70,28 @@ export default function LiveStreamsPage() {
                     <input
                         type="text"
                         className="liveSearchInput"
-                        placeholder="Search"
+                        placeholder="Search live streams..."
                         value={searchTerm}
-                        onChange={handleSearchChange}
+                        onChange={e => setSearchTerm(e.target.value)}
                     />
                     {results.length > 0 && (
                         <ul className="suggestions">
                             {results.map(r => (
-                                <li
+                                <NavLink
                                     key={r.id}
+                                    to={`/livestream/${r.id}`}
                                     className="suggestionItem"
-                                    onClick={() => handleStreamClick(r.id)}
+                                    onClick={() => setSearchTerm('')}
                                 >
                                     <div
                                         className="suggestionThumb userThumb"
-                                        style={{
-                                            backgroundImage: `url(${r.imageUrl})`
-                                        }}
+                                        style={{ backgroundImage: `url(${r.imageUrl})` }}
                                     />
                                     <div className="suggestionText">
                                         <div className="suggestionTitle">{r.owner}</div>
                                         <div className="suggestionSubtitle">{r.type}</div>
                                     </div>
-                                </li>
+                                </NavLink>
                             ))}
                         </ul>
                     )}

@@ -1,33 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import api from '../services/api';
 import '../../css/Pages/Explore.css';
 import {FiSearch, FiUser} from 'react-icons/fi';
+import { NavLink } from 'react-router-dom';
 import { testPlaylists, testMusics, testUsers } from '../../data/test';
 
 export default function ExplorePage() {
 
     const [query, setQuery] = useState('');
-    const [results, setResults] = useState([]);
-
-    // Filtra sempre que o utilizador escreve
-    useEffect(() => {
+    const results = useMemo(() => {
         const q = query.trim().toLowerCase();
-        if (!q) {
-            setResults([]);
-            return;
-        }
-
+        if (!q) return [];
         const pMatches = testPlaylists
             .filter(p => p.title.toLowerCase().includes(q))
-            .map(p => ({ type: 'Playlist', id: p.id }));
+            .map(p => ({ type: 'Playlist', id: p.id, title: p.title, subtitle: p.owner, imageUrl: p.imageUrl }));
         const mMatches = testMusics
             .filter(m => m.title.toLowerCase().includes(q))
-            .map(m => ({ type: 'Song', id: m.id }));
+            .map(m => ({ type: 'Song', id: m.id, title: m.title, subtitle: m.artist, imageUrl: m.imageUrl }));
         const uMatches = testUsers
             .filter(u => u.name.toLowerCase().includes(q))
-            .map(u => ({ type: 'User', id: u.id }));
-
-        setResults([ ...pMatches, ...mMatches, ...uMatches ]);
+            .map(u => ({ type: 'User',  id: u.id, title: u.name,  subtitle: u.username, imageUrl: u.avatarUrl }));
+        return [ ...pMatches, ...mMatches, ...uMatches ];
     }, [query]);
 
     const handleCoverClick  = n => console.log(`Music ${n} clicado!`);
@@ -99,41 +92,33 @@ export default function ExplorePage() {
                     />
                     {results.length > 0 && (
                         <ul className="suggestions">
-                            {results.map(r => {
-                                let item, subtitle, thumbClass, imageUrl;
-                                if (r.type === 'Playlist') {
-                                    item       = testPlaylists.find(p => p.id === r.id);
-                                    subtitle   = item.owner;
-                                    thumbClass = 'playlistThumb';
-                                    imageUrl   = item.imageUrl;
-                                } else if (r.type === 'Song') {
-                                    item       = testMusics.find(m => m.id === r.id);
-                                    subtitle   = item.artist;
-                                    thumbClass = 'songThumb';
-                                    imageUrl   = item.imageUrl;
-                                } else {
-                                    item       = testUsers.find(u => u.id === r.id);
-                                    subtitle   = 'Artista';
-                                    thumbClass = 'userThumb';
-                                    imageUrl   = item.avatarUrl;
-                                }
-                                return (
-                                    <li key={`${r.type}-${r.id}`} className="suggestionItem">
-                                        <div
-                                            className={`suggestionThumb ${thumbClass}`}
-                                            style={{ backgroundImage: `url(${imageUrl || '/placeholder.png'})` }}
-                                        />
-                                        <div className="suggestionText">
-                                            <div className="suggestionTitle">
-                                                {item.title || item.name}
-                                            </div>
-                                            <div className="suggestionSubtitle">
-                                                {subtitle}
-                                            </div>
-                                        </div>
-                                    </li>
-                                );
-                            })}
+                            {results.map(r => (
+                                <NavLink
+                                    key={`${r.type}-${r.id}`}
+                                    to={ r.type === 'Playlist'
+                                        ? `/playlist/${r.id}`
+                                        : r.type === 'Song'
+                                            ? `/player/${r.id}`
+                                            : `/profile/${encodeURIComponent(r.title)}` }
+                                    className="suggestionItem"
+                                    onClick={() => setQuery('')}
+                                >
+                                    <div
+                                        className={`suggestionThumb ${
+                                            r.type === 'Playlist' ? 'playlistThumb'
+                                                : r.type === 'Song'     ? 'songThumb'
+                                                    :                         'userThumb'
+                                        }`}
+                                        style={{
+                                            backgroundImage: `url(${r.imageUrl || '/placeholder.png'})`
+                                    }}
+                                    />
+                                    <div className="suggestionText">
+                                        <div className="suggestionTitle">{r.title}</div>
+                                        <div className="suggestionSubtitle">{r.subtitle}</div>
+                                    </div>
+                                </NavLink>
+                            ))}
                         </ul>
                     )}
                 </div>

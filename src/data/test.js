@@ -19,7 +19,7 @@ export const testMusics = [
 ];
 
 export const testUsers = [
-    { id: 0, name: 'Alice', avatarUrl: '/avatars/alice.png' },
-    { id: 1, name: 'Bob',   avatarUrl: '/avatars/bob.png' },
-    { id: 2, name: 'Carol', avatarUrl: '/avatars/carol.png' },
+    { id: 0, name: 'Alice', username: 'alice', avatarUrl: '/avatars/alice.png' },
+    { id: 1, name: 'Bob', username: 'bob', avatarUrl: '/avatars/bob.png' },
+    { id: 2, name: 'Carol', username: 'carol', avatarUrl: '/avatars/carol.png' },
 ];

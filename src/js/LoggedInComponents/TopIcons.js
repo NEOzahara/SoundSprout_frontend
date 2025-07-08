@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react'
+import React, {useState, useEffect, useRef} from 'react'
 import { NavLink } from 'react-router-dom';
 import { FiSearch, FiBell, FiAward, FiUser } from 'react-icons/fi'
 import { testPlaylists, testMusics, testUsers } from '../../data/test'
+import { notifications } from '../../data/notifications'
 
 export default function TopIcons() {
 
@@ -28,6 +29,20 @@ export default function TopIcons() {
 
         setResults([ ...pMatches, ...mMatches, ...uMatches ])
     }, [query])
+
+    const [showNotifications, setShowNotifications] = useState(false)
+    const notifRef = useRef(null)
+
+    // fecha ao clicar fora
+    useEffect(() => {
+        function handleClickOutside(e) {
+            if (showNotifications && notifRef.current && !notifRef.current.contains(e.target)) {
+                setShowNotifications(false)
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside)
+        return () => document.removeEventListener('mousedown', handleClickOutside)
+    }, [showNotifications])
 
     return (
         <div className="topIcons">
@@ -94,7 +109,28 @@ export default function TopIcons() {
                 )}
             </div>
 
-            <FiBell className="topIcon" />
+            {/* --- sino de notificações --- */}
+            <div className="notificationsContainer" ref={notifRef}>
+                <FiBell
+                    className={`topIcon${showNotifications ? ' active' : ''}`}
+                    onClick={() => setShowNotifications(n => !n)}
+                />
+                {showNotifications && (
+                    <ul className="notificationsDropdown">
+                        {notifications.map(n => (
+                            <li key={n.id} className="notificationItem">
+                                <NavLink
+                                    to={n.link}
+                                    className="notificationLink"
+                                    onClick={() => setShowNotifications(false)}
+                                >
+                                    {n.message}
+                                </NavLink>
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </div>
             <NavLink
                 to="/achievements"
                 className={({ isActive }) =>

@@ -6,7 +6,7 @@ import api from "../services/api";
 export default function HomePage() {
     // Estado para Top Artists
     const [topArtists, setTopArtists] = useState([]);
-    const topCount = 7; // número de artistas a mostrar
+    const topCount = 6; // número de artistas a mostrar
 
     // Handler genérico de clique (pode navegar para perfil, por exemplo)
     const handleCoverClick  = n => console.log(`Music ${n} clicado!`);
@@ -93,9 +93,9 @@ export default function HomePage() {
 
         </span>
                 <span className="coverInfo">
-             {/*
-          {Number(artist.totalviews).toLocaleString('pt-PT')} visualizações
-          */}
+
+          {Number(artist.totalviews).toLocaleString('pt-PT')} views
+
         </span>
             </div>
         ));
@@ -127,7 +127,7 @@ export default function HomePage() {
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
-                        {renderCovers(7)}
+                        {renderCovers(6)}
                     </div>
                 </div>
             </div>
@@ -140,7 +140,7 @@ export default function HomePage() {
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
-                        {renderCharts(7)}
+                        {renderCharts(6)}
                     </div>
                 </div>
             </div>
@@ -169,7 +169,7 @@ export default function HomePage() {
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
-                        {renderFavArtists(7)}
+                        {renderFavArtists(6)}
                     </div>
                 </div>
             </div>

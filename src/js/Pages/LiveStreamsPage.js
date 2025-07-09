@@ -186,7 +186,7 @@ export default function LiveStreamsPage() {
             {/* Carrossel de categorias/estados */}
             <div className="liveCarouselSection">
                 <div className="liveCarouselHeader">
-                    <span className="liveSectionTitle">Live Genres</span>
+                    <span className="liveSectionTitle">Community Events</span>
                     {/* Não precisas de botão "see all" mas podes adicionar se quiseres */}
                 </div>
                 <div className="liveCarouselWrapper">

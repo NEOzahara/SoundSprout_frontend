@@ -1,7 +1,8 @@
-import React, {useEffect, useRef, useState, useMemo} from "react";
+import React, {useEffect, useRef, useState, useMemo, useCallback} from "react";
 import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUser, FiPause} from 'react-icons/fi';
 import '../../css/Pages/Player.css';
 import {NavLink, useParams, useLocation} from "react-router-dom";
+import { createPortal } from 'react-dom';
 import { musics } from '../../data/musics';
 import { playlists } from '../../data/playlists';
 
@@ -23,6 +24,46 @@ export default function PlayerPage () {
     );
 
     const [activeTab, setActiveTab] = useState('More Like This');
+
+    // More menu states
+    const [showMoreDropdown, setShowMoreDropdown] = useState(false);
+    const [showDonatePopup, setShowDonatePopup] = useState(false);
+    const [donateValue, setDonateValue] = useState("");
+    const moreRef = useRef(null);
+
+    // Fecha dropdown ao clicar fora
+    const handleClickOutside = useCallback((event) => {
+        if (moreRef.current && !moreRef.current.contains(event.target)) {
+            setShowMoreDropdown(false);
+        }
+    }, []);
+    useEffect(() => {
+        if (!showMoreDropdown) return;
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, [showMoreDropdown, handleClickOutside]);
+
+    // Previne scroll background quando o popup está aberto
+    useEffect(() => {
+        if (showDonatePopup) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.overflow = '';
+        }
+        return () => { document.body.style.overflow = ''; };
+    }, [showDonatePopup]);
+
+    // Donate logic (igual ao ProfilePage)
+    const handleQuickDonate = (value) => setDonateValue(value);
+    const handleDonateInput = (e) => {
+        const val = e.target.value.replace(/[^0-9]/g, "");
+        setDonateValue(val);
+    };
+    const handleCloseDonate = () => {
+        setShowDonatePopup(false);
+        setDonateValue("");
+    };
+    const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
 
     const credits = [
         { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
@@ -122,6 +163,100 @@ export default function PlayerPage () {
         setShowAddToPlaylist(false);
     }
 
+    // More menu & popup components
+    const MoreDropdown = (
+        <div className="moreDropdownWrapper" ref={moreRef}>
+            <FiMoreHorizontal
+                className="playerIcon moreIcon"
+                onClick={() => setShowMoreDropdown(v => !v)}
+            />
+            {showMoreDropdown && (
+                <div className="dropdownMenu">
+                    <div className="dropdownItem"
+                         onClick={() => { setShowMoreDropdown(false); alert("Share!"); }}>
+                        Share
+                    </div>
+                    <div
+                        className="dropdownItem"
+                        onClick={() => {
+                            setShowMoreDropdown(false);
+                            setShowDonatePopup(true);
+                        }}
+                    >
+                        Donate
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+
+    const DonatePopup = (
+        <div
+            className="donatePopupOverlay"
+            onClick={handleCloseDonate} // Fecha ao clicar no fundo
+            tabIndex={-1} // permite foco
+            role="dialog"
+        >
+            <div
+                className="donatePopup"
+                onClick={e => e.stopPropagation()} // NÃO fecha se clicares dentro do popup
+            >
+                <div className="donateTitle">
+                    Donate to {music.artist}
+                </div>
+                <div className="quickDonateButtons">
+                    {[5, 10, 15, 20].map((val) => (
+                        <button
+                            key={val}
+                            className="quickDonateBtn"
+                            type="button"
+                            onClick={() => handleQuickDonate(val.toString())}
+                        >
+                            {val}€
+                        </button>
+                    ))}
+                </div>
+                <div className="donateInputSection">
+                    <label className="donateInputLabel">
+                        Specific ammount (min. 5€)
+                    </label>
+                    <input
+                        className="donateInput"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={5}
+                        value={donateValue}
+                        onChange={handleDonateInput}
+                        placeholder="e.g. 10"
+                    />
+                </div>
+                <div className="donateActions">
+                    <button
+                        className="donateCancelBtn"
+                        type="button"
+                        onClick={handleCloseDonate}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        className="donateConfirmBtn"
+                        type="button"
+                        onClick={() => {
+                            if (isConfirmEnabled) {
+                                alert(`Doou ${donateValue}€ para ${music.artist}`);
+                                handleCloseDonate();
+                            }
+                        }}
+                        disabled={!isConfirmEnabled}
+                    >
+                        Confirm
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+
     return (
         <div key={songId} className="playerScroll" ref={scrollRef}>
             <div className="playerSection">
@@ -166,7 +301,7 @@ export default function PlayerPage () {
                             <NavLink to="/queue" className="playerIcon">
                                 <FiList />
                             </NavLink>
-                            <FiMoreHorizontal className="playerIcon" onClick={() => console.log('More clicked')} />
+                            {MoreDropdown}
                         </div>
 
                         <div className="genres">
@@ -339,6 +474,7 @@ export default function PlayerPage () {
                     </div>
                 </div>
             )}
+            {showDonatePopup && createPortal(DonatePopup, document.body)}
         </div>
     );
 }

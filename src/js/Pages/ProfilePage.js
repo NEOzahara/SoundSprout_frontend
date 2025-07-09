@@ -1,13 +1,35 @@
-import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import React, {useEffect, useLayoutEffect, useRef, useState, useCallback} from 'react';
 import { useParams } from 'react-router-dom'
+import { createPortal } from 'react-dom';
 import { FiEdit2, FiShare2, FiHeart, FiMessageCircle, FiList, FiMoreHorizontal } from 'react-icons/fi';
 import '../../css/Pages/Profile.css';
 
 export default function ProfilePage() {
 
     const { username } = useParams()
-
     const isOwnProfile = !username;
+
+    // Dropdown visibilidade (para FiMoreHorizontal)
+    const [showDropdown, setShowDropdown] = useState(false);
+
+    // Estado do popup de doação
+    const [showDonatePopup, setShowDonatePopup] = useState(false);
+    const [donateValue, setDonateValue] = useState("");
+
+    // Fecha dropdown ao clicar fora
+    const moreRef = useRef(null);
+    const handleClickOutside = useCallback((event) => {
+        if (moreRef.current && !moreRef.current.contains(event.target)) {
+            setShowDropdown(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!showDropdown) return;
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, [showDropdown, handleClickOutside]);
+
 
     // Suporte futuro: podes ir buscar o utilizador autenticado da store/context aqui
     // const loggedUser = getUserFromContextOrStore() || { username: "LoggedInUser" }
@@ -16,7 +38,6 @@ export default function ProfilePage() {
     const showUsername = username || "Username";
     const stats = { playlists: 0, songs: 0, followers: 0, following: 0 }
     const profileUrl = window.location.href
-
     const { playlists, songs, followers, following } = stats;
 
     const copyLink = () => {
@@ -44,6 +65,18 @@ export default function ProfilePage() {
         });
         setOverflowFlags(newFlags);
     }, []);
+
+    // Donate logic
+    const handleQuickDonate = (value) => setDonateValue(value);
+    const handleDonateInput = (e) => {
+        const val = e.target.value.replace(/[^0-9]/g, "");
+        setDonateValue(val);
+    };
+    const handleCloseDonate = () => {
+        setShowDonatePopup(false);
+        setDonateValue("");
+    };
+    const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
 
     // Playlists (a substituir por dados da BD mais tarde)
     const playlistsList = Array.from({ length: 7 }, (_, i) => `Playlist ${i+1}`);
@@ -146,157 +179,255 @@ export default function ProfilePage() {
             </div>
         ));
 
-    return (
-        <div className="profileSection">
-            <div className="profileHeader">
-                {/* wrapper principal com gap de 20px entre avatar e textos */}
-                <div className="profileMain">
-                    {/* 1) Avatar circular 160×160 */}
-                    <div className="profileAvatar" />
-
-                    {/* 2) Textos: “Profile” e “Username” */}
-                    <div className="profileDetails">
-                        <span className="profileLabel">Profile</span>
-                        <span className="profileUsername">{showUsername}</span>
-                    </div>
+    // ---- Popup Donate (logo antes do return principal) ----
+    // (Isto fica antes do return)
+    const DonatePopup = (
+        <div
+            className="donatePopupOverlay"
+            onClick={handleCloseDonate} // Fecha ao clicar no fundo escurecido
+            tabIndex={-1}
+            role="dialog"
+        >
+            <div
+                className="donatePopup"
+                onClick={e => e.stopPropagation()} // Não fecha ao clicar dentro do popup
+                >
+                <div className="donateTitle">
+                    Donate to {showUsername}
                 </div>
-
-                {/* 3) Ícones de ação */}
-                <div className="profileActions">
-                    {isOwnProfile && (
-                        <FiEdit2
-                            className="actionIcon editIcon"
-                            onClick={() => console.log('Editar perfil')}
-                        />
-                    )}
-                    <FiShare2
-                        className="actionIcon shareIcon"
-                        onClick={copyLink}
+                <div className="quickDonateButtons">
+                    {[5, 10, 15, 20].map((val) => (
+                        <button
+                            key={val}
+                            className="quickDonateBtn"
+                            type="button"
+                            onClick={() => handleQuickDonate(val.toString())}
+                        >
+                            {val}€
+                        </button>
+                    ))}
+                </div>
+                <div className="donateInputSection">
+                    <label className="donateInputLabel">
+                        Specific ammount (min. 5€)
+                    </label>
+                    <input
+                        className="donateInput"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={5}
+                        value={donateValue}
+                        onChange={handleDonateInput}
+                        placeholder="e.g. 10"
                     />
                 </div>
-            </div>
-
-            {/* 4) Estatísticas */}
-            <div className="profileStats">
-                <span className="statsPrimary">
-                    {playlists} Playlists – {songs} Songs
-                </span>
-                <span className="statsSecondary">
-                    &nbsp;– {followers} Followers – {following} Following
-                </span>
-            </div>
-
-            {/* 5) Link para o perfil */}
-            <div className="profileLink" onClick={copyLink}>
-                link to profile ({profileUrl})
-            </div>
-
-            <div className="profileBadges">
-                {badges.map((b, i) => (
-                    <div key={i} className={`profileBadge ${b.tier}`}>
-                        <span
-                            ref={el => badgeRefs.current[i] = el}
-                            className={`badgeText${overflowFlags[i] ? " marquee-hover" : ""}`}
-                        >
-                        {b.title}
-                        </span>
-                    </div>
-                ))}
-            </div>
-
-            <hr className="profileDivider" />
-
-            <div className="playlistsScroll">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Public Playlists</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="carouselWrapper">
-                    <div className="carousel">
-                        {renderPlaylists()}
-                    </div>
-                </div>
-            </div>
-
-            <div className="playlistsScroll">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Top Artists this month</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="carouselWrapper">
-                    <div className="carousel">
-                        {renderArtists()}
-                    </div>
-                </div>
-            </div>
-
-            <div className="verticalSection">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Top tracks this month</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="verticalWrapper">
-                    {renderTopTracks()}
-                </div>
-            </div>
-
-            <div className="playlistsScroll">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Recently Liked Playlists</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="carouselWrapper">
-                    <div className="carousel">
-                        {renderLikedPlaylists()}
-                    </div>
-                </div>
-            </div>
-
-            <div className="verticalSection">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Recently Liked Songs</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="verticalWrapper">
-                    {renderRecentTracks()}
-                </div>
-            </div>
-
-            <div className="followersScroll">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Followers</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="carouselWrapper">
-                    <div className="carousel">
-                        {renderFollowers()}
-                    </div>
-                </div>
-            </div>
-
-            <div className="followersScroll">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Following</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="carouselWrapper">
-                    <div className="carousel">
-                        {renderFollowing()}
-                    </div>
-                </div>
-            </div>
-
-            <div className="playlistsScroll">
-                <div className="recommendHeader">
-                    <span className="sectionTitle">Achievements</span>
-                    <button className="seeAll">see all</button>
-                </div>
-                <div className="carouselWrapper">
-                    <div className="carousel">
-                        {renderAchievements()}
-                    </div>
+                <div className="donateActions">
+                    <button
+                        className="donateCancelBtn"
+                        type="button"
+                        onClick={handleCloseDonate}
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        className="donateConfirmBtn"
+                        type="button"
+                        onClick={() => {
+                            if (isConfirmEnabled) {
+                                alert(`Doou ${donateValue}€ para ${showUsername}`);
+                                handleCloseDonate();
+                            }
+                        }}
+                        disabled={!isConfirmEnabled}
+                    >
+                        Confirm
+                    </button>
                 </div>
             </div>
         </div>
+    );
+
+    return (
+        <>
+            {showDonatePopup && createPortal(DonatePopup, document.body)}
+            <div className="profileSection">
+                <div className="profileHeader">
+                    {/* wrapper principal com gap de 20px entre avatar e textos */}
+                    <div className="profileMain">
+                        {/* 1) Avatar circular 160×160 */}
+                        <div className="profileAvatar" />
+
+                        {/* 2) Textos: “Profile” e “Username” */}
+                        <div className="profileDetails">
+                            <span className="profileLabel">Profile</span>
+                            <span className="profileUsername">{showUsername}</span>
+                        </div>
+                    </div>
+
+                    {/* 3) Ícones de ação */}
+                    <div className="profileActions">
+                        {isOwnProfile && (
+                            <FiEdit2
+                                className="actionIcon editIcon"
+                                onClick={() => console.log('Editar perfil')}
+                            />
+                        )}
+                        <FiShare2
+                            className="actionIcon shareIcon"
+                            onClick={copyLink}
+                            style={isOwnProfile ? {} : { order: 1 }} // só muda posição se não for o próprio perfil
+                        />
+                        {!isOwnProfile && (
+                            <div className="moreDropdownWrapper" ref={moreRef}>
+                                <FiMoreHorizontal
+                                    className="actionIcon moreIcon"
+                                    onClick={() => setShowDropdown(v => !v)}
+                                />
+                                {showDropdown && (
+                                    <div className="dropdownMenu">
+                                        <div className="dropdownItem"
+                                             onClick={() => { setShowDropdown(false); alert("Follow!"); }}>
+                                            Follow
+                                        </div>
+                                        <div
+                                            className="dropdownItem"
+                                            onClick={() => {
+                                                setShowDropdown(false);
+                                                setShowDonatePopup(true);
+                                            }}
+                                        >
+                                            Donate
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* 4) Estatísticas */}
+                <div className="profileStats">
+                    <span className="statsPrimary">
+                        {playlists} Playlists – {songs} Songs
+                    </span>
+                    <span className="statsSecondary">
+                        &nbsp;– {followers} Followers – {following} Following
+                    </span>
+                </div>
+
+                {/* 5) Link para o perfil */}
+                <div className="profileLink" onClick={copyLink}>
+                    link to profile ({profileUrl})
+                </div>
+
+                <div className="profileBadges">
+                    {badges.map((b, i) => (
+                        <div key={i} className={`profileBadge ${b.tier}`}>
+                            <span
+                                ref={el => badgeRefs.current[i] = el}
+                                className={`badgeText${overflowFlags[i] ? " marquee-hover" : ""}`}
+                            >
+                            {b.title}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+
+                <hr className="profileDivider" />
+
+                <div className="playlistsScroll">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Public Playlists</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="carouselWrapper">
+                        <div className="carousel">
+                            {renderPlaylists()}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="playlistsScroll">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Top Artists this month</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="carouselWrapper">
+                        <div className="carousel">
+                            {renderArtists()}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="verticalSection">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Top tracks this month</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="verticalWrapper">
+                        {renderTopTracks()}
+                    </div>
+                </div>
+
+                <div className="playlistsScroll">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Recently Liked Playlists</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="carouselWrapper">
+                        <div className="carousel">
+                            {renderLikedPlaylists()}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="verticalSection">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Recently Liked Songs</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="verticalWrapper">
+                        {renderRecentTracks()}
+                    </div>
+                </div>
+
+                <div className="followersScroll">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Followers</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="carouselWrapper">
+                        <div className="carousel">
+                            {renderFollowers()}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="followersScroll">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Following</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="carouselWrapper">
+                        <div className="carousel">
+                            {renderFollowing()}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="playlistsScroll">
+                    <div className="recommendHeader">
+                        <span className="sectionTitle">Achievements</span>
+                        <button className="seeAll">see all</button>
+                    </div>
+                    <div className="carouselWrapper">
+                        <div className="carousel">
+                            {renderAchievements()}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </>
     );
 }

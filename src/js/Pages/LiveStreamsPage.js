@@ -16,9 +16,9 @@ export default function LiveStreamsPage() {
                 s.type.toLowerCase().includes(q)
             )
             .map(s => ({
-                id:       s.id,
-                owner:    s.owner,
-                type:     s.type,
+                id: s.id,
+                owner: s.owner,
+                type: s.type,
                 imageUrl: s.imageUrl
             }));
     }, [searchTerm]);
@@ -36,6 +36,15 @@ export default function LiveStreamsPage() {
         console.log(`Stream ${id} clicado!`);
         // ex.: navigate(`/livestream/${id}`)
     }
+
+    const genresStatus = [
+        { genre: 'Rock', status: 'Closed' },
+        { genre: 'Pop', status: 'On Going' },
+        { genre: 'Hip-Hop', status: 'Closed' },
+        { genre: 'Jazz', status: 'On Going' },
+        { genre: 'Indie', status: 'Closed' },
+        { genre: 'Funk', status: 'On Going' }
+    ];
 
     // agora renderStreams recebe um inteiro 'count'
     const renderStreams = (count) =>
@@ -55,6 +64,28 @@ export default function LiveStreamsPage() {
                     <span className="liveCoverType">{type}</span>
                 </NavLink>
             ));
+
+    const renderEventCarousel = () =>
+        genresStatus.map(({ genre, status }) => {
+            const isClosed = status === 'Closed';
+            const isOngoing = status === 'On Going';
+            const to = isClosed
+                ? `/playlist/community-${encodeURIComponent(genre)}`
+                : isOngoing
+                    ? `/communityEvent/${encodeURIComponent(genre)}`
+                    : undefined;
+            return (
+                <NavLink
+                    key={genre}
+                    to={to}
+                    className="coverCard"
+                >
+                    <div className="coverPlaceholder" />
+                    <span className="coverTitle">{genre}</span>
+                    <span className="coverArtist">{status}</span>
+                </NavLink>
+            );
+        });
 
     return (
         <div className="liveSection">
@@ -151,6 +182,18 @@ export default function LiveStreamsPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Carrossel de categorias/estados */}
+            <div className="liveCarouselSection">
+                <div className="liveCarouselHeader">
+                    <span className="liveSectionTitle">Live Genres</span>
+                    {/* Não precisas de botão "see all" mas podes adicionar se quiseres */}
+                </div>
+                <div className="liveCarouselWrapper">
+                    <div className="carousel">{renderEventCarousel()}</div>
+                </div>
+            </div>
+
         </div>
     );
 }

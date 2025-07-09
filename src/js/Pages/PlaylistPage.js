@@ -1,5 +1,6 @@
 import React, {useState, useMemo } from 'react';
 import '../../css/Pages/Playlist.css';
+import { eventPlaylists } from '../../data/eventPlaylists';
 import { playlists } from '../../data/playlists';
 import { musics } from '../../data/musics';
 import {
@@ -16,8 +17,16 @@ import { NavLink, useParams } from 'react-router-dom';
 
 export default function PlaylistPage() {
 
-    const { id } = useParams();
-    const playlist = playlists.find(pl => pl.id === Number(id)) || {};
+    const { id: rawId } = useParams();
+    const playlist = useMemo(() => {
+        // tenta encontrar em eventPlaylists primeiro
+        const community = eventPlaylists.find(pl => pl.id === rawId);
+        if (community) return community;
+        // senão é playlist normal
+        const num = Number(rawId);
+        return playlists.find(pl => pl.id === num) || {};
+    }, [rawId]);
+
     const {
         type = 'Public',
         title = 'Unknown Playlist',
@@ -25,7 +34,7 @@ export default function PlaylistPage() {
         listens = '',
         songs = '',
         duration = '',
-        trackIds
+        trackIds = []
     } = playlist;
 
 

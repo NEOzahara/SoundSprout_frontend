@@ -4,6 +4,10 @@ import '../../css/Pages/Home.css';
 import api from "../services/api";
 
 export default function HomePage() {
+
+    const [topPlaylists, setTopPlaylists] = useState([]);
+    const playlistCount = 6; // quantas mostrar no carousel
+
     // Estado para Top Artists
     const [topArtists, setTopArtists] = useState([]);
     const topCount = 6; // número de artistas a mostrar
@@ -22,6 +26,25 @@ export default function HomePage() {
             })
             .catch(err => console.error('Erro ao carregar Top Artists:', err));
     }, []);
+
+
+    // Fetch de Top Playlists
+    useEffect(() => {
+        api.get(`/playlists/top?limit=${playlistCount}`)
+            .then(({ data }) => {
+                setTopPlaylists(data);
+            })
+            .catch(err => {
+                console.error('Erro ao carregar Top Playlists:', err);
+                setTopPlaylists([]); // evita loader infinito
+            });
+    }, []);
+
+    // Handler de clique
+    const handlePlaylistClick = pl => {
+        console.log(`Playlist ${pl.nome} de ${pl.username} clicada!`);
+        // p.e.: navigate(`/playlists/${pl.username}/${encodeURIComponent(pl.nome)}`)
+    };
 
     // Base URL do backend (sem o /api)
     const baseUrl = process.env.REACT_APP_API_BASE_URL
@@ -51,23 +74,25 @@ export default function HomePage() {
             </div>
         ));
 
-    // Renderiza playlists fictícias
-    const renderCharts = (count) =>
-        Array.from({ length: count }, (_, i) => i + 1).map((n) => (
-            <div key={n} className="coverCard">
-                <div
-                    className="coverPlaceholder"
-                    onClick={() => handleCoverClick(n)}
-                />
-                <span
-                    className="coverTitle"
-                    onClick={() => handleCoverClick(n)}
-                >
-          Playlist {n}
-        </span>
+// Em vez dela, já tens isto:
+    const renderTopPlaylists = () =>
+        topPlaylists.map(pl => (
+            <div key={`${pl.username}::${pl.nome}`} className="coverCard">
+                {pl.foto
+                    ? <img
+                        className="coverPlaceholder"
+                        src={`${baseUrl}/${pl.foto}`}
+                        alt={`Capa ${pl.nome}`}
+                        onClick={() => handlePlaylistClick(pl)}
+                    />
+                    : <div className="coverPlaceholder" onClick={() => handlePlaylistClick(pl)} />
+                }
+                <span className="coverTitle" onClick={() => handlePlaylistClick(pl)}>
+        {pl.nome}
+      </span>
+                <span className="coverArtist">por {pl.username}</span>
             </div>
         ));
-
     // Renderiza Top Artists dinamicamente
     const renderTopArtists = () =>
         topArtists.map((artist) => (
@@ -133,14 +158,18 @@ export default function HomePage() {
             </div>
 
             {/* Segunda caixa */}
+            {/* Charts: Top Playlists */}
             <div className="chartsSection">
                 <div className="recommendHeader">
-                    <span className="sectionTitle">Charts: Top 50</span>
+                    <span className="sectionTitle">Charts: Top Playlists</span>
                     <button className="seeAll">see all</button>
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
-                        {renderCharts(6)}
+                        {topPlaylists.length > 0
+                            ? renderTopPlaylists()
+                            : <p>Carregando playlists…</p>
+                        }
                     </div>
                 </div>
             </div>

@@ -1,15 +1,31 @@
-// src/js/services/api.js
 import axios from 'axios';
 
 const api = axios.create({
     baseURL: process.env.REACT_APP_API_BASE_URL,
-    //withCredentials: true    // se usares cookies/sessions
+    withCredentials: true,   // permite enviar o cookie refreshToken
 });
 
-api.interceptors.request.use(config => {
-    const token = localStorage.getItem('token');
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-    return config;
+// injeta Authorization
+api.interceptors.request.use(cfg => {
+    const token = localStorage.getItem('accessToken');
+    if (token) cfg.headers.Authorization = `Bearer ${token}`;
+    return cfg;
 });
+
+// auto-refresh se der 401
+api.interceptors.response.use(
+    res => res,
+    async err => {
+        if (err.response?.status === 401) {
+            // tenta refresh
+            const { data } = await api.post('/auth/refresh');
+            localStorage.setItem('ac', data.accessToken);
+            // repete o pedido original
+            err.config.headers.Authorization = `Bearer ${data.accessToken}`;
+            return api.request(err.config);
+        }
+        return Promise.reject(err);
+    }
+);
 
 export default api;

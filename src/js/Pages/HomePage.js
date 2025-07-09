@@ -146,7 +146,7 @@ export default function HomePage() {
             </div>
 
             {/* Terceira caixa: Top Artists */}
-            <div className="chartsSection">
+            <div className="chartsSection artistsSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Top Artists</span>
                     <button className="seeAll">see all</button>
@@ -162,7 +162,7 @@ export default function HomePage() {
             </div>
 
             {/* Quarta caixa */}
-            <div className="chartsSection">
+            <div className="chartsSection favArtistsSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Favourite Artists</span>
                     <button className="seeAll">see all</button>

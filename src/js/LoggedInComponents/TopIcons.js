@@ -1,5 +1,5 @@
-import React, {useState, useEffect, useRef} from 'react'
-import { NavLink } from 'react-router-dom';
+import React, {useState, useEffect, useRef, useMemo } from 'react'
+import { NavLink, useNavigate } from 'react-router-dom';
 import { FiSearch, FiBell, FiAward, FiUser } from 'react-icons/fi'
 import { testPlaylists, testMusics, testUsers } from '../../data/test'
 import { notifications } from '../../data/notifications'
@@ -8,15 +8,9 @@ export default function TopIcons() {
 
     const [showSearch, setShowSearch] = useState(false)
     const [query, setQuery] = useState('')
-    const [results, setResults] = useState([])
-
-    // Sempre que a query muda, faz filtro simples
-    useEffect(() => {
+    const results = useMemo(() => {
         const q = query.trim().toLowerCase()
-        if (!q) {
-            setResults([])
-            return
-        }
+        if (!q) return []
         const pMatches = testPlaylists
             .filter(p => p.title.toLowerCase().includes(q))
             .map(p => ({ type: 'Playlist', id: p.id }))
@@ -26,8 +20,7 @@ export default function TopIcons() {
         const uMatches = testUsers
             .filter(u => u.name.toLowerCase().includes(q))
             .map(u => ({ type: 'User',     id: u.id }))
-
-        setResults([ ...pMatches, ...mMatches, ...uMatches ])
+        return [ ...pMatches, ...mMatches, ...uMatches ]
     }, [query])
 
     const [showNotifications, setShowNotifications] = useState(false)
@@ -65,44 +58,48 @@ export default function TopIcons() {
                     }}
                 />
                 {showSearch && results.length > 0 && (
-                    <ul className="suggestions">
+                    <ul className="suggestionsIcon">
                         {results.map(r => {
-                            // Resolve o item completo e define thumb + subtitle
-                            let item, subtitle, thumbClass, imageUrl
+                            let item, subtitle, thumbClass, imageUrl, to
                             if (r.type === 'Playlist') {
-                                item       = testPlaylists.find(p => p.id === r.id)
-                                subtitle   = item.owner      // ex.: "Alice"
-                                thumbClass = 'playlistThumb'
-                                imageUrl   = item.imageUrl   // podes adicionar em test.js
+                                item = testPlaylists.find(p => p.id === r.id)
+                                subtitle = item.owner
+                                thumbClass = 'playlistThumbIcon'
+                                imageUrl = item.imageUrl
+                                to = `/playlist/${r.id}`
                             } else if (r.type === 'Song') {
-                                item       = testMusics.find(m => m.id === r.id)
-                                subtitle   = item.artist     // ex.: "Artist A"
-                                thumbClass = 'songThumb'
-                                imageUrl   = item.imageUrl
+                                item = testMusics.find(m => m.id === r.id)
+                                subtitle = item.artist
+                                thumbClass = 'songThumbIcon'
+                                imageUrl = item.imageUrl
+                                to = `/player/${r.id}`
                             } else {
-                                item       = testUsers.find(u => u.id === r.id)
-                                subtitle   = 'Artista'
-                                thumbClass = 'userThumb'
-                                imageUrl   = item.avatarUrl
+                                item = testUsers.find(u => u.id === r.id)
+                                subtitle = item.username
+                                thumbClass = 'userThumbIcon'
+                                imageUrl = item.avatarUrl
+                                to = `/profile/${encodeURIComponent(item.username)}`
                             }
-
                             return (
-                                <li key={`${r.type}-${r.id}`} className="suggestionItem">
+                                <NavLink
+                                    key={`${r.type}-${r.id}`}
+                                    to={to}
+                                    className="suggestionItemIcon"
+                                    onClick={() => setShowSearch(false)}
+                                >
                                     <div
-                                        className={`suggestionThumb ${thumbClass}`}
-                                        style={{
-                                            backgroundImage: `url(${imageUrl || '/placeholder.png'})`
-                                        }}
+                                        className={`suggestionThumbIcon ${thumbClass}`}
+                                        style={{ backgroundImage: `url(${imageUrl||'/placeholder.png'})` }}
                                     />
-                                    <div className="suggestionText">
-                                        <div className="suggestionTitle">
+                                    <div className="suggestionTextIcon">
+                                        <div className="suggestionTitleIcon">
                                             {item.title || item.name}
                                         </div>
-                                        <div className="suggestionSubtitle">
+                                        <div className="suggestionSubtitleIcon">
                                             {subtitle}
                                         </div>
                                     </div>
-                                </li>
+                                </NavLink>
                             )
                         })}
                     </ul>

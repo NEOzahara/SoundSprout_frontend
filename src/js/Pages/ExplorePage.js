@@ -23,53 +23,81 @@ export default function ExplorePage() {
         return [ ...pMatches, ...mMatches, ...uMatches ];
     }, [query]);
 
-    const handleCoverClick  = n => console.log(`Music ${n} clicado!`);
+    // ** Carrosseis — cada um recebe o seu conjunto de dados **
+    const discoverMusics = testMusics.slice(0, 7);     // Carrossel só de músicas
+    const genresPlaylists = testPlaylists.slice(0, 7);  // Carrossel de playlists por género
+    const mainPlaylists = testPlaylists.slice(1, 8);  // Outro carrossel só de playlists
+    const topUsers = testUsers.slice(0, 3);      // Carrossel só de users
+
+    // Renders genéricos para cada tipo, fácil de trocar pelo resultado do API
+    function renderMusicCarrousel(musics) {
+        return musics.map(music => (
+            <NavLink
+                key={music.id}
+                to={`/player/${music.id}`}
+                className="coverCard"
+            >
+                <div
+                    className="coverPlaceholder"
+                    style={{
+                        backgroundImage: `url(${music.imageUrl || '/placeholder.png'})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                    }}
+                />
+                <span className="coverTitle">{music.title}</span>
+            </NavLink>
+        ));
+    }
+
+    function renderPlaylistCarrousel(playlists) {
+        return playlists.map(playlist => (
+            <NavLink
+                key={playlist.id}
+                to={`/playlist/${playlist.id}`}
+                className="coverCard"
+            >
+                <div
+                    className="coverPlaceholder"
+                    style={{
+                        backgroundImage: `url(${playlist.imageUrl || '/placeholder.png'})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                    }}
+                />
+                <span className="coverTitle">{playlist.title}</span>
+            </NavLink>
+        ));
+    }
+
+    function renderUserCarrousel(users) {
+        return users.map(user => (
+            <NavLink
+                key={user.id}
+                to={`/profile/${user.username}`}
+                className="coverCard"
+            >
+                <div
+                    className="profilePlaceholder"
+                    style={{
+                        backgroundImage: `url(${user.avatarUrl || '/avatars/default.png'})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                    }}
+                >
+                    {!user.avatarUrl && <FiUser className="profileIcon" />}
+                </div>
+                <span className="coverTitle">{user.name}</span>
+            </NavLink>
+        ));
+    }
 
     const sections = [
-        { title: 'Discover', render: count => renderDiscover(count) },
-        { title: 'Genres', render: count => renderGenres(count) },
-        { title: 'Playlists', render: count => renderPlaylists(count) },
-        { title: 'Artists', render: count => renderArtists(count) },
+        { title: 'Discover', render: () => renderMusicCarrousel(discoverMusics) },
+        { title: 'Genres',   render: () => renderPlaylistCarrousel(genresPlaylists) },
+        { title: 'Playlists',render: () => renderPlaylistCarrousel(mainPlaylists) },
+        { title: 'Artists',  render: () => renderUserCarrousel(topUsers) }
     ];
-
-    function renderDiscover(count) {
-        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
-            <div key={n} className="coverCard">
-                <div className="coverPlaceholder" onClick={() => handleCoverClick(n)} />
-                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Song {n}</span>
-            </div>
-        ));
-    }
-
-    function renderGenres(count) {
-        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
-            <div key={n} className="coverCard">
-                <div className="coverPlaceholder" onClick={() => handleCoverClick(n)} />
-                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Playlist {n}</span>
-            </div>
-        ));
-    }
-
-    function renderPlaylists(count) {
-        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
-            <div key={n} className="coverCard">
-                <div className="coverPlaceholder" onClick={() => handleCoverClick(n)} />
-                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Playlist {n}</span>
-            </div>
-        ));
-    }
-
-    function renderArtists(count) {
-        return Array.from({ length: count }, (_, i) => i + 1).map(n => (
-            <div key={n} className="coverCard">
-                <div className="profilePlaceholder" onClick={() => handleCoverClick(n)}
-                >
-                    <FiUser className="profileIcon" />
-                </div>
-                <span className="coverTitle"       onClick={() => handleCoverClick(n)}>Artist {n}</span>
-            </div>
-        ));
-    }
 
     return (
         <>
@@ -134,7 +162,7 @@ export default function ExplorePage() {
                             </button>
                         </div>
                         <div className="carouselWrapper">
-                            <div className="carousel">{render(7)}</div>
+                            <div className="carousel">{render()}</div>
                         </div>
                         {idx < sections.length - 1 && (
                             <div className="exploreSpacer" />
@@ -144,6 +172,7 @@ export default function ExplorePage() {
             </div>
         </>
     );
+
 
 
 

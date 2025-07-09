@@ -4,6 +4,7 @@ import '../../css/Pages/Following.css';
 import {FiBarChart, FiSearch, FiUser, FiUserPlus, FiX} from 'react-icons/fi';
 import { NavLink } from 'react-router-dom';
 import { testUsers } from '../../data/test';
+import { followingBoxes } from '../../data/followingTests';
 
 export default function FollowingPage() {
 
@@ -15,65 +16,26 @@ export default function FollowingPage() {
         return testUsers
             .filter(u => u.name.toLowerCase().includes(q))
             .map(u => ({
-                id:         u.id,
-                name:       u.name,
-                username:   u.username,
-                avatarUrl:  u.avatarUrl
+                id: u.id,
+                name: u.name,
+                username: u.username,
+                avatarUrl: u.avatarUrl
             }));
     }, [query]);
 
-    const handleCoverClick = (n) => console.log(`Music ${n} clicado!`);
-    const handleFollowedClick = (name) => console.log(`Clicked Followed: ${name}`);
-    const handleSongClick = (song) => console.log(`Clicked Song: ${song}`);
-    const handleArtistClick = (artist) => console.log(`Clicked Artist: ${artist}`);
-
-    const renderFollowedPlaylists = (count) =>
-        Array.from({ length: count }, (_, i) => i + 1).map((n) => (
-            <div key={n} className="coverCard">
-                <div
-                    className="coverPlaceholder"
-                    onClick={() => handleCoverClick(n)}
-                />
-                <span
-                    className="coverTitle"
-                    onClick={() => handleCoverClick(n)}
-                >
-                    Playlist {n}
-                </span>
-            </div>
+    // Para simular playlist carousel:
+    function renderFollowedPlaylists(playlists) {
+        return playlists.map((playlist) => (
+            <NavLink
+                key={playlist.id}
+                to={`/playlist/${playlist.id}`}
+                className="coverCard"
+            >
+                <div className="coverPlaceholder" />
+                <span className="coverTitle">{playlist.title}</span>
+            </NavLink>
         ));
-
-    const followedBoxes = [
-        {
-            followedName: 'Followed 1',
-            songName: 'Song 1',
-            artistName: 'Artist 1',
-            isListening: true,
-            renderCarousel: renderFollowedPlaylists,
-        },
-        {
-            followedName: 'Followed 2',
-            songName: 'Song 2',
-            artistName: 'Artist 2',
-            isListening: false,
-            renderCarousel: renderFollowedPlaylists,
-        },
-        {
-            followedName: 'Followed 3',
-            songName: 'Song 3',
-            artistName: 'Artist 3',
-            isListening: true,
-            renderCarousel: renderFollowedPlaylists,
-        },
-        // adicionar aqui quantos objetos necessários,
-        // por exemplo:
-        // {
-        //   followedName: 'Followed 4',
-        //   songName: 'Song 4',
-        //   artistName: 'Artist 4',
-        //   renderCarousel: renderAlgumaOutraCoisa
-        // },
-    ];
+    }
 
     return (
         <>
@@ -108,7 +70,7 @@ export default function FollowingPage() {
                                         className="suggestionThumb userThumb"
                                         style={{
                                             backgroundImage: `url(${u.avatarUrl||'/placeholder.png'})`
-                                    }}
+                                        }}
                                     />
                                     <div className="suggestionText">
                                         <div className="suggestionTitle">{u.name}</div>
@@ -129,52 +91,52 @@ export default function FollowingPage() {
                 </button>
             </div>
 
-            {followedBoxes.map((box, index) => (
+            {followingBoxes.map((box, index) => (
                 <div key={index} className="chartsSection">
                     <div className="recommendHeader">
                         <div className="followedHeader">
-                            {/* Ícone de perfil estático */}
                             <FiUser className="followedIcon" />
-
                             <div className="followedText">
-                                {/* 1) Nome do followed (clicável) */}
-                                <span
+                                <NavLink
                                     className="followedName"
-                                    onClick={() => handleFollowedClick(box.followedName)}
+                                    to={`/profile/${encodeURIComponent(box.followedUser.username)}`}
                                 >
-                                    {box.followedName}
-                                </span>
-
-                                {/* 2.2) Se estiver ouvindo, mostra FiBarChart + nome da música + “– Artist” */}
-                                {box.isListening ? (
+                                    {box.followedUser.name}
+                                </NavLink>
+                                {box.isListening && box.song ? (
                                     <span className="followedSong">
-                    <FiBarChart className="audioIcon" />
-                    <span
-                        className="songName"
-                        onClick={() => handleSongClick(box.songName)}
-                    >
-                      {box.songName}
-                    </span>
-                    <span
-                        className="dashArtist"
-                        onClick={() => handleArtistClick(box.artistName)}
-                    >
-                      &nbsp;– {box.artistName}
-                    </span>
-                  </span>
+                            <FiBarChart className="audioIcon" />
+                            <NavLink
+                                className="songName"
+                                to={`/player/${box.song.id}`}
+                            >
+                                {box.song.title}
+                            </NavLink>
+                            <NavLink
+                                className="dashArtist"
+                                to={`/profile/${encodeURIComponent(box.song.artist.username)}`}
+                            >
+                                &nbsp;– {box.song.artist.name}
+                            </NavLink>
+                        </span>
                                 ) : (
-                                    /* 2.3) Se NÃO estiver ouvindo, mostra só uma cruz (FiX) */
                                     <span className="followedSong">
-                    <FiX className="audioIcon" />
-                  </span>
+                            <FiX className="audioIcon" />
+                        </span>
                                 )}
                             </div>
                         </div>
+                        <button
+                            className="seeAll"
+                            onClick={() => console.log(`See all for ${box.followedUser.name}`)}
+                        >
+                            see all
+                        </button>
                     </div>
-
-                    {/* 2.4) Carrossel específico para este followed */}
                     <div className="carouselWrapper">
-                        <div className="carousel">{box.renderCarousel(7)}</div>
+                        <div className="carousel">
+                            {renderFollowedPlaylists(box.playlists)}
+                        </div>
                     </div>
                 </div>
             ))}

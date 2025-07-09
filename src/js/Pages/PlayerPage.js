@@ -1,26 +1,26 @@
-import React, {useEffect, useRef, useState} from "react";
+import React, {useEffect, useRef, useState, useMemo} from "react";
 import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUser, FiPause} from 'react-icons/fi';
 import '../../css/Pages/Player.css';
-import {NavLink, useParams} from "react-router-dom";
+import {NavLink, useParams, useLocation} from "react-router-dom";
+import { musics } from '../../data/musics';
+import { playlists } from '../../data/playlists';
+
 export default function PlayerPage () {
 
     const { songId } = useParams();
-    const idx = parseInt(songId, 10) || 0;
-    // cria o ref pro container rolável
-    const scrollRef = useRef(null);
+    const id = parseInt(songId, 10) || 0;
+    const music = musics.find(m => m.id === id) || musics[0];
 
-    // sempre que mudar o idx, retorna pro topo
+    const scrollRef = useRef(null);
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = 0;
     }, [songId]);
 
-    const genres = ['Rock', 'Pop', 'Jazz'];// ... mais items
-    const userRoles = [
-        { name: 'Alice', role: 'Vocal' },
-        { name: 'Bob',   role: 'Guitar' },
-        { name: 'Carol', role: 'Drums' },
-        // ... mais items
-    ];
+    const location = useLocation();
+    const showComments = useMemo(
+        () => new URLSearchParams(location.search).get('comments') === 'true',
+        [location.search]
+    );
 
     const [activeTab, setActiveTab] = useState('More Like This');
 
@@ -41,33 +41,10 @@ export default function PlayerPage () {
         // ... mais items
     ];
 
-    const current = credits[idx] || credits[0];
-
-    // --- DADOS DE CREDITS (para a tab “Credits”) ---
-    const creditsInfo = [
-        {
-            label: 'Interpreted by',
-            names: ['Artist X', 'Artist Y', 'Artist Z']
-        },
-        {
-            label: 'Written by',
-            names: ['Artist A', 'Artist B', 'Artist C', 'Testeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee']
-        },
-        {
-            label: 'Produced by',
-            names: ['Producer X', 'Producer Y']
-        },
-        {
-            label: 'Source',
-            names: ['Source X', 'Source Y', 'Source Z']
-        }
-    ];
-
     const audioRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const togglePlay = () => {
         const audio = audioRef.current;
-
         /*Teste*/
         setIsPlaying(prev => !prev);
 
@@ -75,6 +52,75 @@ export default function PlayerPage () {
         if (isPlaying) audio.pause(); else audio.play();
         setIsPlaying(prev => !prev);*/
     };
+
+    // usa diretamente do objeto music
+    const { title, artist, date, duration, listens, genres, participants, creditsInfo } = music;
+
+    // === popup “Add to playlist” ===
+    const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
+    const [filterText, setFilterText] = useState('');
+    const [selectedIds, setSelectedIds] = useState(new Set());
+    const addToRef = useRef(null);
+
+    // fecha popup ao clicar fora
+    useEffect(() => {
+        if (!showAddToPlaylist) return;
+        function handleClickOutside(e) {
+            if (addToRef.current && !addToRef.current.contains(e.target)) {
+                setShowAddToPlaylist(false);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showAddToPlaylist]);
+
+    // inicializa seleção quando o popup abre
+    useEffect(() => {
+        if (!showAddToPlaylist) return;
+        const saved = playlists
+            .filter(pl => pl.trackIds.includes(id))
+            .map(pl => pl.id);
+        setSelectedIds(new Set(saved));
+        setFilterText('');
+    }, [showAddToPlaylist, id]);
+
+    // “Saved” e “Remaining”, memorizados
+    const saved = useMemo(
+        () => playlists.filter(pl => pl.trackIds.includes(id)),
+        [id]
+    );
+    const remaining = useMemo(
+        () => playlists.filter(pl => !pl.trackIds.includes(id)),
+        [id]
+    );
+    const savedFiltered = useMemo(
+        () => saved.filter(pl => pl.title.toLowerCase().includes(filterText.toLowerCase())),
+        [saved, filterText]
+    );
+    const remainingFiltered = useMemo(
+        () => remaining.filter(pl => pl.title.toLowerCase().includes(filterText.toLowerCase())),
+        [remaining, filterText]
+    );
+
+    // detecta mudanças para habilitar “Confirm”
+    const initialSet = useMemo(() => new Set(saved.map(pl => pl.id)), [saved]);
+    const hasChanged =
+        selectedIds.size !== initialSet.size ||
+        [...selectedIds].some(pid => !initialSet.has(pid));
+
+    function toggleSelect(pid) {
+        setSelectedIds(prev => {
+            const nxt = new Set(prev);
+            if (nxt.has(pid)) nxt.delete(pid);
+            else nxt.add(pid);
+            return nxt;
+        });
+    }
+
+    function handleConfirmAdd() {
+        console.log('Playlists seleccionadas:', [...selectedIds]);
+        setShowAddToPlaylist(false);
+    }
 
     return (
         <div key={songId} className="playerScroll" ref={scrollRef}>
@@ -84,10 +130,13 @@ export default function PlayerPage () {
                     <div className="coverLarge" onClick={() => console.log('Cover clicked')} />
 
                     <div className="detailInfo">
-                        <h1 className="songTitle">{current.title}</h1>
+                        <h1 className="songTitle">{title}</h1>
                         <p className="songMeta">
-                            <span className="metaArtist">{current.artist}</span>
-                            <span className="metaRest"> — 2025-05-29 — {current.duration} — {current.listens} listens</span>
+                            <span className="metaArtist">{artist}</span>
+                            <span className="metaRest">
+                                {' '}
+                                — {date} — {duration} — {listens} listens
+                            </span>
                         </p>
 
                         <div className="playerIcons">
@@ -100,22 +149,36 @@ export default function PlayerPage () {
                                 </button>
                             </div>
                             <FiHeart className="playerIcon" onClick={() => console.log('Like clicked')} />
-                            <FiPlus className="playerIcon" onClick={() => console.log('Add clicked')} />
-                            <FiMessageCircle className="playerIcon" onClick={() => console.log('Comment clicked')} />
-                            <FiList className="playerIcon" onClick={() => console.log('Queue clicked')} />
+                            <FiPlus
+                                className="playerIcon"
+                                onClick={() => setShowAddToPlaylist(true)}
+                            />
+                            {/* o ícone de comentários agora é um NavLink que adiciona/retira ?comments=true */}
+                            <NavLink
+                                to={ showComments
+                                    ? `/player/${id}`               // fecha comments
+                                    : `/player/${id}?comments=true` // abre comments
+                                }
+                                className={`playerIcon ${showComments ? 'commentActive' : ''}`}
+                            >
+                                <FiMessageCircle />
+                            </NavLink>
+                            <NavLink to="/queue" className="playerIcon">
+                                <FiList />
+                            </NavLink>
                             <FiMoreHorizontal className="playerIcon" onClick={() => console.log('More clicked')} />
                         </div>
 
                         <div className="genres">
-                            {genres.map((g,i) => (
+                            {genres.map((g, i) => (
                                 <span key={i} className="genreTag">{g}</span>
                             ))}
                         </div>
 
                         <div className="userRoles">
-                            {userRoles.map((u,i) => (
+                            {participants.map((u, i) => (
                                 <div key={i} className="userRole">
-                                    <FiUser className="userIconPlayer"/>
+                                    <FiUser className="userIconPlayer" />
                                     <div className="userText">
                                         <span className="userName">{u.name}</span>
                                         <span className="userRoleText">{u.role}</span>
@@ -126,96 +189,156 @@ export default function PlayerPage () {
                     </div>
                 </div>
 
-                {/* === PARTE INFERIOR === */}
-                <div className="tabsContainer">
-                    <div className="playerTabs">
-                        {['Lyrics','More Like This','Credits'].map(t => (
-                            <button
-                                key={t}
-                                className={`tab${activeTab===t?' active':''}`}
-                                onClick={()=>setActiveTab(t)}
-                            >{t}</button>
-                        ))}
-                    </div>
-                    <hr className="tabDivider"/>
-                </div>
-
-                {/* === CONTEÚDO ABAIXO DAS TABS === */}
-                {activeTab === 'Lyrics' && (
-                    <div className="lyricsBox">
-                        <p className="lyricsText">
-                            {/* Aqui você pode colar toda a letra da música. Exemplo de texto longo: */}
-                            Mais, mais um verso que seja suficientemente grande para testar o scroll vertical. Lorem ipsum dolor sit amet,
-                            consectetur adipiscing elit. Vivamus luctus urna sed urna ultricies ac tempor dui sagittis. In condimentum
-                            facilisis porta. Sed nec diam eu diam mattis viverra. Nulla fringilla, orci ac euismod semper, magna
-                            diam porttitor mauris, quis sollicitudin sapien justo in libero. Fusce vel dui. Donec purus orci, porta
-                            quis lacinia ut, interdum a nibh. Aenean at elit in tellus imperdiet ullamcorper. Quisque eu turpis
-                            euismod, sodales elit quis, dictum sem. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices
-                            posuere cubilia curae; Integer blandit lectus mauris, nec ultricies orci vehicula quis. Vivamus non
-                            posuere risus. Fusce facilisis nisl turpis, at dictum risus sodales eu. Etiam at volutpat magna. In id
-                            libero quis libero suscipit dignissim in nec nunc. Integer pretium augue vitae magna iaculis, sit amet
-                            vulputate sapien pharetra. testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                            testtttteeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
-                        </p>
-                    </div>
-                )}
-
-                {activeTab === 'More Like This' && (
-                    <div className="songList">
-                        {credits.map((item, i) => (
-                            <div key={i} className="trackRow">
-                                <span className="trackNumber">{i+1}</span>
-
-                                <NavLink to={`/player/${i}`}>
-                                    <div className="coverPlaceholderSmall" />
-                                </NavLink>
-
-                                <div className="trackInfoSmall">
-                                    <NavLink to={`/player/${i}`} className="infoLink">
-                                        <span className="smallTitle">{item.title}</span>
-                                    </NavLink>
-                                    <NavLink to={`/player/${i}`} className="infoLink">
-                                        <span className="smallArtist">{item.artist}</span>
-                                    </NavLink>
-                                </div>
-                                <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
-                                <FiMessageCircle className="actionIcon" onClick={() => console.log('Comment')} />
-                                <span className="smallDuration" onClick={() => console.log(`Duration ${i+1}`)}>
-                                    {item.duration}
-                                </span>
-                                <span className="smallListens"  onClick={() => console.log(`Listens ${i+1}`)}>
-                                    {item.listens}
-                                </span>
-                                <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
-                            </div>
-                        ))}
-                    </div>
-                )}
-
-                {activeTab === 'Credits' && (
-                    <div className="creditsBox">
-                        {creditsInfo.map((section, idx) => (
-                            <div key={idx} className="creditSection">
-                                <h3 className="creditLabel">{section.label}:</h3>
-                                {section.names.map((name, i) => (
-                                    <p key={i} className="creditName">
-                                        {name}
-                                    </p>
+                {/* === PARTE INFERIOR: OU ABAS+CONTEÚDO, OU COMENTÁRIOS === */}
+                { !showComments ? (
+                    <>
+                        <div className="tabsContainer">
+                            <div className="playerTabs">
+                                {['Lyrics','More Like This','Credits'].map(t => (
+                                    <button
+                                        key={t}
+                                        className={`tab${activeTab===t?' active':''}`}
+                                        onClick={()=>setActiveTab(t)}
+                                    >{t}</button>
                                 ))}
                             </div>
-                        ))}
+                            <hr className="tabDivider"/>
+                        </div>
+
+                        {activeTab === 'Lyrics' && (
+                            <div className="lyricsBox">
+                                <p className="lyricsText">
+                                    {/* … letras … */}
+                                </p>
+                            </div>
+                        )}
+
+                        {activeTab === 'More Like This' && (
+                            <div className="songList">
+                                {credits.map((item,i)=>(
+                                    <div key={i} className="trackRow">
+                                        <span className="trackNumber">{i+1}</span>
+                                        <NavLink to={`/player/${i}`}>
+                                            <div className="coverPlaceholderSmall"/>
+                                        </NavLink>
+                                        <div className="trackInfoSmall">
+                                            <NavLink to={`/player/${i}`} className="infoLink">
+                                                <span className="smallTitle">{item.title}</span>
+                                            </NavLink>
+                                            <NavLink to={`/profile/${item.artist}`} className="smallArtist">
+                                                {item.artist}
+                                            </NavLink>
+                                        </div>
+                                        <FiHeart className="actionIcon" onClick={()=>{}}/>
+                                        <NavLink
+                                            to={`/player/${i}?comments=true`}
+                                            className={`actionIcon${
+                                                (location.pathname===`/player/${i}` && showComments)
+                                                    ? ' commentActive'
+                                                    : ''
+                                            }`}
+                                        >
+                                            <FiMessageCircle />
+                                        </NavLink>
+                                    <span className="smallDuration">{item.duration}</span>
+                                        <span className="smallListens">{item.listens}</span>
+                                        <FiMoreHorizontal className="actionIcon" onClick={()=>{}}/>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {activeTab === 'Credits' && (
+                            <div className="creditsBox">
+                                {creditsInfo.map((sec,i)=>(
+                                    <div key={i} className="creditSection">
+                                        <h3 className="creditLabel">{sec.label}:</h3>
+                                        {sec.names.map((n,j)=>(
+                                            <p key={j} className="creditName">{n}</p>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </>
+                ) : (
+                    <div className="commentsSection">
+                        <input
+                            type="text"
+                            className="commentInput"
+                            placeholder="Escreva um comentário"
+                        />
+                        <div className="commentsList">
+                            {/* nada por enquanto, ou podes popular via API */}
+                        </div>
                     </div>
                 )}
             </div>
+
+
+            {/* === Modal “Add to playlist” === */}
+            {showAddToPlaylist && (
+                <div className="modalOverlay">
+                    <div className="addToPlaylistModal" ref={addToRef}>
+                        <input
+                            type="text"
+                            className="playlistFilterInput"
+                            placeholder="Find a playlist"
+                            value={filterText}
+                            onChange={e => setFilterText(e.target.value)}
+                        />
+                        <div className="newPlaylistRow" onClick={() => console.log('Criar nova playlist')}>
+                            <FiPlus className="subIcon" /><span className="subText">New Playlist</span>
+                        </div>
+                        <hr className="modalDividerSmall"/>
+
+                        {saved.length > 0 && (
+                            <div className="playlistSection">
+                                <div className="playlistSectionTitle">Saved in</div>
+                                <div className="playlistList">
+                                    {savedFiltered.map(pl => (
+                                        <div key={pl.id} className="playlistItem" onClick={() => toggleSelect(pl.id)}>
+                                            <div
+                                                className="playlistThumbSquare"
+                                                style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                            />
+                                            <div className="playlistText">
+                                                <div className="playlistTitle">{pl.title}</div>
+                                                <div className="playlistCount">{pl.songs} songs</div>
+                                            </div>
+                                            <button className={`checkButton${selectedIds.has(pl.id)?' checked':''}`}/>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="playlistSection">
+                            <div className="playlistSectionTitle">Remaining</div>
+                            <div className="playlistList">
+                                {remainingFiltered.map(pl => (
+                                    <div key={pl.id} className="playlistItem" onClick={() => toggleSelect(pl.id)}>
+                                        <div
+                                            className="playlistThumbSquare"
+                                            style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                        />
+                                        <div className="playlistText">
+                                            <div className="playlistTitle">{pl.title}</div>
+                                            <div className="playlistCount">{pl.songs} songs</div>
+                                        </div>
+                                        <button className={`checkButton${selectedIds.has(pl.id)?' checked':''}`}/>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="modalButtons">
+                            <button onClick={() => setShowAddToPlaylist(false)}>Cancel</button>
+                            <button onClick={handleConfirmAdd} disabled={!hasChanged}>Confirm</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
-};
+}

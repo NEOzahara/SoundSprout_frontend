@@ -1,9 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import api from '../services/api';
 import '../../css/Pages/Following.css';
 import {FiBarChart, FiSearch, FiUser, FiUserPlus, FiX} from 'react-icons/fi';
+import { NavLink } from 'react-router-dom';
+import { testUsers } from '../../data/test';
 
 export default function FollowingPage() {
+
+    // estados para o autocomplete
+    const [query, setQuery] = useState('');
+    const results = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return [];
+        return testUsers
+            .filter(u => u.name.toLowerCase().includes(q))
+            .map(u => ({
+                id:         u.id,
+                name:       u.name,
+                username:   u.username,
+                avatarUrl:  u.avatarUrl
+            }));
+    }, [query]);
 
     const handleCoverClick = (n) => console.log(`Music ${n} clicado!`);
     const handleFollowedClick = (name) => console.log(`Clicked Followed: ${name}`);
@@ -60,21 +77,47 @@ export default function FollowingPage() {
 
     return (
         <>
-            <div className="searchBarContainer">
+            <div className="searchBarContainerFollowing">
                 {/*  Ícone de lupa à esquerda, colado na borda interna */}
-                <div className="searchWrapper">
+                <div className="searchWrapperFollowing searchContainerFollowing">
                     <div
-                        className="searchIconWrapper"
+                        className="searchIconWrapperFollowing"
                         onClick={() => console.log('Clique na lupa de busca!')}
                     >
-                        <FiSearch className="searchIcon" />
+                        <FiSearch className="searchIconFollowing" />
                     </div>
                     <input
                         type="text"
-                        className="searchInput"
+                        className="searchInputFollowing"
                         placeholder="Search"
-                        onChange={e => console.log('buscando por:', e.target.value)}
+                        value={query}
+                        onChange={e => setQuery(e.target.value)}
+                        autoFocus
                     />
+
+                    {results.length > 0 && (
+                        <ul className="suggestions">
+                            {results.map(u => (
+                                <NavLink
+                                    key={u.id}
+                                    to={`/profile/${encodeURIComponent(u.username)}`}
+                                    className="suggestionItem"
+                                    onClick={() => setQuery('')}
+                                >
+                                    <div
+                                        className="suggestionThumb userThumb"
+                                        style={{
+                                            backgroundImage: `url(${u.avatarUrl||'/placeholder.png'})`
+                                    }}
+                                    />
+                                    <div className="suggestionText">
+                                        <div className="suggestionTitle">{u.name}</div>
+                                        <div className="suggestionSubtitle">{u.username}</div>
+                                    </div>
+                                </NavLink>
+                            ))}
+                        </ul>
+                    )}
                 </div>
 
                 {/*  Ícone de “adicionar pessoa” à direita da barra */}

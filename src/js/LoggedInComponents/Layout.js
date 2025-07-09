@@ -15,7 +15,7 @@ export default function Layout() {
         '/':           'Home',
         '/explore':    'Explore',
         '/following': 'Following',
-        //'/player':    'Player',
+        '/liveStreams':    'Live Streams',
         // ...
     };
     // páginas onde NÃO queremos o título

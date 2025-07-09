@@ -1,12 +1,22 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import { useParams } from 'react-router-dom'
 import { FiEdit2, FiShare2, FiHeart, FiMessageCircle, FiList, FiMoreHorizontal } from 'react-icons/fi';
 import '../../css/Pages/Profile.css';
 
-export default function ProfilePage({
-                                        username = 'Username',
-                                        stats = { playlists: 0, songs: 0, followers: 0, following: 0 },
-                                        profileUrl = window.location.href
-                                    }) {
+export default function ProfilePage() {
+
+    const { username } = useParams()
+
+    const isOwnProfile = !username;
+
+    // Suporte futuro: podes ir buscar o utilizador autenticado da store/context aqui
+    // const loggedUser = getUserFromContextOrStore() || { username: "LoggedInUser" }
+    // const showUsername = username || loggedUser.username;
+
+    const showUsername = username || "Username";
+    const stats = { playlists: 0, songs: 0, followers: 0, following: 0 }
+    const profileUrl = window.location.href
+
     const { playlists, songs, followers, following } = stats;
 
     const copyLink = () => {
@@ -16,7 +26,6 @@ export default function ProfilePage({
     };
 
     const [badges, setBadges] = useState([]);
-
     useEffect(() => {
         const stored = localStorage.getItem('profileBadges');
         if (stored) {
@@ -148,16 +157,18 @@ export default function ProfilePage({
                     {/* 2) Textos: “Profile” e “Username” */}
                     <div className="profileDetails">
                         <span className="profileLabel">Profile</span>
-                        <span className="profileUsername">{username}</span>
+                        <span className="profileUsername">{showUsername}</span>
                     </div>
                 </div>
 
                 {/* 3) Ícones de ação */}
                 <div className="profileActions">
-                    <FiEdit2
-                        className="actionIcon editIcon"
-                        onClick={() => console.log('Editar perfil')}
-                    />
+                    {isOwnProfile && (
+                        <FiEdit2
+                            className="actionIcon editIcon"
+                            onClick={() => console.log('Editar perfil')}
+                        />
+                    )}
                     <FiShare2
                         className="actionIcon shareIcon"
                         onClick={copyLink}

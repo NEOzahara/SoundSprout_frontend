@@ -1,0 +1,111 @@
+// src/data/playlists.js
+export const playlists = [
+    {
+        id: 0,
+        title: 'Roadtrip Classics',
+        owner: 'Alice',
+        songs: 42,
+        duration: '2:35:12',
+        listens: '1.2K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
+    },
+    {
+        id: 1,
+        title: 'Jazz Vibes',
+        owner: 'Bob',
+        songs: 27,
+        duration: '1:47:05',
+        listens: '980',
+        trackIds: [2,5,7,9]
+    },
+    {
+        id: 2,
+        title: 'Top Hits',
+        owner: 'Carol',
+        songs: 50,
+        duration: '3:05:33',
+        listens: '2.3K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
+    },
+    {
+        id: 3,
+        title: 'Country Classics',
+        owner: 'Steve',
+        songs: 42,
+        duration: '2:35:12',
+        listens: '1.2K',
+        trackIds: [2,5,7,9]
+    },
+    {
+        id: 4,
+        title: 'House Vibes',
+        owner: 'Larry',
+        songs: 27,
+        duration: '1:47:05',
+        listens: '980',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
+    },
+    {
+        id: 5,
+        title: 'Classic Hits',
+        owner: 'John',
+        songs: 50,
+        duration: '3:05:33',
+        listens: '2.3K',
+        trackIds: [2,5,7,9]
+    },
+    {
+        id: 6,
+        title: 'Blues Classics',
+        owner: 'Matilda',
+        songs: 42,
+        duration: '2:35:12',
+        listens: '1.2K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
+    },
+    {
+        id: 7,
+        title: 'Rock Concerts',
+        owner: 'Daniel',
+        songs: 27,
+        duration: '1:47:05',
+        listens: '980',
+        trackIds: [2,5,7,9]
+    },
+    {
+        id: 8,
+        title: 'Hip-Pop Hits',
+        owner: 'Henry',
+        songs: 50,
+        duration: '3:05:33',
+        listens: '2.3K',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
+    },
+    {
+        id: 9,
+        title: 'Old Classics',
+        owner: 'Maria',
+        songs: 42,
+        duration: '2:35:12',
+        listens: '1.2K',
+        trackIds: [2,5,7,9]
+    },
+    {
+        id: 10,
+        title: 'Study Vibes',
+        owner: 'Jeff',
+        songs: 27,
+        duration: '1:47:05',
+        listens: '980',
+        trackIds: [0,1,2,3,4,5,6,7,8,9]
+    },
+    {
+        id: 11,
+        title: 'Radio Hits',
+        owner: 'Sammy',
+        songs: 50,
+        duration: '3:05:33',
+        listens: '2.3K',
+        trackIds: [2,5,7,9]
+    },
+];

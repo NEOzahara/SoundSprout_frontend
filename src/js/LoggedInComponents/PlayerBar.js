@@ -327,11 +327,41 @@ export default function PlayerBar() {
                         <hr className="modalDividerSmall" />
 
                         {/* “Saved in” só se houver playlists salvas */}
-                        {saved.length > 0 && (
+                        <div className="playlistsScrollWrapper">
+                            {saved.length > 0 && (
+                                <div className="playlistSection">
+                                    <div className="playlistSectionTitle">Saved in</div>
+                                    <div className="playlistList">
+                                        {savedFiltered.map(pl => (
+                                            <div
+                                                key={pl.id}
+                                                className="playlistItem"
+                                                onClick={() => toggleSelect(pl.id)}
+                                            >
+                                                <div
+                                                    className="playlistThumbSquare"
+                                                    style={{
+                                                        backgroundImage: `url(${pl.imageUrl || '/placeholder.png'})`
+                                                    }}
+                                                />
+                                                <div className="playlistText">
+                                                    <div className="playlistTitle">{pl.title}</div>
+                                                    <div className="playlistCount">{pl.songs} songs</div>
+                                                </div>
+                                                <button
+                                                    className={`checkButton${selectedIds.has(pl.id) ? ' checked' : ''}`}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Remaining */}
                             <div className="playlistSection">
-                                <div className="playlistSectionTitle">Saved in</div>
+                                <div className="playlistSectionTitle">Remaining</div>
                                 <div className="playlistList">
-                                    {savedFiltered.map(pl => (
+                                    {remainingFiltered.map(pl => (
                                         <div
                                             key={pl.id}
                                             className="playlistItem"
@@ -353,34 +383,6 @@ export default function PlayerBar() {
                                         </div>
                                     ))}
                                 </div>
-                            </div>
-                        )}
-
-                        {/* Remaining */}
-                        <div className="playlistSection">
-                            <div className="playlistSectionTitle">Remaining</div>
-                            <div className="playlistList">
-                                {remainingFiltered.map(pl => (
-                                    <div
-                                        key={pl.id}
-                                        className="playlistItem"
-                                        onClick={() => toggleSelect(pl.id)}
-                                    >
-                                        <div
-                                            className="playlistThumbSquare"
-                                            style={{
-                                                backgroundImage: `url(${pl.imageUrl || '/placeholder.png'})`
-                                            }}
-                                        />
-                                        <div className="playlistText">
-                                            <div className="playlistTitle">{pl.title}</div>
-                                            <div className="playlistCount">{pl.songs} songs</div>
-                                        </div>
-                                        <button
-                                            className={`checkButton${selectedIds.has(pl.id) ? ' checked' : ''}`}
-                                        />
-                                    </div>
-                                ))}
                             </div>
                         </div>
 

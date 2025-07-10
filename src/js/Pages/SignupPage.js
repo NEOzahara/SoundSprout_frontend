@@ -21,7 +21,7 @@ export default function SignupPage() {
                 username,
                 password
             });
-            localStorage.setItem('token', data.token);
+            localStorage.setItem('accessToken', data.accessToken);
             // redireciona para a página principal ou dashboard
             navigate('/login');
         } catch (err) {

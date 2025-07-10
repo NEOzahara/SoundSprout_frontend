@@ -16,12 +16,8 @@ export default function SignupPage() {
         setError(null);
 
         try {
-            const { data } = await api.post('/auth/register', {
-                email,
-                username,
-                password
-            });
-            localStorage.setItem('token', data.token);
+
+
             // redireciona para a página principal ou dashboard
             navigate('/login');
         } catch (err) {

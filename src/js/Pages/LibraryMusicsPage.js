@@ -76,6 +76,7 @@ export default function LibraryMusicsPage() {
         setSuccess(false);
     };
 
+    // frontend/src/pages/LibraryMusicsPage.jsx
     const handleConfirmSong = async (e) => {
         e.preventDefault();
         setError(null);
@@ -88,30 +89,21 @@ export default function LibraryMusicsPage() {
 
         try {
             const formData = new FormData();
-            formData.append('audio', newAudioFile);
             formData.append('titulo', newSongName);
-            // se quiseres enviar cover e lyrics ao backend, tens de ajustar o controller/multer para aceitar campos extra
-            if (newSongCover) {
-                formData.append('foto', newSongCover);
-            }
-            if (newLyricFile) {
-                formData.append('lyric', newLyricFile);
-            }
+            formData.append('audio', newAudioFile);
+            if (newSongCover) formData.append('foto', newSongCover);
+            if (newLyricFile) formData.append('lyric', newLyricFile);
 
-            const { data } = await api.post('/musicas', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
-
+            const { data } = await api.post('/musicas', formData);
             console.log('Música publicada:', data);
             setSuccess(true);
-            // opcional: redirecionar para a página da música
-            // navigate(`/player/${data.id}`);
             closeAll();
         } catch (err) {
-            console.error('Erro ao publicar música:', err.response?.data || err.message);
+            console.error('Erro ao publicar música:', err.response?.data || err);
             setError(err.response?.data?.error || 'Erro ao publicar música');
         }
     };
+
 
 
     const toggleRecent = () => setRecentAsc(p => !p);

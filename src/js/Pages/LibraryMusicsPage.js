@@ -82,7 +82,6 @@ export default function LibraryMusicsPage() {
         setLyricDragOver(false);
     };
 
-    // frontend/src/pages/LibraryMusicsPage.jsx
     const handleConfirmSong = async (e) => {
         e.preventDefault();
         setError(null);
@@ -95,30 +94,23 @@ export default function LibraryMusicsPage() {
 
         try {
             const formData = new FormData();
+            formData.append('audio', newAudioFile);
             formData.append('titulo', newSongName);
-<<<<<<< HEAD
             if (newSongCover) formData.append('foto', newSongCover);
             if (newLyricFile) formData.append('lyric', newLyricFile);
 
             const { data } = await api.post('/musicas', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
-=======
-            formData.append('audio', newAudioFile);
-            if (newSongCover) formData.append('foto', newSongCover);
-            if (newLyricFile) formData.append('lyric', newLyricFile);
->>>>>>> 3c466a75586c3dcbd34880f666555c95a8642fda
 
-            const { data } = await api.post('/musicas', formData);
             console.log('Música publicada:', data);
             setSuccess(true);
             closeAll();
         } catch (err) {
-            console.error('Erro ao publicar música:', err.response?.data || err);
+            console.error('Erro ao publicar música:', err.response?.data || err.message);
             setError(err.response?.data?.error || 'Erro ao publicar música');
         }
     };
-
 
 
     const toggleRecent = () => setRecentAsc(p => !p);

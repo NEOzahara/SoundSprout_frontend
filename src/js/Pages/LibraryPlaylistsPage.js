@@ -252,9 +252,9 @@ export default function LibraryPlaylistsPage() {
                                 }}
                                 onClick={() => plCoverRef.current.click()}
                             >
-                        <span className="fileName">
-                          {newPlCover ? newPlCover.name : 'No file chosen'}
-                        </span>
+                                <span className="fileName">
+                                    {newPlCover ? newPlCover.name : 'No file chosen'}
+                                </span>
                                 <button
                                     type="button"
                                     className="chooseFileButton"

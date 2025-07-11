@@ -58,8 +58,9 @@ export default function App() {
                     <Route path="communityEvent/:category" element={<CommunityEventPage />} />
 
                     <Route path="player/:songId?" element={<PlayerPage />} />
-                    <Route path="profile" element={<ProfilePage />} />
+                    {/*<Route path="profile" element={<ProfilePage />} />*/} {/*Para fallback*/}
                     <Route path="profile/:username" element={<ProfilePage />} />
+
                     <Route path="achievements" element={<AchievementsPage />} />
                 </Route>
                 <Route element={<LayoutLoggedOff />}>

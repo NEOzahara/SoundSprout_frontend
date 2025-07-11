@@ -20,6 +20,7 @@ export default function LoginPage() {
                 password
             });
             localStorage.setItem('accessToken', data.accessToken);
+            localStorage.setItem('user', JSON.stringify(data.user));
             // redireciona para a página principal ou dashboard
             navigate('/');
         } catch (err) {

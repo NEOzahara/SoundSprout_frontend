@@ -6,6 +6,8 @@ import { notifications } from '../../data/notifications'
 
 export default function TopIcons() {
 
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '')
+
     const [showSearch, setShowSearch] = useState(false)
     const [query, setQuery] = useState('')
     const results = useMemo(() => {
@@ -25,6 +27,25 @@ export default function TopIcons() {
 
     const [showNotifications, setShowNotifications] = useState(false)
     const notifRef = useRef(null)
+
+    const [user, setUser] = useState(() => {
+        return JSON.parse(localStorage.getItem('user') || 'null');
+    });
+    useEffect(() => {
+        function onUserUpdated() {
+            const stored = localStorage.getItem('user');
+            setUser(stored ? JSON.parse(stored) : null);
+        }
+        // escuta o nosso evento customizado
+        window.addEventListener('userUpdated', onUserUpdated);
+        // opcional: também escuta mudanças vindas de outras tabs
+        window.addEventListener('storage', e => {
+            if (e.key === 'user') onUserUpdated();
+        });
+        return () => {
+            window.removeEventListener('userUpdated', onUserUpdated);
+        };
+    }, []);
 
     // fecha ao clicar fora
     useEffect(() => {
@@ -139,15 +160,26 @@ export default function TopIcons() {
                 <FiAward />
             </NavLink>
             <NavLink
-                to="/profile"
+                to={`/profile/${user?.username}`}
                 end
                 className={({ isActive }) =>
                     // mantém sempre a class userIcon, mas adiciona `active` quando on profile
-                    `userIcon${isActive ? ' active' : ''}`
+                    `userAvatarContainer${isActive ? ' active' : ''}`
                 }
                 title="Profile"
             >
-                <FiUser />
+                {user?.foto
+                    ? (
+                        <div
+                            className="userAvatar"
+                            style={{
+                                backgroundImage: `url(${baseUrl}${user.foto.startsWith('/') ? '' : '/'}${user.foto})`
+                            }}
+                        />
+                    ) : (
+                        <FiUser className="userAvatarFallback" />
+                    )
+                }
             </NavLink>
         </div>
     )

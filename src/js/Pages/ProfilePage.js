@@ -1,13 +1,20 @@
 import React, {useEffect, useLayoutEffect, useRef, useState, useCallback} from 'react';
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom';
 import { FiEdit2, FiShare2, FiHeart, FiMessageCircle, FiList, FiMoreHorizontal } from 'react-icons/fi';
 import '../../css/Pages/Profile.css';
+import api from '../services/api';
 
 export default function ProfilePage() {
 
-    const { username } = useParams()
-    const isOwnProfile = !username;
+    const { username: usernameParam } = useParams();
+    const navigate = useNavigate();
+
+    const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+
+    const profileUsername = usernameParam || user?.username;
+    const isOwnProfile = profileUsername === user?.username;
 
     // Dropdown visibilidade (para FiMoreHorizontal)
     const [showDropdown, setShowDropdown] = useState(false);
@@ -35,24 +42,49 @@ export default function ProfilePage() {
     // const loggedUser = getUserFromContextOrStore() || { username: "LoggedInUser" }
     // const showUsername = username || loggedUser.username;
 
-    const showUsername = username || "Username";
-    const stats = { playlists: 0, songs: 0, followers: 0, following: 0 }
+    const showUsername = profileUsername;
+    const [stats, setStats] = useState({
+        playlists:  0,
+        songs:      0,
+        followers:  0,
+        following:  0
+    });
+
+    useEffect(() => {
+             api.get(`/utilizadores/${profileUsername}/stats`)
+               .then(({ data }) => setStats({
+                 playlists: data.playlists,
+                 songs:     data.songs,
+                 followers: data.followers,
+                 following: data.following
+               }))
+               .catch(err => console.error('Error fetching stats:', err));
+        }, [profileUsername]);
+
+
     const profileUrl = window.location.href
     const { playlists, songs, followers, following } = stats;
 
     const copyLink = () => {
         navigator.clipboard.writeText(profileUrl)
-            .then(() => console.log('Link copiado!'))
-            .catch(() => console.error('Falha ao copiar link'));
+            .then(() => console.log('Link copied!'))
+            .catch(() => console.error('Failed to copy link'));
     };
+
+    const [editMode, setEditMode] = useState(false);
+    const [newUsername, setNewUsername] = useState(showUsername);
+    const [newPhoto, setNewPhoto] = useState(null);
+    const [errorEdit, setErrorEdit] = useState('');
+    const [successEdit, setSuccessEdit] = useState('');
+    const photoInputRef = useRef(null);
+    const [editDragOver, setEditDragOver] = useState(false);
+    const canSave = (newUsername.trim() !== showUsername) || !!newPhoto;
+
 
     const [badges, setBadges] = useState([]);
     useEffect(() => {
         const stored = localStorage.getItem('profileBadges');
-        if (stored) {
-            // cada item já é { title, tier, … }
-            setBadges(JSON.parse(stored));
-        }
+        if (stored) setBadges(JSON.parse(stored));
     }, []);
 
     const badgeRefs = useRef([]);
@@ -77,6 +109,34 @@ export default function ProfilePage() {
         setDonateValue("");
     };
     const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
+
+    const handleSubmitEdit = async e => {
+        e.preventDefault();
+        setErrorEdit('');
+        try {
+            const form = new FormData();
+            if (newUsername !== showUsername) form.append('username', newUsername);
+            if (newPhoto) form.append('foto', newPhoto);
+
+            const { data: { user: updatedUser, accessToken } } = await api.patch(`/utilizadores/${profileUsername}`, form);
+
+            localStorage.setItem('accessToken', accessToken);
+            localStorage.setItem('user', JSON.stringify(updatedUser));
+            window.dispatchEvent(new Event('userUpdated'));
+            setUser(updatedUser);
+            setSuccessEdit('Perfil atualizado com sucesso!');
+            setErrorEdit('');
+
+            // se mudou de username, leva-te logo para a nova rota
+            if (updatedUser.username !== profileUsername) { // ← CHANGED (antes: user)
+                navigate(`/profile/${updatedUser.username}`, { replace: true }); // ← CHANGED
+            }
+        } catch (err) {
+            console.error(err);
+            setErrorEdit(err.response?.data?.error || 'Error updating');
+            setSuccessEdit('');
+        }
+    };
 
     // Playlists (a substituir por dados da BD mais tarde)
     const playlistsList = Array.from({ length: 7 }, (_, i) => `Playlist ${i+1}`);
@@ -248,15 +308,91 @@ export default function ProfilePage() {
         </div>
     );
 
+    const EditModal = (
+        <div className="editOverlay">
+            <form className="editForm" onSubmit={handleSubmitEdit}>
+                <h2>Edit Profile</h2>
+                {successEdit && <div className="success">{successEdit}</div>}
+                <label>
+                    New Username:
+                    <input
+                        type="text"
+                        value={newUsername}
+                        onChange={e => setNewUsername(e.target.value)}
+                        required
+                    />
+                </label>
+                <div
+                    className={`fileDropArea${editDragOver ? ' drag-over' : ''}`}
+                    onDragOver={e => { e.preventDefault(); setEditDragOver(true); }}
+                    onDragLeave={e => { e.preventDefault(); setEditDragOver(false); }}
+                    onDrop={e => {
+                        e.preventDefault();
+                        setEditDragOver(false);
+                        const f = e.dataTransfer.files[0];
+                        if (f) setNewPhoto(f);
+                    }}
+                    onClick={() => photoInputRef.current.click()}
+                >
+                    <span className="fileName">
+                        {newPhoto ? newPhoto.name : 'No file chosen'}
+                    </span>
+                    <button
+                        type="button"
+                        className="chooseFileButton"
+                        onClick={() => photoInputRef.current.click()}
+                    >
+                        Choose File
+                    </button>
+                    <input
+                        type="file"
+                        accept="image/*"
+                        ref={photoInputRef}
+                        style={{ display: 'none' }}
+                        onChange={e => {
+                            const f = e.target.files[0];
+                            setNewPhoto(f || null);
+                        }}
+                    />
+                </div>
+
+                {errorEdit && <div className="error">{errorEdit}</div>}
+                <div className="modalButtons"> {/* podes estilizar via Profile.css */}
+                    <button
+                        type="submit"
+                        disabled={!canSave}
+                    >
+                        Save
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setEditMode(false)}
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
+
     return (
         <>
             {showDonatePopup && createPortal(DonatePopup, document.body)}
+            {editMode && createPortal(EditModal, document.body)}
+
             <div className="profileSection">
                 <div className="profileHeader">
                     {/* wrapper principal com gap de 20px entre avatar e textos */}
                     <div className="profileMain">
                         {/* 1) Avatar circular 160×160 */}
-                        <div className="profileAvatar" />
+                        <div
+                            className="profileAvatar"
+                            style={{
+                                backgroundImage: user?.foto
+                                    ? `url(${baseUrl}${user.foto.startsWith('/') ? '' : '/'}${user.foto})`
+                                    : undefined
+                            }}
+                        />
 
                         {/* 2) Textos: “Profile” e “Username” */}
                         <div className="profileDetails">
@@ -270,7 +406,10 @@ export default function ProfilePage() {
                         {isOwnProfile && (
                             <FiEdit2
                                 className="actionIcon editIcon"
-                                onClick={() => console.log('Editar perfil')}
+                                onClick={() => {
+                                    setNewUsername(showUsername);
+                                    setEditMode(true);
+                                }}
                             />
                         )}
                         <FiShare2
@@ -312,8 +451,8 @@ export default function ProfilePage() {
                         {playlists} Playlists – {songs} Songs
                     </span>
                     <span className="statsSecondary">
-                        &nbsp;– {followers} Followers – {following} Following
-                    </span>
+                    &nbsp;– {followers} Followers – {following} Following
+                </span>
                 </div>
 
                 {/* 5) Link para o perfil */}

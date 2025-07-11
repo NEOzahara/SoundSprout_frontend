@@ -16,7 +16,11 @@ export default function SignupPage() {
         setError(null);
 
         try {
-
+            const { data } = await api.post('/auth/register', {
+                email,
+                username,
+                password
+            });
 
             // redireciona para a página principal ou dashboard
             navigate('/login');

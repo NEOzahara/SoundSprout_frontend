@@ -12,21 +12,7 @@ api.interceptors.request.use(cfg => {
     return cfg;
 });
 
-// auto-refresh se der 401
-api.interceptors.response.use(
-    res => res,
-    async err => {
-        if (err.response?.status === 401) {
-            // tenta refresh
-            const { data } = await api.post('/auth/refresh');
-            localStorage.setItem('accessToken', data.accessToken);
-            // repete o pedido original
-            err.config.headers.Authorization = `Bearer ${data.accessToken}`;
-            return api.request(err.config);
-        }
-        return Promise.reject(err);
-    }
-);
+
 
 // frontend/src/services/api.js
 api.interceptors.response.use(

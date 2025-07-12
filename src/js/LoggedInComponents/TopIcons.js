@@ -1,56 +1,70 @@
-import React, {useState, useEffect, useRef, useMemo } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react'
+import { NavLink } from 'react-router-dom'
 import { FiSearch, FiBell, FiAward, FiUser } from 'react-icons/fi'
-import { testPlaylists, testMusics, testUsers } from '../../data/test'
 import { notifications } from '../../data/notifications'
+import api from '../services/api'
 
 export default function TopIcons() {
-
+    // Base URL sem o /api para servir imagens estáticas
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '')
 
+    // Estado da searchbox
     const [showSearch, setShowSearch] = useState(false)
     const [query, setQuery] = useState('')
-    const results = useMemo(() => {
-        const q = query.trim().toLowerCase()
-        if (!q) return []
-        const pMatches = testPlaylists
-            .filter(p => p.title.toLowerCase().includes(q))
-            .map(p => ({ type: 'Playlist', id: p.id }))
-        const mMatches = testMusics
-            .filter(m => m.title.toLowerCase().includes(q))
-            .map(m => ({ type: 'Song',     id: m.id }))
-        const uMatches = testUsers
-            .filter(u => u.name.toLowerCase().includes(q))
-            .map(u => ({ type: 'User',     id: u.id }))
-        return [ ...pMatches, ...mMatches, ...uMatches ]
+    const [results, setResults] = useState([])
+    const searchRef = useRef(null)
+
+    // Efeito de pesquisa com debounce de 300 ms
+    useEffect(() => {
+        if (!query.trim()) {
+            setResults([])        // sem texto, limpa resultados
+            return
+        }
+        const timer = setTimeout(async () => {
+            try {
+                // Chama o endpoint /api/search?q=<query>
+                const { data } = await api.get('/search', { params: { q: query } })
+                setResults(data)     // atualiza resultados
+            } catch (err) {
+                console.error('Erro a pesquisar:', err)
+                setResults([])       // em caso de erro, limpa
+            }
+        }, 300)
+
+        return () => clearTimeout(timer)
     }, [query])
 
+    // Estado das notificações (sino)
     const [showNotifications, setShowNotifications] = useState(false)
     const notifRef = useRef(null)
 
-    const [user, setUser] = useState(() => {
-        return JSON.parse(localStorage.getItem('user') || 'null');
-    });
+    // Estado do utilizador logado (ler do localStorage)
+    const [user, setUser] = useState(() =>
+        JSON.parse(localStorage.getItem('user') || 'null')
+    )
+
+    // Atualiza user quando há evento customizado ou mudança noutro tab
     useEffect(() => {
         function onUserUpdated() {
-            const stored = localStorage.getItem('user');
-            setUser(stored ? JSON.parse(stored) : null);
+            const stored = localStorage.getItem('user')
+            setUser(stored ? JSON.parse(stored) : null)
         }
-        // escuta o nosso evento customizado
-        window.addEventListener('userUpdated', onUserUpdated);
-        // opcional: também escuta mudanças vindas de outras tabs
+        window.addEventListener('userUpdated', onUserUpdated)
         window.addEventListener('storage', e => {
-            if (e.key === 'user') onUserUpdated();
-        });
+            if (e.key === 'user') onUserUpdated()
+        })
         return () => {
-            window.removeEventListener('userUpdated', onUserUpdated);
-        };
-    }, []);
+            window.removeEventListener('userUpdated', onUserUpdated)
+            window.removeEventListener('storage', onUserUpdated)
+        }
+    }, [])
 
-    // fecha ao clicar fora
+    // Fecha o dropdown de notificações ao clicar fora
     useEffect(() => {
         function handleClickOutside(e) {
-            if (showNotifications && notifRef.current && !notifRef.current.contains(e.target)) {
+            if (showNotifications &&
+                notifRef.current &&
+                !notifRef.current.contains(e.target)) {
                 setShowNotifications(false)
             }
         }
@@ -60,7 +74,11 @@ export default function TopIcons() {
 
     return (
         <div className="topIcons">
-            <div className={`searchContainerIcon${showSearch ? ' active' : ''}`}>
+            {/* === Search Bar === */}
+            <div
+                className={`searchContainerIcon${showSearch ? ' active' : ''}`}
+                ref={searchRef}
+            >
                 {showSearch && (
                     <input
                         className="searchInputIcon"
@@ -75,50 +93,54 @@ export default function TopIcons() {
                     className="topIcon"
                     onClick={() => {
                         setShowSearch(b => !b)
-                        setQuery('')
+                        setQuery('')    // ao abrir, limpar query
                     }}
                 />
+                {/* Sugestões */}
                 {showSearch && results.length > 0 && (
                     <ul className="suggestionsIcon">
                         {results.map(r => {
-                            let item, subtitle, thumbClass, imageUrl, to
-                            if (r.type === 'Playlist') {
-                                item = testPlaylists.find(p => p.id === r.id)
-                                subtitle = item.owner
+                            // Extrair diretamente da resposta da API
+                            const { type, id, title, subtitle, imageUrl } = r
+                            let to = ''
+                            let thumbClass = ''
+
+                            if (type === 'Playlist') {
+                                // id = "username/playlistName"
+                                const [owner, name] = id.split('/')
+                                to = `/playlist/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
                                 thumbClass = 'playlistThumbIcon'
-                                imageUrl = item.imageUrl
-                                to = `/playlist/${r.id}`
-                            } else if (r.type === 'Song') {
-                                item = testMusics.find(m => m.id === r.id)
-                                subtitle = item.artist
+                            } else if (type === 'Song') {
+                                to = `/player/${id}`
                                 thumbClass = 'songThumbIcon'
-                                imageUrl = item.imageUrl
-                                to = `/player/${r.id}`
-                            } else {
-                                item = testUsers.find(u => u.id === r.id)
-                                subtitle = item.username
+                            } else { // User
+                                to = `/profile/${encodeURIComponent(id)}`
                                 thumbClass = 'userThumbIcon'
-                                imageUrl = item.avatarUrl
-                                to = `/profile/${encodeURIComponent(item.username)}`
                             }
+
                             return (
                                 <NavLink
-                                    key={`${r.type}-${r.id}`}
+                                    key={`${type}-${id}`}
                                     to={to}
                                     className="suggestionItemIcon"
                                     onClick={() => setShowSearch(false)}
                                 >
                                     <div
                                         className={`suggestionThumbIcon ${thumbClass}`}
-                                        style={{ backgroundImage: `url(${imageUrl||'/placeholder.png'})` }}
+                                        style={{
+                                            backgroundImage: imageUrl
+                                                // se houver imagem, monta a url completa ao servidor
+                                                ? `url(${baseUrl}/${imageUrl})`
+                                                // caso contrário, usa placeholder local
+                                                : `url(/placeholder.png)`
+                                        }}
                                     />
+
                                     <div className="suggestionTextIcon">
-                                        <div className="suggestionTitleIcon">
-                                            {item.title || item.name}
-                                        </div>
-                                        <div className="suggestionSubtitleIcon">
-                                            {subtitle}
-                                        </div>
+                                        <div className="suggestionTitleIcon">{title}</div>
+                                        {subtitle && (
+                                            <div className="suggestionSubtitleIcon">{subtitle}</div>
+                                        )}
                                     </div>
                                 </NavLink>
                             )
@@ -127,7 +149,7 @@ export default function TopIcons() {
                 )}
             </div>
 
-            {/* --- sino de notificações --- */}
+            {/* === Notificações (sino) === */}
             <div className="notificationsContainer" ref={notifRef}>
                 <FiBell
                     className={`topIcon${showNotifications ? ' active' : ''}`}
@@ -149,37 +171,37 @@ export default function TopIcons() {
                     </ul>
                 )}
             </div>
+
+            {/* === Achievements === */}
             <NavLink
                 to="/achievements"
                 className={({ isActive }) =>
-                    // mantém sempre a class userIcon, mas adiciona `active` quando on profile
                     `topIcon${isActive ? ' active' : ''}`
                 }
                 title="Achievements"
             >
                 <FiAward />
             </NavLink>
+
+            {/* === Avatar do Utilizador === */}
             <NavLink
                 to={`/profile/${user?.username}`}
                 end
                 className={({ isActive }) =>
-                    // mantém sempre a class userIcon, mas adiciona `active` quando on profile
                     `userAvatarContainer${isActive ? ' active' : ''}`
                 }
                 title="Profile"
             >
-                {user?.foto
-                    ? (
-                        <div
-                            className="userAvatar"
-                            style={{
-                                backgroundImage: `url(${baseUrl}${user.foto.startsWith('/') ? '' : '/'}${user.foto})`
-                            }}
-                        />
-                    ) : (
-                        <FiUser className="userAvatarFallback" />
-                    )
-                }
+                {user?.foto ? (
+                    <div
+                        className="userAvatar"
+                        style={{
+                            backgroundImage: `url(${baseUrl}${user.foto.startsWith('/') ? '' : '/'}${user.foto})`
+                        }}
+                    />
+                ) : (
+                    <FiUser className="userAvatarFallback" />
+                )}
             </NavLink>
         </div>
     )

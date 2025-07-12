@@ -51,15 +51,12 @@ export default function LibraryMusicsPage() {
     const [newAudioFile, setNewAudioFile] = useState(null);
     const [audioDragOver, setAudioDragOver] = useState(false);
     const audioRef = useRef(null);
-
     const [newSongCover, setNewSongCover] = useState(null);
     const [songCoverDrag, setSongCoverDrag] = useState(false);
     const songCoverRef = useRef(null);
-
     const [newLyricFile, setNewLyricFile] = useState(null);
     const [lyricDragOver, setLyricDragOver] = useState(false);
     const lyricRef = useRef(null);
-
     const [error, setError] = useState(null);
     const [success, setSuccess] = useState(false);
     const navigate = useNavigate();
@@ -77,9 +74,6 @@ export default function LibraryMusicsPage() {
         setNewLyricFile(null);
         setError(null);
         setSuccess(false);
-        setAudioDragOver(false);
-        setSongCoverDrag(false);
-        setLyricDragOver(false);
     };
 
     const handleConfirmSong = async (e) => {
@@ -96,8 +90,13 @@ export default function LibraryMusicsPage() {
             const formData = new FormData();
             formData.append('audio', newAudioFile);
             formData.append('titulo', newSongName);
-            if (newSongCover) formData.append('foto', newSongCover);
-            if (newLyricFile) formData.append('lyric', newLyricFile);
+            // se quiseres enviar cover e lyrics ao backend, tens de ajustar o controller/multer para aceitar campos extra
+            if (newSongCover) {
+                formData.append('foto', newSongCover);
+            }
+            if (newLyricFile) {
+                formData.append('lyric', newLyricFile);
+            }
 
             const { data } = await api.post('/musicas', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
@@ -105,6 +104,8 @@ export default function LibraryMusicsPage() {
 
             console.log('Música publicada:', data);
             setSuccess(true);
+            // opcional: redirecionar para a página da música
+            // navigate(`/player/${data.id}`);
             closeAll();
         } catch (err) {
             console.error('Erro ao publicar música:', err.response?.data || err.message);
@@ -289,25 +290,13 @@ export default function LibraryMusicsPage() {
 
                             <label>Audio File</label>
                             <div
-                                className={`fileDropArea${audioDragOver ? ' drag-over' : ''}`}
-                                onDragOver={e => { e.preventDefault(); setAudioDragOver(true); }}
-                                onDragLeave={e => { e.preventDefault(); setAudioDragOver(false); }}
-                                onDrop={e => {
-                                    e.preventDefault();
-                                    setAudioDragOver(false);
-                                    const f = e.dataTransfer.files[0];
-                                    if (f) setNewAudioFile(f);
-                                }}
+                                className="fileDropArea"
                                 onClick={() => audioRef.current.click()}
                             >
-                                <span className="fileName">
-                                    {newAudioFile ? newAudioFile.name : 'No file chosen'}
-                                </span>
-                                <button
-                                    type="button"
-                                    className="chooseFileButton"
-                                    onClick={() => audioRef.current.click()}
-                                >
+                <span className="fileName">
+                  {newAudioFile ? newAudioFile.name : 'No file chosen'}
+                </span>
+                                <button type="button" onClick={() => audioRef.current.click()}>
                                     Choose File
                                 </button>
                                 <input
@@ -321,68 +310,20 @@ export default function LibraryMusicsPage() {
                             </div>
 
                             <label>Cover Image (opcional)</label>
-                            <div
-                                className={`fileDropArea${songCoverDrag ? ' drag-over' : ''}`}
-                                onDragOver={e => { e.preventDefault(); setSongCoverDrag(true); }}
-                                onDragLeave={e => { e.preventDefault(); setSongCoverDrag(false); }}
-                                onDrop={e => {
-                                    e.preventDefault();
-                                    setSongCoverDrag(false);
-                                    const f = e.dataTransfer.files[0];
-                                    if (f) setNewSongCover(f);
-                                }}
-                                onClick={() => songCoverRef.current.click()}
-                            >
-                                <span className="fileName">
-                                    {newSongCover ? newSongCover.name : 'No file chosen'}
-                                </span>
-                                <button
-                                    type="button"
-                                    className="chooseFileButton"
-                                    onClick={() => songCoverRef.current.click()}
-                                >
-                                    Choose File
-                                </button>
-                                <input
-                                    type="file"
-                                    accept="image/*"
-                                    ref={songCoverRef}
-                                    style={{ display: 'none' }}
-                                    onChange={e => setNewSongCover(e.target.files[0] || null)}
-                                />
-                            </div>
+                            <input
+                                type="file"
+                                accept="image/*"
+                                ref={songCoverRef}
+                                onChange={e => setNewSongCover(e.target.files[0] || null)}
+                            />
 
                             <label>Lyric File (opcional)</label>
-                            <div
-                                className={`fileDropArea${lyricDragOver ? ' drag-over' : ''}`}
-                                onDragOver={e => { e.preventDefault(); setLyricDragOver(true); }}
-                                onDragLeave={e => { e.preventDefault(); setLyricDragOver(false); }}
-                                onDrop={e => {
-                                    e.preventDefault();
-                                    setLyricDragOver(false);
-                                    const f = e.dataTransfer.files[0];
-                                    if (f) setNewLyricFile(f);
-                                }}
-                                onClick={() => lyricRef.current.click()}
-                            >
-                                <span className="fileName">
-                                    {newLyricFile ? newLyricFile.name : 'No file chosen'}
-                                </span>
-                                <button
-                                    type="button"
-                                    className="chooseFileButton"
-                                    onClick={() => lyricRef.current.click()}
-                                >
-                                    Choose File
-                                </button>
-                                <input
-                                    type="file"
-                                    accept=".txt"
-                                    ref={lyricRef}
-                                    style={{ display: 'none' }}
-                                    onChange={e => setNewLyricFile(e.target.files[0] || null)}
-                                />
-                            </div>
+                            <input
+                                type="file"
+                                accept=".txt"
+                                ref={lyricRef}
+                                onChange={e => setNewLyricFile(e.target.files[0] || null)}
+                            />
 
                             {error && <p className="error">{error}</p>}
                             {success && <p className="success">Música publicada com sucesso!</p>}

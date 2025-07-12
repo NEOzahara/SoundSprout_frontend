@@ -34,6 +34,21 @@ export default function TopIcons() {
         return () => clearTimeout(timer)
     }, [query])
 
+    // Fecha o dropdown de sugestões ao clicar fora da searchbar ← ADDED
+    useEffect(() => {
+        function handleSearchClickOutside(e) {
+            if (showSearch &&
+                searchRef.current &&
+                !searchRef.current.contains(e.target)
+            ) {
+                setShowSearch(false)
+                setQuery('')    // opcional: limpa o texto
+            }
+        }
+        document.addEventListener('mousedown', handleSearchClickOutside)
+        return () => document.removeEventListener('mousedown', handleSearchClickOutside)
+    }, [showSearch])
+
     // Estado das notificações (sino)
     const [showNotifications, setShowNotifications] = useState(false)
     const notifRef = useRef(null)
@@ -137,8 +152,13 @@ export default function TopIcons() {
                                     />
 
                                     <div className="suggestionTextIcon">
-                                        <div className="suggestionTitleIcon">{title}</div>
-                                        {subtitle && (
+                                        <div className="suggestionTitleIcon">
+                                            {title}
+                                            {(type === 'Playlist' || type === 'Song') && (
+                                                <span className="suggestionTypeIcon"> – {type}</span> // ← ALTERAÇÃO: label do tipo
+                                            )}
+                                        </div>
+                                        {(type === 'Playlist' || type === 'Song') && subtitle && (
                                             <div className="suggestionSubtitleIcon">{subtitle}</div>
                                         )}
                                     </div>

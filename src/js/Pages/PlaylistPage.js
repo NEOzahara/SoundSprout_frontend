@@ -1,4 +1,4 @@
-import React, {useState, useMemo } from 'react';
+import React, {useState, useMemo, useEffect } from 'react';
 import '../../css/Pages/Playlist.css';
 import { eventPlaylists } from '../../data/eventPlaylists';
 import { playlists } from '../../data/playlists';
@@ -13,9 +13,92 @@ import {
     FiHeart,
     FiMessageCircle
 } from 'react-icons/fi';
-import { NavLink, useParams } from 'react-router-dom';
+import { NavLink, useParams, useNavigate } from 'react-router-dom';
+import api from '../services/api';
 
 export default function PlaylistPage() {
+
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+
+    const { creator, playlistName } = useParams();
+    const [meta, setMeta] = useState(null);
+    const [tracks, setTracks] = useState([]);
+    const [creatorFoto, setCreatorFoto] = useState(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [recentAsc, setRecentAsc] = useState(true);
+    const [showSearch, setShowSearch] = useState(false);
+    const [query, setQuery] = useState('');
+    const [durations, setDurations] = useState({});
+    const [totalDuration, setTotalDuration] = useState('');
+
+    useEffect(() => {
+        // 1) metadata da playlist
+        api.get(`/playlists/${encodeURIComponent(playlistName)}/${encodeURIComponent(creator)}`)
+            .then(({ data }) => setMeta(data))
+            .catch(err => console.error('Erro metadata:', err));
+        // 2) músicas da playlist
+        api.get(`/playlists/${encodeURIComponent(playlistName)}/${encodeURIComponent(creator)}/musicas`)
+            .then(({ data }) => setTracks(data))
+            .catch(err => console.error('Erro músicas:', err));
+    }, [creator, playlistName]);
+
+    useEffect(() => {
+        api.get(`/utilizadores/${encodeURIComponent(creator)}`)
+            .then(({ data }) => setCreatorFoto(data.foto))
+            .catch(err => console.error('Erro ao obter foto do criador:', err));
+    }, [creator]);
+
+    useEffect(() => {
+        tracks.forEach(track => {
+            // 1) tenta os dois nomes de propriedade
+            const raw = track.pathFicheiro ?? track.pathficheiro;
+            // 2) se não houver caminho, sai
+            if (!raw) {
+                console.warn('track sem pathFicheiro:', track);
+                return;
+            }
+            // 3) normaliza a barra
+            const normalized = raw.startsWith('/') ? raw : `/${raw}`;
+            const src = `${baseUrl}${normalized}`;
+            const audio = new Audio(src);
+            audio.addEventListener('loadedmetadata', () => {
+                const d = audio.duration;
+                const m = Math.floor(d / 60);
+                const s = Math.round(d % 60).toString().padStart(2, '0');
+                setDurations(prev => ({ ...prev, [track.id]: `${m}:${s}` }));
+            });
+        });
+    }, [tracks, baseUrl]);
+
+    useEffect(() => {
+        const ids = Object.keys(durations);
+        if (!tracks.length || ids.length === 0) return;
+        // Somar apenas as tracks cujas durações já temos
+        const totalSec = tracks.reduce((sum, track) => {
+            const dur = durations[track.id];
+            if (!dur) return sum;
+            const [min, sec] = dur.split(':').map(Number);
+            return sum + min * 60 + sec;
+            }, 0);
+        const hours = Math.floor(totalSec / 3600);
+        const mins  = Math.floor((totalSec % 3600) / 60);
+        const secs  = totalSec % 60;
+        // Formato condicional: H:MM:SS se houver horas, senão M:SS
+        const formatted = hours > 0
+            ? `${hours}:${mins.toString().padStart(2,'0')}:${secs.toString().padStart(2,'0')}`
+            : `${mins}:${secs.toString().padStart(2,'0')}`;
+        setTotalDuration(formatted);
+    }, [durations, tracks]);
+
+    // lista ordenada / filtrada
+    const displayedTracks = useMemo(() => {
+        let arr = recentAsc ? [...tracks] : [...tracks].reverse();
+        if (query.trim()) {
+            const q = query.trim().toLowerCase();
+            arr = arr.filter(m => m.titulo.toLowerCase().includes(q));
+        }
+        return arr;
+    }, [tracks, recentAsc, query]);
 
     const { id: rawId } = useParams();
     const playlist = useMemo(() => {
@@ -38,15 +121,15 @@ export default function PlaylistPage() {
     } = playlist;
 
 
-    const [isPlaying, setIsPlaying] = useState(false);
-    const [recentAsc, setRecentAsc] = useState(true);
+    //const [isPlaying, setIsPlaying] = useState(false);
+    //const [recentAsc, setRecentAsc] = useState(true);
     const playlistSongs = trackIds
         ? musics.filter(m => trackIds.includes(m.id))
         : musics;
 
     // === autocomplete ===
-    const [showSearch, setShowSearch] = useState(false);
-    const [query, setQuery] = useState('');
+    //const [showSearch, setShowSearch] = useState(false);
+    //const [query, setQuery] = useState('');
     const results = useMemo(() => {
         const q = query.trim().toLowerCase();
         if (!q) return [];
@@ -55,25 +138,37 @@ export default function PlaylistPage() {
             .map(m => ({ id: m.id, title: m.title, artist: m.artist }));
     }, [query, playlistSongs]);
 
+    if (!meta) return <div>Loading…</div>;
+
     return (
         <div className="playlistSection">
             {/* === Seção superior === */}
             <div className="playlistHeader">
                 <div className="playlistMain">
                     {/* 1) Quadrado de capa */}
-                    <div className="playlistCover" />
+                    <div
+                        className="playlistCover"
+                        style={{ backgroundImage: meta.cover ? `url(${meta.cover})` : undefined }}
+                    />
 
                     {/* 2) Textos */}
                     <div className="playlistDetails">
                         {/* 2.1) Tipo de playlist */}
-                        <span className="playlistTypeLabel">{type} Playlist</span>
+                        <span className="playlistTypeLabel">{meta.type} Playlist</span>
                         {/* 2.2) Título da playlist */}
-                        <span className="playlistTitle">{title}</span>
+                        <span className="playlistTitle">{meta.title}</span>
                         {/* 2.3) Meta (avatar pequeno + texto) */}
                         <div className="playlistMeta">
-                            <div className="userAvatarSmall" />
-                            <span className="metaOwner">{owner}</span>
-                            <span className="metaRest">– {listens} listens – {songs} songs – {duration} total time</span>
+                            <div
+                                className="userAvatarSmall"
+                                style={{
+                                    backgroundImage: creatorFoto
+                                        ? `url(${baseUrl}${creatorFoto})`
+                                        : undefined
+                                }}
+                            />
+                            <span className="metaOwner">{meta.owner}</span>
+                            <span className="metaRest">– {meta.listens} listens – {meta.songs} songs – {totalDuration} total time</span>
                         </div>
                     </div>
                 </div>
@@ -166,9 +261,9 @@ export default function PlaylistPage() {
                             setQuery('');
                         }}
                     />
-                    {showSearch && results.length > 0 && (
+                    {showSearch && displayedTracks.length > 0 && (
                         <ul className="suggestionsLib">
-                            {results.map(m => (
+                            {displayedTracks.map(m => (
                                 <li key={m.id} className="suggestionItem">
                                     <NavLink
                                         to={`/player/${m.id}`}
@@ -190,16 +285,13 @@ export default function PlaylistPage() {
             {/* === Song list === */}
             <div className="playlistContent">
                 <div className="playlistSongList">
-                    {playlistSongs.map((track, idx) => (
-                        <NavLink
-                            key={track.id}
-                            to={`/player/${track.id}`}
-                            className="trackRow"
-                        >
+                    {displayedTracks.map((track, idx) => (
+                        <NavLink key={track.id} to={`/player/${track.id}`} className="trackRow">
                             <span className="trackNumber">{idx + 1}</span>
 
                             <div
                                 className="coverPlaceholderSmall"
+                                style={{ backgroundImage: track.foto ? `url(${track.foto})` : undefined }}
                                 onClick={() => console.log(`Cover ${idx + 1} clicked`)}
                             />
 
@@ -208,18 +300,28 @@ export default function PlaylistPage() {
                                     className="smallTitle"
                                     onClick={() => console.log(`Title ${idx+1} clicked`)}
                                 >
-                                    {track.title}
+                                    {track.titulo}
                                 </span>
                                 <NavLink
-                                    to={`/profile/${encodeURIComponent(track.artist)}`}
+                                    to={`/profile/${encodeURIComponent(track.username)}`}
                                     className="smallArtist"
                                 >
-                                    {track.artist}
+                                    {track.username}
                                 </NavLink>
                             </div>
 
-                            <span className="playlistTotalDuration">{track.duration}</span>
-                            <span className="playlistLikesCount">{track.listens}</span>
+                            <FiHeart className="actionIcon" onClick={e => { e.preventDefault(); /* like */ }} />
+                            <NavLink
+                                to={`/player/${track.id}?comments=true`}
+                                className="actionIcon"
+                                onClick={e => e.preventDefault()}
+                            >
+                                <FiMessageCircle />
+
+                            </NavLink>
+
+                            <span className="smallDuration">{durations[track.id] || '--:--'}</span>
+                            <span className="smallListens">{track.visualizacoes}</span>
 
                             <FiMoreHorizontal
                                 className="actionIcon"

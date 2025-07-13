@@ -1,107 +1,175 @@
-import React, {useEffect, useRef, useState} from 'react';
-import {FiChevronDown, FiChevronRight} from 'react-icons/fi';
+
+import React, { useEffect, useRef, useState } from 'react';
+import { FiChevronRight } from 'react-icons/fi';
 import '../../css/Pages/Settings.css';
 
-export default function SettingsPage() {
+import api from '../services/api';
 
+export default function SettingsPage() {
+    // ─── Linguagens disponíveis ─────────────────────────────────────
     const languages = [
         'English',
         'Español',
         'Français',
         'Deutsch',
-        '中文',
-        '日本語',
         'Italiano',
         'Português',
-        'Русский',
-        'العربية',
-        'हिन्दी'
-    ];
+    ]
 
-    // Estado para controlar a linguagem selecionada e se o dropdown está aberto
-    const [selectedLanguage, setSelectedLanguage] = useState('English');
-    const [isOpenLang, setIsOpenLang] = useState(false);
-    const dropdownRef = useRef(null);
+    // ─── Estados de UI ──────────────────────────────────────────────
+    const [selectedLanguage, setSelectedLanguage] = useState('English')
+    const [isOpenLang, setIsOpenLang]         = useState(false)
+    const dropdownRef = useRef(null)
 
-    // Fecha o dropdown ao clicar fora
+    const [isDarkMode, setIsDarkMode]                           = useState(false)
+    const [isAutoplayOn, setIsAutoplayOn]                       = useState(false)
+    const [isPublishPlaylistProfileOn, setIsPublishPlaylistProfileOn] = useState(false)
+    const [isShareListeningActivityOn, setIsShareListeningActivityOn] = useState(false)
+    const [isShowRecentArtistsOn, setIsShowRecentArtistsOn]           = useState(false)
+    const [isFollowerAndFollowingOn, setIsFollowerAndFollowingOn]     = useState(false)
+
+    // ─── Carregar settings do backend ──────────────────────────────
     useEffect(() => {
-        function handleClickOutside(event) {
-            if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-                setIsOpenLang(false);
+        async function load() {
+            try {
+                const { data } = await api.get('/utilizadores/settings')
+                // inverter o map de linguagem
+                const revLang = {
+                    en: 'English',
+                    es: 'Español',
+                    fr: 'Français',
+                    de: 'Deutsch',
+                    it: 'Italiano',
+                    pt: 'Português'
+                }
+                setSelectedLanguage(revLang[data.linguagem] || 'English')
+                setIsDarkMode(data.tema === 'night')
+                setIsAutoplayOn(data.autoplay)
+                setIsPublishPlaylistProfileOn(data.playlists_ativas)
+                setIsShareListeningActivityOn(data.compartilhar_atividade)
+                setIsShowRecentArtistsOn(data.mostrar_artistas_recentemente)
+                setIsFollowerAndFollowingOn(data.mostrar_listas_publicas)
+            } catch (err) {
+                console.error('Erro ao carregar settings:', err)
             }
         }
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+        load()
+    }, [])
 
-    const toggleDropdown = () => setIsOpenLang(prev => !prev);
-    const handleSelect = (lang) => {
-        setSelectedLanguage(lang);
-        setIsOpenLang(false);
-    };
+    // ─── Função para enviar updates ao backend ─────────────────────
+    const update = async (fields) => {
+        try {
+            await api.put('/utilizadores/settings', fields)
+        } catch (err) {
+            console.error('Erro ao atualizar settings:', err)
+        }
+    }
 
-    /*Toogles*/
-    const [isDarkMode, setIsDarkMode] = useState(false);
-    const [isAutoplayOn, setIsAutoplayOn] = useState(false);
-    const [isPublishPlaylistProfileOn, setIsPublishPlaylistProfileOn] = useState(false);
-    const [isShareListeningActivityOn, setIsShareListeningActivityOn] = useState(false);
-    const [isShowRecentArtistsOn, setIsShowRecentArtistsOn] = useState(false);
-    const [isFollowerAndFollowingOn, setIsFollowerAndFollowingOn] = useState(false);
+    // ─── Handlers de toggles e dropdown ────────────────────────────
+    const handleSelectLanguage = (lang) => {
+        setSelectedLanguage(lang)
+        setIsOpenLang(false)
+        update({ selectedLanguage: lang })
+    }
 
-    const toggleDarkMode = () => setIsDarkMode(prev => !prev);
-    const toggleAutoplay = () => setIsAutoplayOn(prev => !prev);
-    const togglePublishPlaylistProfile = () => setIsPublishPlaylistProfileOn(prev => !prev);
-    const toggleShareListeningActivity = () => setIsShareListeningActivityOn(prev => !prev);
-    const toggleShowRecentArtists = () => setIsShowRecentArtistsOn(prev => !prev);
-    const toggleFollowerAndFollowing = () => setIsFollowerAndFollowingOn(prev => !prev);
+    const toggleDarkMode = () => {
+        setIsDarkMode(d => {
+            const next = !d
+            update({ isDarkMode: next })
+            return next
+        })
+    }
+
+    const toggleAutoplay = () => {
+        setIsAutoplayOn(d => {
+            const next = !d
+            update({ isAutoplayOn: next })
+            return next
+        })
+    }
+
+    const togglePublish = () => {
+        setIsPublishPlaylistProfileOn(d => {
+            const next = !d
+            update({ isPublishPlaylistsProfileOn: next })
+            return next
+        })
+    }
+
+    const toggleShareActivity = () => {
+        setIsShareListeningActivityOn(d => {
+            const next = !d
+            update({ isShareListeningActivityOn: next })
+            return next
+        })
+    }
+
+    const toggleShowArtists = () => {
+        setIsShowRecentArtistsOn(d => {
+            const next = !d
+            update({ isShowRecentArtistsOn: next })
+            return next
+        })
+    }
+
+    const toggleFollower = () => {
+        setIsFollowerAndFollowingOn(d => {
+            const next = !d
+            update({ isFollowerAndFollowingOn: next })
+            return next
+        })
+    }
+
+    // ─── Fecha dropdown ao clicar fora ──────────────────────────────
+    useEffect(() => {
+        function onClickOutside(e) {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+                setIsOpenLang(false)
+            }
+        }
+        document.addEventListener('mousedown', onClickOutside)
+        return () => document.removeEventListener('mousedown', onClickOutside)
+    }, [])
 
     return (
         <div className="settingsSection">
-            {/* Caixa semelhante às do Home */}
-            <div className="settingsBox">
-                {/* 1) Título da caixa */}
+            {/* Language */}
+            <div className="settingsBox" ref={dropdownRef}>
                 <div className="settingsHeader">
                     <span className="settingsTitle">Language</span>
                 </div>
-
-                {/* 2) Linha com texto à esquerda e botão dropdown à direita */}
-                <div className="settingsRow" ref={dropdownRef}>
-                    <span className="settingsText">
-                        Choose language
-                    </span>
+                <div className="settingsRow">
+                    <span className="settingsText">Choose language</span>
                     <button
                         className={`dropdownButton${isOpenLang ? ' open' : ''}`}
-                        onClick={toggleDropdown}
+                        onClick={() => setIsOpenLang(o => !o)}
                     >
                         {selectedLanguage}
                         <FiChevronRight className="dropdownIcon" strokeWidth={3} />
                     </button>
-
-                    {/* 3) Lista de opções, só aparece se isOpen for true */}
-                    {isOpenLang && (
-                        <div className="dropdownList">
-                            {languages.map(lang => (
-                                <div
-                                    key={lang}
-                                    className="dropdownItem"
-                                    onClick={() => handleSelect(lang)}
-                                >
-                                    {lang}
-                                </div>
-                            ))}
-                        </div>
-                    )}
                 </div>
+                {isOpenLang && (
+                    <div className="dropdownList">
+                        {languages.map(lang => (
+                            <div
+                                key={lang}
+                                className="dropdownItem"
+                                onClick={() => handleSelectLanguage(lang)}
+                            >
+                                {lang}
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
-            {/* ---------- Caixa de Day/Night Mode ---------- */}
+            {/* Day/Night Mode */}
             <div className="settingsBox">
                 <div className="settingsHeader">
                     <span className="settingsTitle">Day/Night Mode</span>
                 </div>
-
                 <div className="settingsRow">
-                    <span className="settingsText">Change background colors to night/day mode</span>
+                    <span className="settingsText">Change background colors</span>
                     <div
                         className={`toggleSwitch${isDarkMode ? ' toggled' : ''}`}
                         onClick={toggleDarkMode}
@@ -111,13 +179,15 @@ export default function SettingsPage() {
                 </div>
             </div>
 
+            {/* Autoplay */}
             <div className="settingsBox">
                 <div className="settingsHeader">
                     <span className="settingsTitle">Autoplay</span>
                 </div>
-
                 <div className="settingsRow">
-                    <span className="settingsText">Keep playing similar music after the song ends</span>
+          <span className="settingsText">
+            Keep playing similar music after the song ends
+          </span>
                     <div
                         className={`toggleSwitch${isAutoplayOn ? ' toggled' : ''}`}
                         onClick={toggleAutoplay}
@@ -127,81 +197,81 @@ export default function SettingsPage() {
                 </div>
             </div>
 
+            {/* Social */}
             <div className="settingsBox">
                 <div className="settingsHeader">
                     <span className="settingsTitle">Social</span>
                 </div>
-
                 <div className="settingsRow">
-                    <span className="settingsText">Publish my new playlists on my profile</span>
+          <span className="settingsText">
+            Publish my playlists on my profile
+          </span>
                     <div
                         className={`toggleSwitch${isPublishPlaylistProfileOn ? ' toggled' : ''}`}
-                        onClick={togglePublishPlaylistProfile}
+                        onClick={togglePublish}
                     >
                         <div className="toggleThumb" />
                     </div>
                 </div>
-
                 <div className="settingsRow">
-                    <span className="settingsText">Share my listening activity on SoundSprout</span>
+          <span className="settingsText">
+            Share my listening activity on SoundSprout
+          </span>
                     <div
                         className={`toggleSwitch${isShareListeningActivityOn ? ' toggled' : ''}`}
-                        onClick={toggleShareListeningActivity}
+                        onClick={toggleShareActivity}
                     >
                         <div className="toggleThumb" />
                     </div>
                 </div>
-
                 <div className="settingsRow">
-                    <span className="settingsText">Show my recently played artists on my public profile</span>
+          <span className="settingsText">
+            Show my recently played artists on my public profile
+          </span>
                     <div
                         className={`toggleSwitch${isShowRecentArtistsOn ? ' toggled' : ''}`}
-                        onClick={toggleShowRecentArtists}
+                        onClick={toggleShowArtists}
                     >
                         <div className="toggleThumb" />
                     </div>
                 </div>
-
                 <div className="settingsRow">
-                    <span className="settingsText">Show my follower and following lists on my public profile</span>
+          <span className="settingsText">
+            Show my follower and following lists on my public profile
+          </span>
                     <div
                         className={`toggleSwitch${isFollowerAndFollowingOn ? ' toggled' : ''}`}
-                        onClick={toggleFollowerAndFollowing}
+                        onClick={toggleFollower}
                     >
                         <div className="toggleThumb" />
                     </div>
                 </div>
             </div>
 
+            {/* Security */}
             <div className="settingsBox">
                 <div className="settingsHeader">
-                        <span className="settingsTitle">
-                            Security
-                        </span>
+                    <span className="settingsTitle">Security</span>
                 </div>
-
                 <div className="settingsRow">
-                        <span className="settingsText">
-                            Change password
-                        </span>
+                    <span className="settingsText">Change password</span>
                     <FiChevronRight
                         className="arrowIcon"
                         strokeWidth={3}
-                        onClick={() => console.log('Go to Store!')}
+                        onClick={() => console.log('Go to Change Password')}
                     />
                 </div>
-
                 <div className="settingsRow">
-                        <span className="settingsText">
-                            Notifications settings
-                        </span>
+                    <span className="settingsText">Notifications settings</span>
                     <FiChevronRight
                         className="arrowIcon"
                         strokeWidth={3}
-                        onClick={() => console.log('Go to Store!')}
+                        onClick={() => console.log('Go to Notifications Settings')}
                     />
                 </div>
             </div>
         </div>
-    );
+    )
 }
+
+

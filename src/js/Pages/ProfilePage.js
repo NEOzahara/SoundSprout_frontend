@@ -1,5 +1,5 @@
 import React, {useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo} from 'react';
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, NavLink  } from 'react-router-dom'
 import { createPortal } from 'react-dom';
 import { FiEdit2, FiShare2, FiHeart, FiMessageCircle, FiList, FiMoreHorizontal } from 'react-icons/fi';
 import '../../css/Pages/Profile.css';
@@ -96,12 +96,18 @@ export default function ProfilePage() {
         api.get(`/playlists/utilizador/${profileUsername}`)
             .then(({ data }) => {
                 if (!isMounted) return;
+                let list = data;
+                if (!isOwnProfile) {
+                    list = list.filter(pl =>
+                        pl.privacidade?.toLowerCase() === 'publico'
+                    );
+                }
                 // filtrar só as públicas
-                setPublicPlaylists(data.filter(pl => pl.privacidade === 'publico'));
+                setPublicPlaylists(list);
             })
             .catch(err => console.error('Erro ao carregar playlists:', err));
         return () => { isMounted = false };
-    }, [profileUsername]);
+    }, [profileUsername, isOwnProfile]);
 
     // Carrega Top Artists
     useEffect(() => {
@@ -176,15 +182,15 @@ export default function ProfilePage() {
     }, [profileUsername, showAllFollowing]);
 
     useEffect(() => {
-            let isMounted = true;
-            api.get(`/utilizadores/${profileUsername}/achievements`)
-               .then(({ data }) => {
-                   console.log("achievements from API:", data);
-                   if (isMounted) setAchievements(data);
-               })
-               .catch(err => console.error('Erro a carregar achievements:', err));
-            return () => { isMounted = false; };
-          }, [profileUsername]);
+        let isMounted = true;
+        api.get(`/utilizadores/${profileUsername}/achievements`)
+            .then(({ data }) => {
+                console.log("achievements from API:", data);
+                if (isMounted) setAchievements(data);
+            })
+            .catch(err => console.error('Erro a carregar achievements:', err));
+        return () => { isMounted = false; };
+    }, [profileUsername]);
 
     const [showAllPlaylists, setShowAllPlaylists] = useState(false);
 
@@ -229,7 +235,7 @@ export default function ProfilePage() {
                         backgroundImage: art.foto
                             ? `url(${baseUrl}${art.foto.startsWith('/')?'':'/'}${art.foto})`
                             : undefined
-                }}
+                    }}
                 />
                 <span className="coverTitle">{art.username}</span>
             </div>
@@ -238,7 +244,11 @@ export default function ProfilePage() {
 
     const displayedTopTracks = useMemo(() => {
         return topTracks.map((track, idx) => (
-            <div key={track.id} className="trackRow verticalRow">
+            <NavLink
+                key={track.id}
+                to={`/player/${encodeURIComponent(track.id)}`}
+                className="trackRow verticalRow"
+            >
                 <span className="trackNumber">{idx + 1}</span>
                 <div
                     className="coverPlaceholderSmall"
@@ -263,7 +273,7 @@ export default function ProfilePage() {
                     </span>
                 </div>
                 <span className="smallListens">{track.plays}</span>
-            </div>
+            </NavLink>
         ));
     }, [topTracks, baseUrl]);
 
@@ -282,7 +292,7 @@ export default function ProfilePage() {
                         backgroundImage: pl.playlist_photo
                             ? `url(${baseUrl}${pl.playlist_photo.startsWith('/')?'':'/'}${pl.playlist_photo})`
                             : undefined
-                }}
+                    }}
                 />
                 <span className="coverTitle">{pl.playlist_name}</span>
             </div>
@@ -291,7 +301,11 @@ export default function ProfilePage() {
 
     const displayedRecentLikedSongs = useMemo(() => {
         return recentLikedSongs.map((track, idx) => (
-            <div key={track.id} className="trackRow verticalRow">
+            <NavLink
+                key={track.id}
+                to={`/player/${encodeURIComponent(track.id)}`}
+                className="trackRow verticalRow"
+            >
                 <span className="trackNumber">{idx + 1}</span>
                 <div
                     className="coverPlaceholderSmall"
@@ -301,13 +315,13 @@ export default function ProfilePage() {
                             : undefined,
                         backgroundSize: 'cover',
                         backgroundPosition: 'center'
-                }}
+                    }}
                 />
                 <div className="trackInfoSmall">
                     <span className="smallTitle">{track.titulo}</span>
                     <span className="smallArtist">{track.artist_username}</span>
                 </div>
-            </div>
+            </NavLink>
         ));
     }, [recentLikedSongs, baseUrl]);
 
@@ -349,13 +363,20 @@ export default function ProfilePage() {
     }, [followingList, showAllFollowing, baseUrl, navigate]);
 
     const displayedAchievements = useMemo(() => {
-            const slice = showAllBadges ? achievements : achievements.slice(0, 6);
-            return slice.map(b => (
-                <div key={`${b.badge_name}-${b.badge_tier}`} className="coverCard">
-                    <div className={`coverPlaceholder achievementBadge ${b.badge_tier}`} />
-                    <span className="coverTitle">{b.badge_name}</span>
-                </div>
-            ));
+        const slice = showAllBadges ? achievements : achievements.slice(0, 6);
+        return slice.map(b => (
+            <div
+                key={`${b.badge_name}-${b.badge_tier}`}
+                className="coverCard"
+                onClick={() =>
+                    navigate(`/achievements/${encodeURIComponent(profileUsername)}`)  // ← ALTERAÇÃO
+                }
+                style={{ cursor: 'pointer' }}  // opcional, dá feedback visual
+                >
+                <div className={`coverPlaceholder achievementBadge ${b.badge_tier}`} />
+                <span className="coverTitle">{b.badge_name}</span>
+            </div>
+        ));
     }, [achievements, showAllBadges]);
 
     const { playlists, songs, followers, following } = stats;
@@ -374,7 +395,6 @@ export default function ProfilePage() {
     const photoInputRef = useRef(null);
     const [editDragOver, setEditDragOver] = useState(false);
     const canSave = (newUsername.trim() !== showUsername) || !!newPhoto;
-
 
     const [badges, setBadges] = useState([]);
     useEffect(() => {
@@ -475,11 +495,11 @@ export default function ProfilePage() {
 
     //const followersList = Array.from({ length: 7 }, (_, i) => `Follower ${i+1}`);
     const renderFollowers = () => followersList.map((name, i) => (
-            <div key={i} className="coverCard followerCard">
-                <div className="followerPlaceholder" onClick={() => console.log(name)}/>
-                <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
-            </div>
-        ));
+        <div key={i} className="coverCard followerCard">
+            <div className="followerPlaceholder" onClick={() => console.log(name)}/>
+            <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
+        </div>
+    ));
 
     //const followingList = Array.from({ length: 7 }, (_, i) => `Following ${i+1}`);
     const renderFollowing = () => followingList.map((name, i) => (
@@ -551,7 +571,7 @@ export default function ProfilePage() {
             <div
                 className="donatePopup"
                 onClick={e => e.stopPropagation()} // Não fecha ao clicar dentro do popup
-                >
+            >
                 <div className="donateTitle">
                     Donate to {showUsername}
                 </div>
@@ -775,138 +795,154 @@ export default function ProfilePage() {
 
                 <hr className="profileDivider" />
 
-                <div className="playlistsScroll">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Public Playlists</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllPlaylists(x => !x)}
-                        >
-                            {showAllPlaylists ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="carouselWrapper">
-                        <div className="carousel">
-                            {displayedPlaylists}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="playlistsScroll">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Top Artists this month</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllArtists(f => !f)}
-                        >
-                            {showAllArtists ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="carouselWrapper">
-                        <div className="carousel">
-                            {displayedArtists}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="verticalSection">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Top tracks this month</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllTracks(f => !f)}     // ← ALTERAÇÃO
-                        >
-                            {showAllTracks ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="verticalWrapper">
-                        {displayedTopTracks}
-                    </div>
-                </div>
-
-                <div className="playlistsScroll">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Recently Liked Playlists</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllLikedPlaylists(x => !x)}
-                        >
-                            {showAllLikedPlaylists ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="carouselWrapper">
-                        <div className="carousel">
-                            {displayedLikedPlaylists}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="verticalSection">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Recently Liked Songs</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllLikedSongs(x => !x)}
+                {publicPlaylists.length > 0 && (
+                    <div className="playlistsScroll">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Public Playlists</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllPlaylists(x => !x)}
                             >
-                            {showAllLikedSongs ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="verticalWrapper">
-                        {displayedRecentLikedSongs}
-                    </div>
-                </div>
-
-                <div className="followersScroll">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Followers</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllFollowers(x => !x)}
-                        >
-                            {showAllFollowers ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="carouselWrapper">
-                        <div className="carousel">
-                            {displayedFollowers}
+                                {showAllPlaylists ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="carouselWrapper">
+                            <div className="carousel">
+                                {displayedPlaylists}
+                            </div>
                         </div>
                     </div>
-                </div>
+                )}
 
-                <div className="followersScroll">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Following</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllFollowing(f => !f)}
-                        >
-                            {showAllFollowing ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="carouselWrapper">
-                        <div className="carousel">
-                            {displayedFollowing}
+                {topArtists.length > 0 && (
+                    <div className="playlistsScroll">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Top Artists this month</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllArtists(f => !f)}
+                            >
+                                {showAllArtists ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="carouselWrapper">
+                            <div className="carousel">
+                                {displayedArtists}
+                            </div>
                         </div>
                     </div>
-                </div>
+                )}
 
-                <div className="playlistsScroll">
-                    <div className="recommendHeader">
-                        <span className="sectionTitle">Achievements</span>
-                        <button
-                            className="seeAll"
-                            onClick={() => setShowAllBadges(f => !f)}
-                        >
-                            {showAllBadges ? 'show less' : 'see all'}
-                        </button>
-                    </div>
-                    <div className="carouselWrapper">
-                        <div className="carousel">
-                            {displayedAchievements}
+                {topTracks.length > 0 && (
+                    <div className="verticalSection">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Top tracks this month</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllTracks(f => !f)}     // ← ALTERAÇÃO
+                            >
+                                {showAllTracks ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="verticalWrapper">
+                            {displayedTopTracks}
                         </div>
                     </div>
-                </div>
+                )}
+
+                {likedPlaylists.length > 0 && (
+                    <div className="playlistsScroll">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Recently Liked Playlists</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllLikedPlaylists(x => !x)}
+                            >
+                                {showAllLikedPlaylists ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="carouselWrapper">
+                            <div className="carousel">
+                                {displayedLikedPlaylists}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {recentLikedSongs.length > 0 && (
+                    <div className="verticalSection">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Recently Liked Songs</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllLikedSongs(x => !x)}
+                            >
+                                {showAllLikedSongs ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="verticalWrapper">
+                            {displayedRecentLikedSongs}
+                        </div>
+                    </div>
+                )}
+
+                {followersList.length > 0 && (
+                    <div className="followersScroll">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Followers</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllFollowers(x => !x)}
+                            >
+                                {showAllFollowers ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="carouselWrapper">
+                            <div className="carousel">
+                                {displayedFollowers}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {followingList.length > 0 && (
+                    <div className="followersScroll">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Following</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllFollowing(f => !f)}
+                            >
+                                {showAllFollowing ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="carouselWrapper">
+                            <div className="carousel">
+                                {displayedFollowing}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {achievements.length > 0 && (
+                    <div className="playlistsScroll">
+                        <div className="recommendHeader">
+                            <span className="sectionTitle">Achievements</span>
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllBadges(f => !f)}
+                            >
+                                {showAllBadges ? 'show less' : 'see all'}
+                            </button>
+                        </div>
+                        <div className="carouselWrapper">
+                            <div className="carousel">
+                                {displayedAchievements}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
-            </>
+        </>
     );
 }

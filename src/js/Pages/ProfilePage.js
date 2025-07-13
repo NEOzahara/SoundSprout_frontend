@@ -1,4 +1,4 @@
-import React, {useEffect, useLayoutEffect, useRef, useState, useCallback} from 'react';
+import React, {useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo} from 'react';
 import { useParams, useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom';
 import { FiEdit2, FiShare2, FiHeart, FiMessageCircle, FiList, FiMoreHorizontal } from 'react-icons/fi';
@@ -11,6 +11,7 @@ export default function ProfilePage() {
     const navigate = useNavigate();
 
     const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
+    const [profileUser, setProfileUser] = useState(user);
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
 
     const profileUsername = usernameParam || user?.username;
@@ -37,34 +38,328 @@ export default function ProfilePage() {
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, [showDropdown, handleClickOutside]);
 
+    useEffect(() => {
+        // busca dados do perfil (mesmo que seja o próprio)
+        api.get(`/utilizadores/${profileUsername}`)
+            .then(({ data }) => {
+                setProfileUser(data);
+            })
+            .catch(err => {
+                console.error('Erro a carregar perfil:', err);
+                // fallback: se falhar, mantem o logged-in
+                setProfileUser(user);
+            });
+    }, [profileUsername]);
 
     // Suporte futuro: podes ir buscar o utilizador autenticado da store/context aqui
     // const loggedUser = getUserFromContextOrStore() || { username: "LoggedInUser" }
     // const showUsername = username || loggedUser.username;
 
     const showUsername = profileUsername;
-    const [stats, setStats] = useState({
-        playlists:  0,
-        songs:      0,
-        followers:  0,
-        following:  0
-    });
+    const [stats, setStats] = useState({playlists: 0, songs: 0, followers: 0, following: 0 });
+
+    const [topArtists, setTopArtists] = useState([]);
+    const [showAllArtists, setShowAllArtists] = useState(false);
+
+    const [topTracks, setTopTracks] = useState([]);
+    const [showAllTracks, setShowAllTracks] = useState(false);
+
+    const [likedPlaylists, setLikedPlaylists] = useState([]);
+    const [showAllLikedPlaylists, setShowAllLikedPlaylists] = useState(false);
+
+    const [recentLikedSongs, setRecentLikedSongs] = useState([]);
+    const [showAllLikedSongs, setShowAllLikedSongs] = useState(false);
+
+    const [followersList, setFollowersList] = useState([]);
+    const [showAllFollowers, setShowAllFollowers] = useState(false);
+
+    const [followingList, setFollowingList] = useState([]);
+    const [showAllFollowing, setShowAllFollowing] = useState(false);
+
+    const [achievements, setAchievements] = useState([]);
+    const [showAllBadges, setShowAllBadges] = useState(false);
 
     useEffect(() => {
-             api.get(`/utilizadores/${profileUsername}/stats`)
-               .then(({ data }) => setStats({
-                 playlists: data.playlists,
-                 songs:     data.songs,
-                 followers: data.followers,
-                 following: data.following
-               }))
-               .catch(err => console.error('Error fetching stats:', err));
-        }, [profileUsername]);
+        api.get(`/utilizadores/${profileUsername}/stats`)
+            .then(({ data }) => setStats({
+                playlists: data.playlists,
+                songs:     data.songs,
+                followers: data.followers,
+                following: data.following
+            }))
+            .catch(err => console.error('Error fetching stats:', err));
+    }, [profileUsername]);
 
+    const [publicPlaylists, setPublicPlaylists] = useState([]);
+    useEffect(() => {
+        let isMounted = true;
+        api.get(`/playlists/utilizador/${profileUsername}`)
+            .then(({ data }) => {
+                if (!isMounted) return;
+                // filtrar só as públicas
+                setPublicPlaylists(data.filter(pl => pl.privacidade === 'publico'));
+            })
+            .catch(err => console.error('Erro ao carregar playlists:', err));
+        return () => { isMounted = false };
+    }, [profileUsername]);
 
-    const profileUrl = window.location.href
+    // Carrega Top Artists
+    useEffect(() => {
+        let isMounted = true;
+        api.get(`/utilizadores/${profileUsername}/top-artists-month`, {
+            params: { limit: showAllArtists ? null : 6 }
+        })
+            .then(({ data }) => {
+                if (!isMounted) return;
+                setTopArtists(data);
+            })
+            .catch(err => console.error('Erro a carregar Top Artists:', err));
+        return ()=>{ isMounted = false };
+    }, [profileUsername, showAllArtists]);
+
+    // ← NOVO useEffect para Top Tracks
+    useEffect(() => {
+        let isMounted = true;
+        api.get(`/utilizadores/${profileUsername}/top-tracks-month`, {
+            params: { limit: showAllTracks ? null : 6 }
+        })
+            .then(({ data }) => {
+                if (!isMounted) return;
+                setTopTracks(data);
+            })
+            .catch(err => console.error('Erro a carregar Top Tracks:', err));
+        return () => { isMounted = false };
+    }, [profileUsername, showAllTracks]);
+
+    useEffect(() => {
+        let isMounted = true;
+        api.get(`/utilizadores/${profileUsername}/recent-playlists-month`, {
+            params: { limit: showAllLikedPlaylists ? null : 6 }
+        })
+            .then(({ data }) => {
+                if (!isMounted) return;
+                setLikedPlaylists(data);
+            })
+            .catch(err => console.error('Erro a carregar Recently Liked Playlists:', err));
+        return () => { isMounted = false };
+    }, [profileUsername, showAllLikedPlaylists]);
+
+    useEffect(() => {
+        let isMounted = true;
+        api.get(`/utilizadores/${profileUsername}/recent-songs-month`, {
+            params: { limit: showAllLikedSongs ? null : 6 }
+        })
+            .then(({ data }) => { if (isMounted) setRecentLikedSongs(data); })
+            .catch(err => console.error('Erro a carregar Recently Liked Songs:', err));
+        return () => { isMounted = false; };
+    }, [profileUsername, showAllLikedSongs]);
+
+    useEffect(() => {
+        let isMounted = true;
+        api.get(`/utilizadores/${profileUsername}/followers`, {
+            params: { limit: showAllFollowers ? null : 6 }
+        }).then(({ data }) => {
+            if (!isMounted) return;
+            setFollowersList(data);
+        }).catch(err => console.error('Erro a carregar Followers:', err));
+        return () => { isMounted = false; };
+    }, [profileUsername, showAllFollowers]);
+
+    useEffect(() => {
+        let isMounted = true;
+        api.get(`/utilizadores/${profileUsername}/following`, {
+            params: { limit: showAllFollowing ? null : 6 }
+        })
+            .then(({ data }) => { if (isMounted) setFollowingList(data); })
+            .catch(err => console.error('Erro a carregar Following:', err));
+        return () => { isMounted = false; };
+    }, [profileUsername, showAllFollowing]);
+
+    useEffect(() => {
+            let isMounted = true;
+            api.get(`/utilizadores/${profileUsername}/achievements`)
+               .then(({ data }) => {
+                   console.log("achievements from API:", data);
+                   if (isMounted) setAchievements(data);
+               })
+               .catch(err => console.error('Erro a carregar achievements:', err));
+            return () => { isMounted = false; };
+          }, [profileUsername]);
+
+    const [showAllPlaylists, setShowAllPlaylists] = useState(false);
+
+    // ← ADDED: prepara apenas as 6 iniciais ou todas, conforme flag
+    const displayedPlaylists = useMemo(() => {
+        const slice = showAllPlaylists
+            ? publicPlaylists
+            : publicPlaylists.slice(0, 6);
+        return slice.map(pl => (
+            <div
+                key={pl.nome}
+                className="coverCard"
+                onClick={() =>
+                    navigate(
+                        `/playlist/${encodeURIComponent(profileUsername)}/${encodeURIComponent(pl.nome)}`
+                    )
+                }
+            >
+                <div
+                    className="coverPlaceholder"
+                    style={{
+                        backgroundImage: pl.foto
+                            ? `url(${baseUrl}${pl.foto.startsWith('/') ? '' : '/'}${pl.foto})`
+                            : undefined
+                    }}
+                />
+                <span className="coverTitle">{pl.nome}</span>
+            </div>
+        ));
+    }, [publicPlaylists, showAllPlaylists, profileUsername, baseUrl, navigate]);
+
+    const displayedArtists = useMemo(() => {
+        return topArtists.map(art => (
+            <div
+                key={art.username}
+                className="coverCard artistCard"
+                onClick={() => navigate(`/profile/${encodeURIComponent(art.username)}`)}
+            >
+                <div
+                    className="coverPlaceholder"
+                    style={{
+                        backgroundImage: art.foto
+                            ? `url(${baseUrl}${art.foto.startsWith('/')?'':'/'}${art.foto})`
+                            : undefined
+                }}
+                />
+                <span className="coverTitle">{art.username}</span>
+            </div>
+        ));
+    }, [topArtists, baseUrl, navigate]);
+
+    const displayedTopTracks = useMemo(() => {
+        return topTracks.map((track, idx) => (
+            <div key={track.id} className="trackRow verticalRow">
+                <span className="trackNumber">{idx + 1}</span>
+                <div
+                    className="coverPlaceholderSmall"
+                    style={{
+                        backgroundImage: track.foto
+                            ? `url(${baseUrl}${track.foto.startsWith('/')?'':'/'}${track.foto})`
+                            : undefined,
+                        backgroundSize: 'cover',      // para ver a imagem toda
+                        backgroundPosition: 'center'
+                    }}
+                />
+                <div className="trackInfoSmall">
+                    <span className="smallTitle"
+                          onClick={() => console.log(track.titulo)}>
+                        {track.titulo}
+                    </span>
+                    <span
+                        className="smallArtist"
+                        onClick={() => console.log(track.username)}
+                    >
+                        {track.username}
+                    </span>
+                </div>
+                <span className="smallListens">{track.plays}</span>
+            </div>
+        ));
+    }, [topTracks, baseUrl]);
+
+    const displayedLikedPlaylists = useMemo(() => {
+        return likedPlaylists.map(pl => (
+            <div
+                key={`${pl.creator_username}-${pl.playlist_name}`}
+                className="coverCard"
+                onClick={() => navigate(
+                    `/playlist/${encodeURIComponent(pl.creator_username)}/${encodeURIComponent(pl.playlist_name)}`
+                )}
+            >
+                <div
+                    className="coverPlaceholder"
+                    style={{
+                        backgroundImage: pl.playlist_photo
+                            ? `url(${baseUrl}${pl.playlist_photo.startsWith('/')?'':'/'}${pl.playlist_photo})`
+                            : undefined
+                }}
+                />
+                <span className="coverTitle">{pl.playlist_name}</span>
+            </div>
+        ));
+    }, [likedPlaylists, baseUrl, navigate]);
+
+    const displayedRecentLikedSongs = useMemo(() => {
+        return recentLikedSongs.map((track, idx) => (
+            <div key={track.id} className="trackRow verticalRow">
+                <span className="trackNumber">{idx + 1}</span>
+                <div
+                    className="coverPlaceholderSmall"
+                    style={{
+                        backgroundImage: track.cover
+                            ? `url(${baseUrl}${track.cover.startsWith('/')?'':'/'}${track.cover})`
+                            : undefined,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center'
+                }}
+                />
+                <div className="trackInfoSmall">
+                    <span className="smallTitle">{track.titulo}</span>
+                    <span className="smallArtist">{track.artist_username}</span>
+                </div>
+            </div>
+        ));
+    }, [recentLikedSongs, baseUrl]);
+
+    const displayedFollowers = useMemo(() =>                     // ADDED
+            followersList.map(f => (
+                <div key={f.follower_username} className="coverCard followerCard">
+                    <div
+                        className="followerPlaceholder"
+                        style={{
+                            backgroundImage: f.follower_photo
+                                ? `url(${baseUrl}${f.follower_photo.startsWith('/')?'':'/'}${f.follower_photo})`
+                                : undefined
+                        }}
+                    />
+                    <span className="coverTitle">{f.follower_username}</span>
+                </div>
+            ))
+        , [followersList, baseUrl]);
+
+    const displayedFollowing = useMemo(() => {
+        const slice = showAllFollowing ? followingList : followingList.slice(0,6);
+        return slice.map(u => (
+            <div
+                key={u.following_username}
+                className="coverCard followerCard"
+                onClick={() => navigate(`/profile/${encodeURIComponent(u.following_username)}`)}
+            >
+                <div
+                    className="followerPlaceholder"
+                    style={{
+                        backgroundImage: u.following_photo
+                            ? `url(${baseUrl}${u.following_photo.startsWith('/')?'':'/'}${u.following_photo})`
+                            : undefined
+                    }}
+                />
+                <span className="coverTitle">{u.following_username}</span>
+            </div>
+        ));
+    }, [followingList, showAllFollowing, baseUrl, navigate]);
+
+    const displayedAchievements = useMemo(() => {
+            const slice = showAllBadges ? achievements : achievements.slice(0, 6);
+            return slice.map(b => (
+                <div key={`${b.badge_name}-${b.badge_tier}`} className="coverCard">
+                    <div className={`coverPlaceholder achievementBadge ${b.badge_tier}`} />
+                    <span className="coverTitle">{b.badge_name}</span>
+                </div>
+            ));
+    }, [achievements, showAllBadges]);
+
     const { playlists, songs, followers, following } = stats;
-
+    const profileUrl = window.location.href;
     const copyLink = () => {
         navigator.clipboard.writeText(profileUrl)
             .then(() => console.log('Link copied!'))
@@ -140,12 +435,25 @@ export default function ProfilePage() {
 
     // Playlists (a substituir por dados da BD mais tarde)
     const playlistsList = Array.from({ length: 7 }, (_, i) => `Playlist ${i+1}`);
-    const renderPlaylists = () => playlistsList.map((name, i) => (
-        <div key={i} className="coverCard">
-            <div className="coverPlaceholder" onClick={() => console.log(name)} />
-            <span className="coverTitle" onClick={() => console.log(name)}>{name}</span>
+    const renderPlaylists = useMemo(() => publicPlaylists.map(pl => (
+        <div
+            key={pl.nome}
+            className="coverCard"
+            onClick={() => navigate(
+                `/playlist/${encodeURIComponent(profileUsername)}/${encodeURIComponent(pl.nome)}`)}
+        >
+            <div
+                className="coverPlaceholder"
+                style={{
+                    backgroundImage: pl.foto
+                        ? `url(${baseUrl}${pl.foto.startsWith('/') ? '' : '/'}${pl.foto})`
+                        : undefined
+                }}
+            />
+            <span className="coverTitle">{pl.nome}</span>
         </div>
-    ));
+    )), [publicPlaylists, profileUsername, baseUrl, navigate]);
+
 
     // Playlists (a substituir por dados da BD mais tarde)
     const artistsList = Array.from({ length: 7 }, (_, i) => `Artist ${i+1}`);
@@ -165,7 +473,7 @@ export default function ProfilePage() {
         </div>
     ));
 
-    const followersList = Array.from({ length: 7 }, (_, i) => `Follower ${i+1}`);
+    //const followersList = Array.from({ length: 7 }, (_, i) => `Follower ${i+1}`);
     const renderFollowers = () => followersList.map((name, i) => (
             <div key={i} className="coverCard followerCard">
                 <div className="followerPlaceholder" onClick={() => console.log(name)}/>
@@ -173,7 +481,7 @@ export default function ProfilePage() {
             </div>
         ));
 
-    const followingList = Array.from({ length: 7 }, (_, i) => `Following ${i+1}`);
+    //const followingList = Array.from({ length: 7 }, (_, i) => `Following ${i+1}`);
     const renderFollowing = () => followingList.map((name, i) => (
         <div key={i} className="coverCard followerCard">
             <div className="followerPlaceholder" onClick={() => console.log(name)}/>
@@ -189,14 +497,6 @@ export default function ProfilePage() {
         </div>
     ));
 
-    const topTracks = [
-        { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
-        { title: 'Song B', artist: 'Artist B', duration: '04:12', listens: '980K' },
-        { title: 'Song C', artist: 'Artist C', duration: '03:31', listens: '292K' },
-        { title: 'Song D', artist: 'Artist D', duration: '04:44', listens: '1.4K' },
-        { title: 'Song E', artist: 'Artist E', duration: '05:11', listens: '431K' },
-        // … etc …
-    ];
     const renderTopTracks = () =>
         topTracks.map((item, idx) => (
             <div key={idx} className="trackRow verticalRow">
@@ -389,7 +689,7 @@ export default function ProfilePage() {
                             className="profileAvatar"
                             style={{
                                 backgroundImage: user?.foto
-                                    ? `url(${baseUrl}${user.foto.startsWith('/') ? '' : '/'}${user.foto})`
+                                    ? `url(${baseUrl}${profileUser.foto.startsWith('/') ? '' : '/'}${profileUser.foto})`
                                     : undefined
                             }}
                         />
@@ -478,11 +778,16 @@ export default function ProfilePage() {
                 <div className="playlistsScroll">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Public Playlists</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllPlaylists(x => !x)}
+                        >
+                            {showAllPlaylists ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">
-                            {renderPlaylists()}
+                            {displayedPlaylists}
                         </div>
                     </div>
                 </div>
@@ -490,11 +795,16 @@ export default function ProfilePage() {
                 <div className="playlistsScroll">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Top Artists this month</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllArtists(f => !f)}
+                        >
+                            {showAllArtists ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">
-                            {renderArtists()}
+                            {displayedArtists}
                         </div>
                     </div>
                 </div>
@@ -502,21 +812,31 @@ export default function ProfilePage() {
                 <div className="verticalSection">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Top tracks this month</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllTracks(f => !f)}     // ← ALTERAÇÃO
+                        >
+                            {showAllTracks ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="verticalWrapper">
-                        {renderTopTracks()}
+                        {displayedTopTracks}
                     </div>
                 </div>
 
                 <div className="playlistsScroll">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Recently Liked Playlists</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllLikedPlaylists(x => !x)}
+                        >
+                            {showAllLikedPlaylists ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">
-                            {renderLikedPlaylists()}
+                            {displayedLikedPlaylists}
                         </div>
                     </div>
                 </div>
@@ -524,21 +844,31 @@ export default function ProfilePage() {
                 <div className="verticalSection">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Recently Liked Songs</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllLikedSongs(x => !x)}
+                            >
+                            {showAllLikedSongs ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="verticalWrapper">
-                        {renderRecentTracks()}
+                        {displayedRecentLikedSongs}
                     </div>
                 </div>
 
                 <div className="followersScroll">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Followers</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllFollowers(x => !x)}
+                        >
+                            {showAllFollowers ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">
-                            {renderFollowers()}
+                            {displayedFollowers}
                         </div>
                     </div>
                 </div>
@@ -546,11 +876,16 @@ export default function ProfilePage() {
                 <div className="followersScroll">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Following</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllFollowing(f => !f)}
+                        >
+                            {showAllFollowing ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">
-                            {renderFollowing()}
+                            {displayedFollowing}
                         </div>
                     </div>
                 </div>
@@ -558,11 +893,16 @@ export default function ProfilePage() {
                 <div className="playlistsScroll">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Achievements</span>
-                        <button className="seeAll">see all</button>
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllBadges(f => !f)}
+                        >
+                            {showAllBadges ? 'show less' : 'see all'}
+                        </button>
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">
-                            {renderAchievements()}
+                            {displayedAchievements}
                         </div>
                     </div>
                 </div>

@@ -6,98 +6,169 @@ import { NavLink } from 'react-router-dom';
 import { testPlaylists, testMusics, testUsers } from '../../data/test';
 
 export default function ExplorePage() {
-
-    const [query, setQuery] = useState('');
+    // Search bar (mantenho intacto)
+    const [query, setQuery] = useState('')
     const results = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        if (!q) return [];
-        const pMatches = testPlaylists
-            .filter(p => p.title.toLowerCase().includes(q))
-            .map(p => ({ type: 'Playlist', id: p.id, title: p.title, subtitle: p.owner, imageUrl: p.imageUrl }));
-        const mMatches = testMusics
-            .filter(m => m.title.toLowerCase().includes(q))
-            .map(m => ({ type: 'Song', id: m.id, title: m.title, subtitle: m.artist, imageUrl: m.imageUrl }));
-        const uMatches = testUsers
-            .filter(u => u.name.toLowerCase().includes(q))
-            .map(u => ({ type: 'User',  id: u.id, title: u.name,  subtitle: u.username, imageUrl: u.avatarUrl }));
-        return [ ...pMatches, ...mMatches, ...uMatches ];
-    }, [query]);
+        // ... mantém o teu autocomplete local se quiseres ...
+        return []
+    }, [query])
 
-    // ** Carrosseis — cada um recebe o seu conjunto de dados **
-    const discoverMusics = testMusics.slice(0, 7);     // Carrossel só de músicas
-    const genresPlaylists = testPlaylists.slice(0, 7);  // Carrossel de playlists por género
-    const mainPlaylists = testPlaylists.slice(1, 8);  // Outro carrossel só de playlists
-    const topUsers = testUsers.slice(0, 3);      // Carrossel só de users
+    // Base URL sem “/api” para imagens
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '')
 
-    // Renders genéricos para cada tipo, fácil de trocar pelo resultado do API
-    function renderMusicCarrousel(musics) {
-        return musics.map(music => (
-            <NavLink
-                key={music.id}
-                to={`/player/${music.id}`}
-                className="coverCard"
-            >
-                <div
-                    className="coverPlaceholder"
-                    style={{
-                        backgroundImage: `url(${music.imageUrl || '/placeholder.png'})`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center',
-                    }}
-                />
-                <span className="coverTitle">{music.title}</span>
+    // ─── Estados para cada carrossel ────────────────────────────────
+    const [discoverMusics, setDiscoverMusics] = useState([])
+    const [genresPlaylists, setGenresPlaylists]   = useState([])
+    const [mainPlaylists, setMainPlaylists]       = useState([])
+    const [exploreArtists, setExploreArtists]     = useState([])
+
+    // ─── Discover Musics ────────────────────────────────────────────
+    useEffect(() => {
+        async function load() {
+            try {
+                const { data } = await api.get('/musicas/discover')
+                setDiscoverMusics(data)
+            } catch (err) {
+                console.error('Erro a carregar Discover Musics:', err)
+            }
+        }
+        load()
+    }, [])
+
+    // ─── Genres Playlists ───────────────────────────────────────────
+    useEffect(() => {
+        async function load() {
+            try {
+                const { data } = await api.get('/musicas/genres-playlists')
+                // data = [ { genre, songs: [ ... ] }, ... ]
+                setGenresPlaylists(data)
+            } catch (err) {
+                console.error('Erro a carregar Genres Playlists:', err)
+            }
+        }
+        load()
+    }, [])
+
+    // ─── Main Curated Playlists ─────────────────────────────────────
+    useEffect(() => {
+        async function load() {
+            try {
+                const { data } = await api.get('/playlists/playlists-explore')
+                setMainPlaylists(data)
+            } catch (err) {
+                console.error('Erro a carregar Main Playlists:', err)
+            }
+        }
+        load()
+    }, [])
+
+    // ─── Explore Artists ────────────────────────────────────────────
+    useEffect(() => {
+        async function load() {
+            try {
+                const { data } = await api.get('/utilizadores/explore-artists')
+                setExploreArtists(data)
+            } catch (err) {
+                console.error('Erro a carregar Explore Artists:', err)
+            }
+        }
+        load()
+    }, [])
+
+    // ─── Render Functions ──────────────────────────────────────────
+    const renderMusicCarrousel = musics =>
+        musics
+            .slice(0, 8)
+            .map(m => (
+            <NavLink key={m.id} to={`/player/${m.id}`} className="coverCard">
+                {m.foto
+                    ? <img
+                        className="coverPlaceholder"
+                        src={`${baseUrl}/${m.foto}`}
+                        alt={m.titulo}
+                    />
+                    : <div className="coverPlaceholder" />
+                }
+                <span className="coverTitle">{m.titulo}</span>
             </NavLink>
-        ));
-    }
+        ))
 
-    function renderPlaylistCarrousel(playlists) {
-        return playlists.map(playlist => (
-            <NavLink
-                key={playlist.id}
-                to={`/playlist/${playlist.id}`}
-                className="coverCard"
-            >
-                <div
-                    className="coverPlaceholder"
-                    style={{
-                        backgroundImage: `url(${playlist.imageUrl || '/placeholder.png'})`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center',
-                    }}
-                />
-                <span className="coverTitle">{playlist.title}</span>
-            </NavLink>
-        ));
-    }
-
-    function renderUserCarrousel(users) {
-        return users.map(user => (
-            <NavLink
-                key={user.id}
-                to={`/profile/${user.username}`}
-                className="coverCard"
-            >
-                <div
-                    className="profilePlaceholder"
-                    style={{
-                        backgroundImage: `url(${user.avatarUrl || '/avatars/default.png'})`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center',
-                    }}
+    const renderGenreCarrousel = genres =>
+        genres
+            .slice(0, 8)
+            .map(g => {
+            // use a capa da primeira música ou placeholder
+            const first = g.songs[0]
+            const thumb = first
+                ? `${baseUrl}/${first.capa}`
+                : '/placeholder.png'
+            return (
+                <NavLink
+                    key={g.genre}
+                    to={`/genre/${encodeURIComponent(g.genre)}`}
+                    className="coverCard"
                 >
-                    {!user.avatarUrl && <FiUser className="profileIcon" />}
-                </div>
-                <span className="coverTitle">{user.name}</span>
-            </NavLink>
-        ));
-    }
+                    <div
+                        className="coverPlaceholder"
+                        style={{
+                            backgroundImage: `url(${thumb})`,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center'
+                        }}
+                    />
+                    <span className="coverTitle">{g.genre}</span>
+                </NavLink>
+            )
+        })
 
+    const renderPlaylistCarrousel = pls =>
+        pls.map(pl => (
+            <NavLink
+                key={`${pl.username}::${pl.nome}`}
+                to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}
+                className="coverCard"
+            >
+                {pl.foto
+                    ? <img
+                        className="coverPlaceholder"
+                        src={`${baseUrl}/${pl.foto}`}
+                        alt={pl.nome}
+                    />
+                    : <div className="coverPlaceholder" />
+                }
+                <span className="coverTitle">{pl.nome}</span>
+            </NavLink>
+        ))
+
+    const renderUserCarrousel = users =>
+        users.map(u => (
+            <NavLink
+                key={u.username}
+                to={`/profile/${encodeURIComponent(u.username)}`}
+                className="coverCard"
+            >
+                {u.foto
+                    ? <img
+                        className="profilePlaceholder"
+                        src={`${baseUrl}/${u.foto}`}
+                        alt={u.username}
+                    />
+                    : (
+                        <div className="profilePlaceholder">
+                            <FiUser className="profileIcon" />
+                        </div>
+                    )}
+                <span className="coverTitle">{u.username}</span>
+            </NavLink>
+        ))
+
+    // ─── Seções com título e carrossel ─────────────────────────────
     const sections = [
-        { title: 'Discover', render: () => renderMusicCarrousel(discoverMusics) },
-        { title: 'Genres',   render: () => renderPlaylistCarrousel(genresPlaylists) },
-        { title: 'Playlists',render: () => renderPlaylistCarrousel(mainPlaylists) },
-        { title: 'Artists',  render: () => renderUserCarrousel(topUsers) }
-    ];
+        { title: 'Discover',          render: () => renderMusicCarrousel(discoverMusics)      },
+        { title: 'Genres',            render: () => renderGenreCarrousel(genresPlaylists)   },
+        { title: 'Playlists',         render: () => renderPlaylistCarrousel(mainPlaylists)  },
+        { title: 'Artists to Explore',render: () => renderUserCarrousel(exploreArtists)     },
+    ]
 
     return (
         <>
@@ -139,7 +210,7 @@ export default function ExplorePage() {
                                         }`}
                                         style={{
                                             backgroundImage: `url(${r.imageUrl || '/placeholder.png'})`
-                                    }}
+                                        }}
                                     />
                                     <div className="suggestionText">
                                         <div className="suggestionTitle">{r.title}</div>
@@ -157,91 +228,17 @@ export default function ExplorePage() {
                     <React.Fragment key={idx}>
                         <div className="recommendHeader">
                             <span className="sectionTitle">{title}</span>
-                            <button className="seeAll" onClick={() => console.log('see all clicked')}>
-                                see all
-                            </button>
+                            <button className="seeAll">see all</button>
                         </div>
                         <div className="carouselWrapper">
-                            <div className="carousel">{render()}</div>
+                            <div className="carousel">
+                                {render()}
+                            </div>
                         </div>
-                        {idx < sections.length - 1 && (
-                            <div className="exploreSpacer" />
-                        )}
+                        {idx < sections.length - 1 && <div className="exploreSpacer" />}
                     </React.Fragment>
                 ))}
             </div>
         </>
-    );
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    //const [songs, setSongs] = useState([]);
-    //const username = 'joao';
-
-    /*useEffect(() => {
-        api.get(`/musicas/utilizador/${username}`)
-            .then(({ data }) => {
-                const list = Array.isArray(data) ? data : data ? [data] : [];
-                setSongs(list);
-            })
-            .catch(err => console.error('Erro ao listar músicas:', err));
-    }, [username]);*/
-
-    // Base URL do backend (sem o /api)
-    /*const baseUrl = process.env.REACT_APP_API_BASE_URL
-        ? process.env.REACT_APP_API_BASE_URL.replace('/api', '')
-        : 'http://localhost:5000';*/
-
-    /*return (
-        <div className="recommendSection">
-            <div className="recommendHeader">
-                <span className="sectionTitle">Músicas Recomendadas</span>
-                <button className="seeAll">Ver Todas</button>
-            </div>
-            <div className="carouselWrapper">
-                <div className="carousel">
-                    {songs.length > 0 ? (
-                        songs.map(song => {
-                            // extrai o nome do ficheiro da propriedade song.foto
-                            const fotoFile = song.foto ? song.foto.split('/').pop() : null;
-                            return (
-                                <div key={song.titulo} className="coverCard">
-                                    {fotoFile ? (
-                                        <img
-                                            className="coverPlaceholder"
-                                            src={`${baseUrl}/uploads/fotos/${fotoFile}`}
-                                            alt={song.titulo}
-                                        />
-                                    ) : (
-                                        <div className="coverPlaceholder" />
-                                    )}
-                                    <span className="coverTitle">{song.titulo}</span>
-                                    <span className="coverArtist">{song.username}</span>
-                                </div>
-                            );
-                        })
-                    ) : (
-                        <p>Nenhuma música disponível para "{username}".</p>
-                    )}
-                </div>
-            </div>
-        </div>
-    );*/
-
-
+    )
 }

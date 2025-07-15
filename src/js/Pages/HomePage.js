@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import Layout from '../LoggedInComponents/Layout';
+import { NavLink } from 'react-router-dom';
 import '../../css/Pages/Home.css';
 import api from "../services/api";
 
@@ -9,13 +9,24 @@ export default function HomePage() {
         ? process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '')
         : 'http://localhost:5000'
 
-    const ITEMS_PER_SECTION = 8
+    // controla quantos itens buscar de cada secção
+    const ITEMS_PER_SECTION = 20;
+
+    // controla quantos itens mostrar antes e depois de "see all"
+    const INITIAL_VISIBLE = 6;
+    const MAX_VISIBLE     = 20;
 
     // ─── Estados das secções ─────────────────────────────────────────
-    const [recommended,    setRecommended]    = useState([])
-    const [topPlaylists,   setTopPlaylists]   = useState([])
-    const [topArtists,     setTopArtists]     = useState([])
-    const [favArtists,     setFavArtists]     = useState([])
+    const [recommended,    setRecommended]    = useState([]);
+    const [topPlaylists,   setTopPlaylists]   = useState([]);
+    const [topArtists,     setTopArtists]     = useState([]);
+    const [favArtists,     setFavArtists]     = useState([]);
+
+    // ─── Flags de "ver tudo" ─────────────────────────────────────────
+    const [showAllRec,   setShowAllRec]   = useState(false);
+    const [showAllPL,    setShowAllPL]    = useState(false);
+    const [showAllTA,    setShowAllTA]    = useState(false);
+    const [showAllFA,    setShowAllFA]    = useState(false);
 
     // ─── Fetch Recommended Songs ──────────────────────────────────────
     useEffect(() => {
@@ -73,91 +84,105 @@ export default function HomePage() {
         loadFavArtists()
     }, [])
 
+    // ─── Render Helpers ───────────────────────────────────────────────
+    const visibleItems = (items, showAll) => {
+        const count = showAll
+            ? Math.min(items.length, MAX_VISIBLE)
+            : INITIAL_VISIBLE;
+        return items.slice(0, count);
+    };
+
     // ─── Handlers de clique (placeholders) ───────────────────────────
-    const handleSongClick     = m  => console.log(`Song ${m.id} clicado!`)
     const handlePlaylistClick = pl => console.log(`Playlist ${pl.nome} clicada!`)
     const handleArtistClick   = ar => console.log(`Artist ${ar.username} clicado!`)
 
     // ─── Render Recommended Songs ────────────────────────────────────
     const renderRecommended = () =>
-        recommended.map(m => (
+        visibleItems(recommended, showAllRec).map(m => (
             <div key={m.id} className="coverCard">
-                {m.foto
-                    ? <img
-                        className="coverPlaceholder"
-                        src={`${baseUrl}/${m.foto}`}
-                        alt={`Capa ${m.titulo}`}
-                        onClick={() => handleSongClick(m)}
-                    />
-                    : <div className="coverPlaceholder" onClick={() => handleSongClick(m)} />
-                }
-                <span className="coverTitle" onClick={() => handleSongClick(m)}>
-          {m.titulo}
-        </span>
-                <span className="coverArtist">
-          por {m.username}
-        </span>
+                <NavLink to={`/player/${m.id}`}>
+                    {m.foto
+                        ? <img
+                            className="coverPlaceholder"
+                            src={`${baseUrl}/${m.foto}`}
+                            alt={`Capa ${m.titulo}`}
+                        />
+                        : <div className="coverPlaceholder"/>
+                    }
+                </NavLink>
+                <NavLink to={`/player/${m.id}`} className="coverTitle">
+                    {m.titulo}
+                </NavLink>
+
+                <NavLink to={`/profile/${m.username}`} className="coverArtist">
+                    por {m.username}
+                </NavLink>
             </div>
         ))
 
     // ─── Render Top Playlists ────────────────────────────────────────
     const renderTopPlaylists = () =>
-        topPlaylists.map(pl => (
+        visibleItems(topPlaylists, showAllPL).map(pl => (
             <div key={`${pl.username}::${pl.nome}`} className="coverCard">
-                {pl.foto
-                    ? <img
-                        className="coverPlaceholder"
-                        src={`${baseUrl}/${pl.foto}`}
-                        alt={`Capa ${pl.nome}`}
-                        onClick={() => handlePlaylistClick(pl)}
-                    />
-                    : <div className="coverPlaceholder" onClick={() => handlePlaylistClick(pl)} />
-                }
-                <span className="coverTitle" onClick={() => handlePlaylistClick(pl)}>
-          {pl.nome}
-        </span>
-                <span className="coverArtist">por {pl.username}</span>
+                <NavLink to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}>
+                    {pl.foto
+                        ? <img
+                            className="coverPlaceholder"
+                            src={`${baseUrl}/${pl.foto}`}
+                            alt={`Capa ${pl.nome}`}
+                        />
+                        : <div className="coverPlaceholder"/>
+                    }
+                </NavLink>
+                <NavLink to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`} className="coverTitle">
+                    {pl.nome}
+                </NavLink>
+                <NavLink to={`/profile/${pl.username}`} className="coverArtist">
+                    por {pl.username}
+                </NavLink>
             </div>
         ))
 
     // ─── Render Top Artists ──────────────────────────────────────────
     const renderTopArtists = () =>
-        topArtists.map(ar => (
+        visibleItems(topArtists, showAllTA).map(ar => (
             <div key={ar.username} className="coverCard">
-                {ar.foto
-                    ? <img
-                        className="coverPlaceholder"
-                        src={`${baseUrl}/${ar.foto}`}
-                        alt={`Foto de ${ar.username}`}
-                        onClick={() => handleArtistClick(ar)}
-                    />
-                    : <div className="coverPlaceholder" onClick={() => handleArtistClick(ar)} />
-                }
-                <span className="coverTitle" onClick={() => handleArtistClick(ar)}>
-          {ar.username}
-        </span>
-                <span className="coverInfo">
-          {Number(ar.totalviews).toLocaleString('pt-PT')} views
-        </span>
+                <NavLink to={`/profile/${encodeURIComponent(ar.username)}`}>
+                    {ar.foto
+                        ? <img
+                            className="coverPlaceholder"
+                            src={`${baseUrl}/${ar.foto}`}
+                            alt={`Foto de ${ar.username}`}
+                        />
+                        : <div className="coverPlaceholder" onClick={() => handleArtistClick(ar)} />
+                    }
+                </NavLink>
+                <NavLink to={`/profile/${encodeURIComponent(ar.username)}`} className="coverTitle">
+                    {ar.username}
+                </NavLink>
+                <span className="coverArtist">
+                    {Number(ar.totalviews).toLocaleString('pt-PT')} views
+                </span>
             </div>
         ))
 
     // ─── Render Favorite Artists (só se >= 3) ───────────────────────
     const renderFavArtists = () =>
-        favArtists.map(ar => (
+        visibleItems(favArtists, showAllFA).map(ar => (
             <div key={ar.artist_username} className="coverCard">
-                {ar.artist_foto
-                    ? <img
-                        className="coverPlaceholder"
-                        src={`${baseUrl}/${ar.artist_foto}`}
-                        alt={`Avatar de ${ar.artist_username}`}
-                        onClick={() => handleArtistClick(ar)}
-                    />
+                <NavLink to={`/profile/${encodeURIComponent(ar.artist_username)}`}>
+                    {ar.artist_foto
+                        ? <img
+                            className="coverPlaceholder"
+                            src={`${baseUrl}/${ar.artist_foto}`}
+                            alt={`Avatar de ${ar.artist_username}`}
+                        />
                     : <div className="coverPlaceholder" onClick={() => handleArtistClick(ar)} />
-                }
-                <span className="coverTitle" onClick={() => handleArtistClick(ar)}>
-          {ar.artist_username}
-        </span>
+                    }
+                </NavLink>
+                <NavLink to={`/profile/${encodeURIComponent(ar.artist_username)}`} className="coverTitle">
+                    {ar.artist_username}
+                </NavLink>
             </div>
         ))
 
@@ -167,7 +192,14 @@ export default function HomePage() {
             <div className="recommendSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Recommended songs</span>
-                    <button className="seeAll">see all</button>
+                    {recommended.length > INITIAL_VISIBLE && (
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllRec(r => !r)}
+                        >
+                            {showAllRec ? 'show less' : 'see all'}
+                        </button>
+                    )}
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
@@ -182,7 +214,14 @@ export default function HomePage() {
             <div className="chartsSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Charts: Top Playlists</span>
-                    <button className="seeAll">see all</button>
+                    {topPlaylists.length > INITIAL_VISIBLE && (
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllPL(p => !p)}
+                        >
+                            {showAllPL ? 'show less' : 'see all'}
+                        </button>
+                    )}
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
@@ -197,7 +236,14 @@ export default function HomePage() {
             <div className="chartsSection artistsSection">
                 <div className="recommendHeader">
                     <span className="sectionTitle">Top Artists</span>
-                    <button className="seeAll">see all</button>
+                    {topArtists.length > INITIAL_VISIBLE && (
+                        <button
+                            className="seeAll"
+                            onClick={() => setShowAllTA(a => !a)}
+                        >
+                            {showAllTA ? 'show less' : 'see all'}
+                        </button>
+                    )}
                 </div>
                 <div className="carouselWrapper">
                     <div className="carousel">
@@ -213,7 +259,14 @@ export default function HomePage() {
                 <div className="chartsSection favArtistsSection">
                     <div className="recommendHeader">
                         <span className="sectionTitle">Favorite Artists</span>
-                        <button className="seeAll">see all</button>
+                        {favArtists.length > INITIAL_VISIBLE && (
+                            <button
+                                className="seeAll"
+                                onClick={() => setShowAllFA(f => !f)}
+                            >
+                                {showAllFA ? 'show less' : 'see all'}
+                            </button>
+                        )}
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">

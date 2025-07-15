@@ -18,7 +18,7 @@ export default function ProfilePage() {
     const profileUsername = usernameParam || user?.username;
     const isOwnProfile = profileUsername === user?.username;
 
-    const [showTestMode, setShowTestMode] = useState(false); //PARA TESTE
+    //const [showTestMode, setShowTestMode] = useState(false); //PARA TESTE
 
     useEffect(() => {
         if (!isOwnProfile) {
@@ -459,12 +459,12 @@ export default function ProfilePage() {
         }
     };
 
-    //const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
-    const isConfirmEnabled = !!donateValue &&
+    const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
+    /*const isConfirmEnabled = !!donateValue &&
         (showTestMode
                 ? parseFloat(donateValue) >= 1   // modo teste: mínimos 0.01€
                 : parseInt(donateValue)   >= 5      // modo normal: mínimo 5€
-        );
+        );*/
 
     const handleSubmitEdit = async e => {
         e.preventDefault();
@@ -630,7 +630,7 @@ export default function ProfilePage() {
                 </div>
 
 
-                    <button
+                {/*<button
                         className="testModeBtn"
                         type="button"
                         onClick={() => {
@@ -642,7 +642,7 @@ export default function ProfilePage() {
                             ? "🧪 Test Mode Active"
                             : "🧪 Test Donation"
                         }
-                    </button>
+                    </button>*/}
 
 
                 <div className="donateInputSection">

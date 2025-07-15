@@ -13,6 +13,7 @@ export default function PlayerPage () {
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, "");
 
     const [music, setMusic] = useState(null);
+    const [artistUser, setArtistUser] = useState({});
     const [audioDuration, setAudioDuration] = useState(0);
     const scrollRef = useRef(null);
 
@@ -68,6 +69,14 @@ export default function PlayerPage () {
                     coverUrl: data.foto,
                     streamPath: data.pathFicheiro,
                 });
+
+                api.get(`/utilizadores/${data.username}`)
+                    .then(({ data: u }) => {
+                        if (!mounted) return;
+                        setArtistUser(u);
+                    })
+                .catch(console.error);
+
             })
             .catch(console.error);
         return () => { mounted = false };
@@ -122,22 +131,18 @@ export default function PlayerPage () {
     };
     const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
 
-    /*const credits = [
-        { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
-        { title: 'Song B', artist: 'Artist B', duration: '04:12', listens: '980K' },
-        { title: 'Song C', artist: 'Artist B', duration: '03:31', listens: '292K' },
-        { title: 'Song D', artist: 'Artist C', duration: '04:44', listens: '1.4K' },
-        { title: 'Song E', artist: 'Artist D', duration: '05:11', listens: '431K' },
-        { title: 'Song F', artist: 'Artist E', duration: '03:45', listens: '775K' },
-        { title: 'Song G', artist: 'Artist E', duration: '03:22', listens: '324K' },
-        { title: 'Song H', artist: 'Artist E', duration: '05:37', listens: '2.0K' },
-        { title: 'Song I', artist: 'Artist F', duration: '04:15', listens: '858K' },
-        { title: 'Song J', artist: 'Artist G', duration: '05:28', listens: '925K' },
-        { title: 'Song K', artist: 'Artist H', duration: '04:57', listens: '540K' },
-        { title: 'Song L', artist: 'Artist I', duration: '03:36', listens: '716K' },
-
-        // ... mais items
-    ];*/
+    const handleConfirmDonate = async () => {
+        try {
+            const { data } = await api.post('/payments/checkout-session', {
+                amount: parseFloat(donateValue),
+                connectedAccountId: artistUser.stripe_account_id, // conta do artista
+                musicaId: id                                   // ID da música
+            });
+            window.location.href = data.url;
+        } catch (err) {
+            console.error('Erro ao iniciar Checkout:', err);
+        }
+    };
 
     const audioRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -301,12 +306,7 @@ export default function PlayerPage () {
                     <button
                         className="donateConfirmBtn"
                         type="button"
-                        onClick={() => {
-                            if (isConfirmEnabled) {
-                                alert(`Doou ${donateValue}€ para ${music.artist}`);
-                                handleCloseDonate();
-                            }
-                        }}
+                        onClick={handleConfirmDonate}
                         disabled={!isConfirmEnabled}
                     >
                         Confirm

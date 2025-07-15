@@ -1,4 +1,5 @@
 import React, {useEffect, useLayoutEffect, useRef, useState, useCallback} from 'react';
+import { useEffect as useEffectAlias } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { FiEdit2, FiShare2, FiBookmark, FiMoreHorizontal } from 'react-icons/fi';
@@ -10,6 +11,20 @@ export default function AchievementsPage() {
     const { username } = useParams();
     const navigate = useNavigate();
     const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
+
+    useEffect(() => {
+        const handleUserUpdated = () => {
+            const stored = localStorage.getItem('user');
+            if (stored) {
+                setUser(JSON.parse(stored));
+            }
+        };
+        window.addEventListener('userUpdated', handleUserUpdated);
+        return () => {
+            window.removeEventListener('userUpdated', handleUserUpdated);
+        };
+    }, []);
+
     const [isFollowing, setIsFollowing]           = useState(false);
     const [showDropdown, setShowDropdown]         = useState(false);
     const [showDonatePopup, setShowDonatePopup]   = useState(false);
@@ -25,7 +40,7 @@ export default function AchievementsPage() {
     const badgeRefs = useRef([]);
     const [overflowFlags, setOverflowFlags] = useState([false, false, false]);
 
-    const [showTestMode, setShowTestMode] = useState(false); //PARA TESTE
+    //const [showTestMode, setShowTestMode] = useState(false); //PARA TESTE
 
     const TIER_COLORS = {
         bronze: '#AA6C39',
@@ -233,13 +248,26 @@ export default function AchievementsPage() {
     const handleQuickDonate = v => setDonateValue(v.toString());
     const handleDonateInput = e => setDonateValue(e.target.value.replace(/[^0-9]/g, ''));
     const handleCloseDonate = () => { setShowDonatePopup(false); setDonateValue(''); };
-    //const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
 
-    const isConfirmEnabled = !!donateValue &&
+    const handleConfirmDonate = async () => {
+        try {
+            const { data } = await api.post('/payments/checkout-session', {
+                amount: parseFloat(donateValue),
+                connectedAccountId: profileUser.stripe_account_id,
+                destinatarioUsername: username
+            });
+            window.location.href = data.url;
+        } catch (err) {
+            console.error('Erro ao iniciar Checkout:', err);
+        }
+    };
+
+    const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
+    /*const isConfirmEnabled = !!donateValue &&
         (showTestMode
                 ? parseFloat(donateValue) >= 0.01   // modo teste: mínimos 0.01€
                 : parseInt(donateValue)   >= 5      // modo normal: mínimo 5€
-        );
+        );*/
 
     const owned_achievements = [
         { title: 'Achievement A', description: 'Achievement description A', date: '01/01', year: '2021', time: '20:53', tier: 'bronze', threshold: '50', currentState: '200'},
@@ -287,6 +315,7 @@ export default function AchievementsPage() {
 
                 {/* --- botão discreto para modo teste (0.01€) --- */}
 
+                {/*
                     <button
                         className="testModeBtn"
                         type="button"
@@ -299,7 +328,7 @@ export default function AchievementsPage() {
                             ? "🧪 Test Mode Active"
                             : "🧪 Test Donation"
                         }
-                    </button>
+                    </button> */}
 
 
                 <div className="donateInputSection">
@@ -328,12 +357,7 @@ export default function AchievementsPage() {
                     <button
                         className="donateConfirmBtn"
                         type="button"
-                        onClick={() => {
-                            if (isConfirmEnabled) {
-                                alert(`Doou ${donateValue}€ para ${username}`);
-                                handleCloseDonate();
-                            }
-                        }}
+                        onClick={handleConfirmDonate}
                         disabled={!isConfirmEnabled}
                     >
                         Confirm

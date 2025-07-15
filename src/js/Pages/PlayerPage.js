@@ -3,45 +3,105 @@ import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUs
 import '../../css/Pages/Player.css';
 import {NavLink, useParams, useLocation} from "react-router-dom";
 import { createPortal } from 'react-dom';
-import { musics } from '../../data/musics';
+import api from '../services/api';
 import { playlists } from '../../data/playlists';
 
 export default function PlayerPage () {
 
     const { songId } = useParams();
     const id = parseInt(songId, 10) || 0;
-    const music = musics.find(m => m.id === id) || musics[0];
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, "");
 
+    const [music, setMusic] = useState(null);
+    const [audioDuration, setAudioDuration] = useState(0);
     const scrollRef = useRef(null);
-    useEffect(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = 0;
-    }, [songId]);
 
     const location = useLocation();
     const showComments = useMemo(
-        () => new URLSearchParams(location.search).get('comments') === 'true',
+        () => new URLSearchParams(location.search).get("comments") === "true",
         [location.search]
     );
 
     const [activeTab, setActiveTab] = useState('More Like This');
 
-    // More menu states
     const [showMoreDropdown, setShowMoreDropdown] = useState(false);
-    const [showDonatePopup, setShowDonatePopup] = useState(false);
-    const [donateValue, setDonateValue] = useState("");
     const moreRef = useRef(null);
-
-    // Fecha dropdown ao clicar fora
-    const handleClickOutside = useCallback((event) => {
-        if (moreRef.current && !moreRef.current.contains(event.target)) {
+    const handleMoreClickOutside = useCallback(e => {
+        if (moreRef.current && !moreRef.current.contains(e.target)) {
             setShowMoreDropdown(false);
         }
     }, []);
+
+    const [showDonatePopup, setShowDonatePopup] = useState(false);
+    const [donateValue, setDonateValue] = useState("");
+    const handleDonateInput = (e) => {
+        const val = e.target.value.replace(/[^0-9]/g, "");
+        setDonateValue(val);
+    };
+
+    // === popup “Add to playlist” ===;
+    const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
+    const [filterText, setFilterText] = useState('');
+    const [selectedIds, setSelectedIds] = useState(new Set());
+    const addToRef = useRef(null);
+
+    useEffect(() => {
+        let mounted = true;
+        api.get(`/musicas/${id}`)
+            .then(({ data }) => {
+                if (!mounted) return;
+
+                const rawDate = data.dataPublicacao ?? data.datapublicacao;
+                const formattedDate = rawDate
+                    ? new Date(rawDate).toLocaleDateString()
+                    : '';
+
+                setMusic({
+                    title: data.titulo,
+                    artist: data.username,
+                    date: formattedDate,
+                    listens: data.visualizacoes,
+                    lyrics: data.letra,
+                    genres: [],
+                    participants: [],
+                    creditsInfo: [],
+                    coverUrl: data.foto,
+                    streamPath: data.pathFicheiro,
+                });
+            })
+            .catch(console.error);
+        return () => { mounted = false };
+    }, [id]);
+
+    // *** fetch similar tracks when music changes
+    const [similarTracks, setSimilarTracks] = useState([]);
+    useEffect(() => {
+        if (!music) return;
+        let mounted = true;
+        api.get(`/musicas/${id}/similar`)
+            .then(({ data }) => {
+                if (!mounted) return;
+                setSimilarTracks(data.map(m => ({
+                    id:      m.id,
+                    title:   m.titulo,
+                    artist:  m.username,
+                    listens: m.visualizacoes,
+                    cover:   m.foto,
+                })));
+            })
+            .catch(console.error);
+        return () => { mounted = false };
+    }, [id, music]);
+
+    useEffect(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    }, [songId]);
+
     useEffect(() => {
         if (!showMoreDropdown) return;
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, [showMoreDropdown, handleClickOutside]);
+        document.addEventListener("mousedown", handleMoreClickOutside);
+        return () => document.removeEventListener("mousedown", handleMoreClickOutside);
+    }, [showMoreDropdown, handleMoreClickOutside]);
 
     // Previne scroll background quando o popup está aberto
     useEffect(() => {
@@ -55,17 +115,14 @@ export default function PlayerPage () {
 
     // Donate logic (igual ao ProfilePage)
     const handleQuickDonate = (value) => setDonateValue(value);
-    const handleDonateInput = (e) => {
-        const val = e.target.value.replace(/[^0-9]/g, "");
-        setDonateValue(val);
-    };
+
     const handleCloseDonate = () => {
         setShowDonatePopup(false);
         setDonateValue("");
     };
     const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
 
-    const credits = [
+    /*const credits = [
         { title: 'Song A', artist: 'Artist A', duration: '03:45', listens: '1.2M' },
         { title: 'Song B', artist: 'Artist B', duration: '04:12', listens: '980K' },
         { title: 'Song C', artist: 'Artist B', duration: '03:31', listens: '292K' },
@@ -80,7 +137,7 @@ export default function PlayerPage () {
         { title: 'Song L', artist: 'Artist I', duration: '03:36', listens: '716K' },
 
         // ... mais items
-    ];
+    ];*/
 
     const audioRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -93,15 +150,6 @@ export default function PlayerPage () {
         if (isPlaying) audio.pause(); else audio.play();
         setIsPlaying(prev => !prev);*/
     };
-
-    // usa diretamente do objeto music
-    const { title, artist, date, duration, listens, genres, participants, creditsInfo } = music;
-
-    // === popup “Add to playlist” ===
-    const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
-    const [filterText, setFilterText] = useState('');
-    const [selectedIds, setSelectedIds] = useState(new Set());
-    const addToRef = useRef(null);
 
     // fecha popup ao clicar fora
     useEffect(() => {
@@ -157,6 +205,17 @@ export default function PlayerPage () {
             return nxt;
         });
     }
+
+    if (!music) return <div>Loading song…</div>;
+
+    function formatDuration(sec) {
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+    }
+
+    // usa diretamente do objeto music
+    const { title, artist, date, listens, lyrics, genres, participants, creditsInfo, streamPath } = music;
 
     function handleConfirmAdd() {
         console.log('Playlists seleccionadas:', [...selectedIds]);
@@ -259,6 +318,18 @@ export default function PlayerPage () {
 
     return (
         <div key={songId} className="playerScroll" ref={scrollRef}>
+
+            <audio
+                ref={audioRef}
+                src={`${baseUrl}/${streamPath}`}
+                preload="metadata"
+                onLoadedMetadata={() => {
+                    if (audioRef.current) {
+                        setAudioDuration(audioRef.current.duration);
+                    }
+                }}
+                style={{ display: 'none' }}
+            />
             <div className="playerSection">
                 {/* === PARTE SUPERIOR === */}
                 <div className="playerDetail">
@@ -270,7 +341,7 @@ export default function PlayerPage () {
                             <span className="metaArtist">{artist}</span>
                             <span className="metaRest">
                                 {' '}
-                                — {date} — {duration} — {listens} listens
+                                — {date} — {formatDuration(audioDuration)} — {listens} listens
                             </span>
                         </p>
 
@@ -329,7 +400,8 @@ export default function PlayerPage () {
                     <>
                         <div className="tabsContainer">
                             <div className="playerTabs">
-                                {['Lyrics','More Like This','Credits'].map(t => (
+                                {/*{['Lyrics','More Like This','Credits'].map(t => (*/}
+                                {['Lyrics','More Like This'].map(t => (
                                     <button
                                         key={t}
                                         className={`tab${activeTab===t?' active':''}`}
@@ -342,22 +414,24 @@ export default function PlayerPage () {
 
                         {activeTab === 'Lyrics' && (
                             <div className="lyricsBox">
-                                <p className="lyricsText">
-                                    {/* … letras … */}
-                                </p>
+                                {lyrics
+                                    ? <p className="lyricsText">{lyrics}</p>
+                                    : <p className="lyricsText">No Lyrics were added to this song yet</p>
+                                }
                             </div>
                         )}
 
                         {activeTab === 'More Like This' && (
                             <div className="songList">
-                                {credits.map((item,i)=>(
-                                    <div key={i} className="trackRow">
+                                {similarTracks.map((item,i)=>(
+                                    <div key={item.id} className="trackRow">
                                         <span className="trackNumber">{i+1}</span>
-                                        <NavLink to={`/player/${i}`}>
-                                            <div className="coverPlaceholderSmall"/>
+                                        <NavLink to={`/player/${item.id}`}>
+                                            <div className="coverPlaceholderSmall"
+                                                 style={{ backgroundImage: `url(${baseUrl}/${item.cover})` }}/>
                                         </NavLink>
                                         <div className="trackInfoSmall">
-                                            <NavLink to={`/player/${i}`} className="infoLink">
+                                            <NavLink to={`/player/${item.id}`} className="infoLink">
                                                 <span className="smallTitle">{item.title}</span>
                                             </NavLink>
                                             <NavLink to={`/profile/${item.artist}`} className="smallArtist">
@@ -366,16 +440,16 @@ export default function PlayerPage () {
                                         </div>
                                         <FiHeart className="actionIcon" onClick={()=>{}}/>
                                         <NavLink
-                                            to={`/player/${i}?comments=true`}
+                                            to={`/player/${item.id}?comments=true`}
                                             className={`actionIcon${
-                                                (location.pathname===`/player/${i}` && showComments)
+                                                (location.pathname===`/player/${item.id}` && showComments)
                                                     ? ' commentActive'
                                                     : ''
                                             }`}
                                         >
                                             <FiMessageCircle />
                                         </NavLink>
-                                    <span className="smallDuration">{item.duration}</span>
+                                        <span className="smallDuration">{item.duration}</span>
                                         <span className="smallListens">{item.listens}</span>
                                         <FiMoreHorizontal className="actionIcon" onClick={()=>{}}/>
                                     </div>
@@ -383,7 +457,7 @@ export default function PlayerPage () {
                             </div>
                         )}
 
-                        {activeTab === 'Credits' && (
+                        {/*{activeTab === 'Credits' && (
                             <div className="creditsBox">
                                 {creditsInfo.map((sec,i)=>(
                                     <div key={i} className="creditSection">
@@ -395,6 +469,7 @@ export default function PlayerPage () {
                                 ))}
                             </div>
                         )}
+                        */}
                     </>
                 ) : (
                     <div className="commentsSection">

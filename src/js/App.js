@@ -49,7 +49,8 @@ export default function App() {
                     <Route path="settings" element={<SettingsPage />} />
                     <Route path="subscription" element={<SubscriptionPage />} />
                     <Route path="playlists" element={<LibraryPlaylistsPage />} />
-                    <Route path="playlist/:id" element={<PlaylistPage />} />
+                    <Route path="playlist/:creator/:playlistName" element={<PlaylistPage />} />
+                    {/*<Route path="playlist/:id" element={<PlaylistPage />} />*/}
                     <Route path="musics" element={<LibraryMusicsPage />} />
                     <Route path="likes" element={<LibraryLikesPage />} />
                     <Route path="liveStreams" element={<LiveStreamsPage />} />
@@ -61,7 +62,7 @@ export default function App() {
                     {/*<Route path="profile" element={<ProfilePage />} />*/} {/*Para fallback*/}
                     <Route path="profile/:username" element={<ProfilePage />} />
 
-                    <Route path="achievements" element={<AchievementsPage />} />
+                    <Route path="achievements/:username" element={<AchievementsPage />} />
                 </Route>
                 <Route element={<LayoutLoggedOff />}>
                     <Route path="homeLoggedOff" element={<HomeLoggedOffPage />} />

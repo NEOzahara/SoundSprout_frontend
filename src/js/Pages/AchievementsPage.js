@@ -1,21 +1,107 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import { useParams } from 'react-router-dom';
 import { FiEdit2, FiShare2, FiBookmark } from 'react-icons/fi';
 import '../../css/Pages/Achievements.css';
+import api from '../services/api';
 
-export default function AchievementsPage({
-                                        username = 'Username',
-                                        stats = { playlists: 0, songs: 0, followers: 0, following: 0 },
-                                        profileUrl = window.location.href
-                                    }) {
-    const { playlists, songs, followers, following } = stats;
+export default function AchievementsPage() {
+
+    const { username } = useParams();
+    const [profileUser, setProfileUser] = useState({});
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+    const [stats, setStats] = useState({ playlists:0, songs:0, followers:0, following:0 });
+    const [earnedBadges, setEarnedBadges] = useState([]);       // todos os badges do user
+    const [selectedBadges, setSelectedBadges] = useState([]);   // top 3 selecionados
+    const [activeTab, setActiveTab] = useState('Owned');
+    const badgeRefs = useRef([]);
+    const [overflowFlags, setOverflowFlags] = useState([false, false, false]);
+
+    const TIER_COLORS = {
+        bronze: '#AA6C39',
+        silver: '#777777',
+        gold: '#8B6914'
+    };
+
+    const isOwn = (() => {
+        const me = JSON.parse(localStorage.getItem('user')||'{}');
+        return me.username === username;
+    })();
+
+    // 1) carrega dados de perfil + stats
+    useEffect(() => {
+        api.get(`/utilizadores/${username}`)
+            .then(({ data }) => setProfileUser(data))
+            .catch(console.error);
+        api.get(`/utilizadores/${username}/stats`)
+            .then(({ data }) => setStats(data))
+            .catch(console.error);
+    }, [username]);
+
+    // 2) carrega todos os badges ganhos
+    useEffect(() => {
+        api.get(`/utilizadores/${username}/achievements`)
+            .then(({ data }) => {
+                const sorted = data.sort((a, b) =>
+                    new Date(b.data_atribuicao) - new Date(a.data_atribuicao)
+                );
+                setEarnedBadges(sorted);
+            })
+            .catch(console.error);
+    }, [username]);
+
+    // 3) carrega os 3 seleccionados
+    useEffect(() => {
+        api.get(`/utilizadores/${username}/selected-achievements`)
+            .then(({ data }) => setSelectedBadges(data))
+            .catch(console.error);
+    }, [username]);
+
+    // recalcula flags de overflow nos badges visíveis
+    useLayoutEffect(() => {
+        const flags = badgeRefs.current.map(el => {
+            if (!el) return false;
+            return el.scrollWidth > el.parentElement.clientWidth;
+        });
+        setOverflowFlags(flags);
+    }, [selectedBadges]);
+
+    // toggles: adiciona/remove e envia PUT
+    const toggleBadge = (badge) => {
+        if (!isOwn) return;
+        const exists = selectedBadges.find(b =>
+            b.badge_name === badge.badge_name && b.badge_tier === badge.badge_tier
+        );
+        let next;
+        if (exists) {
+            next = selectedBadges
+                .filter(b => !(b.badge_name === badge.badge_name && b.badge_tier === badge.badge_tier))
+                .map((b,i) => ({ ...b, position: i }));
+        } else {
+            if (selectedBadges.length >= 3) return;
+            next = [...selectedBadges,
+                {
+                    badge_name: badge.badge_name,
+                    badge_tier: badge.badge_tier,
+                    position: selectedBadges.length
+                }
+            ];
+        }
+        setSelectedBadges(next);
+        api.put(`/utilizadores/${username}/selected-achievements`, { selected: next })
+            .catch(console.error);
+    };
+
+    const isSelected = (idx) =>
+        selectedBadges.some(b => b.position === idx);
+
+    const profileUrl = window.location.href;
     const copyLink = () => {
         navigator.clipboard.writeText(profileUrl)
             .then(() => console.log('Link copiado!'))
             .catch(() => console.error('Falha ao copiar link'));
     };
 
-    const badgeRefs = useRef([]);
-    const [overflowFlags, setOverflowFlags] = useState([false, false, false]);
+    const { playlists, songs, followers, following } = stats;
 
     useLayoutEffect(() => {
         const newFlags = badgeRefs.current.map(el => {
@@ -25,7 +111,6 @@ export default function AchievementsPage({
         setOverflowFlags(newFlags);
     }, []);
 
-    const [activeTab, setActiveTab] = useState('Owned');
 
     const [badgeMap, setBadgeMap] = useState({});
 
@@ -120,7 +205,14 @@ export default function AchievementsPage({
                 {/* wrapper principal com gap de 20px entre avatar e textos */}
                 <div className="achievementsMain">
                     {/* 1) Avatar circular 160×160 */}
-                    <div className="achievementsAvatar" />
+                    <div
+                        className="achievementsAvatar"
+                        style={{
+                            backgroundImage: profileUser.foto
+                                ? `url(${baseUrl}${profileUser.foto.startsWith('/') ? '' : '/'}${profileUser.foto})`
+                                : undefined
+                        }}
+                    />
 
                     {/* 2) Textos: “Profile” e “Username” */}
                     <div className="achievementsDetails">
@@ -145,10 +237,10 @@ export default function AchievementsPage({
             {/* 4) Estatísticas */}
             <div className="achievementsStats">
                 <span className="statsPrimary">
-                    {playlists} Playlists – {songs} Songs
+                    {stats.playlists} Playlists – {stats.songs} Songs
                 </span>
                 <span className="statsSecondary">
-                    &nbsp;– {followers} Followers – {following} Following
+                    &nbsp;– {stats.followers} Followers – {stats.following} Following
                 </span>
             </div>
 
@@ -157,34 +249,25 @@ export default function AchievementsPage({
                 link to profile ({profileUrl})
             </div>
 
-            <div className="achievementsBadges"> {[0,1,2].map(badgeIdx => {
-                const entry = Object.entries(badgeMap)
-                    .find(([ownedIdx, bIdx]) => bIdx === badgeIdx);
-                const ownedIdx = entry ? Number(entry[0]) : null;
-                const visible = ownedIdx !== null;
-                if (!visible) {
-                    return (
-                        <div key={badgeIdx}
-                            className="achievementsBadge hidden"
-                        />
-                    );
+            <div className="achievementsBadges">
+                {[0,1,2].map(pos  => {
+                const entry = selectedBadges.find(b => b.position === pos);
+                if (!entry) {
+                    return <div key={pos} className="achievementsBadge hidden"/>;
                 }
-
-                const {title, tier} = owned_achievements[ownedIdx];
                 return (
                     <div
-                        key={badgeIdx}
-                        className={`achievementsBadge ${tier}`}
-                        ref={el => badgeRefs.current[badgeIdx] = el}
+                        key={pos}
+                        className="achievementsBadge"
+                        style={{ backgroundColor: TIER_COLORS[entry.badge_tier] }}
+                        ref={el => badgeRefs.current[pos] = el}
                     >
                         <span
-                            className={`badgeText${overflowFlags[badgeIdx] ? " marquee-hover" : ""}`}
-                        >
-                        {title}
-                        </span>
+                            className={`badgeText${overflowFlags[pos] ? " marquee-hover" : ""}`}>
+                            {entry.badge_name}</span>
                     </div>
                 );
-            })}
+                })}
             </div>
 
             {/* === PARTE INFERIOR === */}
@@ -203,55 +286,61 @@ export default function AchievementsPage({
 
             {activeTab === 'Owned' && (
                 <div className="badgeList">
-                    {owned_achievements.map((item, idx) => (
-                        <div key={idx} className="badgeRow">
-                            <span className="badgeNumber">{idx+1}</span>
-                            <div
-                                className="coverPlaceholderSmall"
-                                 onClick={() => toggleOwned(idx)}
-                            />
-                            <div className="badgeInfoSmall">
+                    {earnedBadges.map((badge, idx) => {
+                        const selected = selectedBadges.some(b =>
+                            b.badge_name===badge.badge_name && b.badge_tier===badge.badge_tier
+                        );
+                        return (
+                            <div key={idx} className="badgeRow">
+                                <span className="badgeNumber">{idx+1}</span>
                                 <div
-                                    className="badgeTitleContainer"
-                                    onClick={() => toggleOwned(idx)}
+                                    className="coverPlaceholderSmall"
+                                    style={{
+                                        backgroundColor: TIER_COLORS[badge.badge_tier]
+                                    }}
+                                    onClick={()=>toggleBadge(badge)}
+                                />
+                                <div className="badgeInfoSmall">
+                                    <div
+                                        className="badgeTitleContainer"
+                                        onClick={()=>toggleBadge(badge)}
                                     >
-                                    <span className="smallTitle">{item.title}</span>
-                                    {isOwnedSelected(idx) && (
-                                        <FiBookmark className="bookmarkIcon" />
-                                    )}
+                                        <span className="smallTitle">{badge.badge_name}</span>
+                                        {selected && <FiBookmark className="bookmarkIcon"/>}
+                                    </div>
+                                    <span
+                                        className="smallArtist"
+                                        onClick={() => toggleOwned(idx)}
+                                    >{badge.descricao}</span>
                                 </div>
-
-                                <span className="smallArtist"
-                                      onClick={() => toggleOwned(idx)}>
-                                    {item.description}
+                                <span className="badgeDate">
+                                    {new Date(badge.data_atribuicao)
+                                        .toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric'})}
                                 </span>
                             </div>
-                            <span className="badgeDate">{item.date}</span>
-                            <span className="badgeYear">{item.year}</span>
-                            <span className="badgeTime">{item.time}</span>
-                        </div>
-                    ))}
-                </div>
-            )}
+                            );
+                        })}
+                    </div>
+                )}
 
-            {activeTab === 'Not Owned' && (
-                <div className="badgeList">
-                    {not_owned_achievements.map((item, idx) => (
-                        <div key={idx} className="badgeRow">
-                            <span className="badgeNumber">{idx+1}</span>
-                            <div className="coverPlaceholderSmall" onClick={() => console.log(item.title)}/>
-                            <div className="badgeInfoSmall">
-                                <span className="smallTitle" onClick={() => console.log(item.title)}>{item.title}</span>
-                                <span className="smallArtist" onClick={() => console.log(item.description)}>{item.description}</span>
+                {activeTab === 'Not Owned' && (
+                    <div className="badgeList">
+                        {not_owned_achievements.map((item, idx) => (
+                            <div key={idx} className="badgeRow">
+                                <span className="badgeNumber">{idx+1}</span>
+                                <div className="coverPlaceholderSmall" onClick={() => console.log(item.title)}/>
+                                <div className="badgeInfoSmall">
+                                    <span className="smallTitle" onClick={() => console.log(item.title)}>{item.title}</span>
+                                    <span className="smallArtist" onClick={() => console.log(item.description)}>{item.description}</span>
+                                </div>
+                                <span className="badgeProgress">{item.currentState}/{item.threshold}</span>
+                                <span className="badgeDate">{item.date}</span>
+                                <span className="badgeYear">{item.year}</span>
+                                <span className="badgeTime">{item.time}</span>
                             </div>
-                            <span className="badgeProgress">{item.currentState}/{item.threshold}</span>
-                            <span className="badgeDate">{item.date}</span>
-                            <span className="badgeYear">{item.year}</span>
-                            <span className="badgeTime">{item.time}</span>
-                        </div>
-                    ))}
-                </div>
-            )}
+                        ))}
+                    </div>
+                )}
         </div>
     );
 }

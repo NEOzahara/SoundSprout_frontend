@@ -12,10 +12,24 @@ export default function ProfilePage() {
 
     const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
     const [profileUser, setProfileUser] = useState(user);
+    const [isFollowing, setIsFollowing] = useState(false);
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
 
     const profileUsername = usernameParam || user?.username;
     const isOwnProfile = profileUsername === user?.username;
+
+    const [showTestMode, setShowTestMode] = useState(false); //PARA TESTE
+
+    useEffect(() => {
+        if (!isOwnProfile) {
+            api.get(`/utilizadores/${user.username}/following`)
+               .then(({ data }) => {
+                   const nomes = data.map(u => u.following_username);
+                   setIsFollowing(nomes.includes(profileUsername));
+               })
+                .catch(console.error);
+        }
+    }, [profileUsername, user, isOwnProfile]);
 
     // Dropdown visibilidade (para FiMoreHorizontal)
     const [showDropdown, setShowDropdown] = useState(false);
@@ -31,6 +45,12 @@ export default function ProfilePage() {
             setShowDropdown(false);
         }
     }, []);
+
+    const TIER_COLORS = {
+        bronze: '#AA6C39',
+        silver: '#777777',
+        gold: '#8B6914'
+    };
 
     useEffect(() => {
         if (!showDropdown) return;
@@ -396,11 +416,12 @@ export default function ProfilePage() {
     const [editDragOver, setEditDragOver] = useState(false);
     const canSave = (newUsername.trim() !== showUsername) || !!newPhoto;
 
-    const [badges, setBadges] = useState([]);
+    const [selectedBadgesDisplay, setSelectedBadgesDisplay] = useState([]);
     useEffect(() => {
-        const stored = localStorage.getItem('profileBadges');
-        if (stored) setBadges(JSON.parse(stored));
-    }, []);
+        api.get(`/utilizadores/${profileUsername}/selected-achievements`)
+            .then(({ data }) => setSelectedBadgesDisplay(data))
+            .catch(console.error);
+    }, [profileUsername]);
 
     const badgeRefs = useRef([]);
     const [overflowFlags, setOverflowFlags] = useState([false, false, false]);
@@ -423,7 +444,13 @@ export default function ProfilePage() {
         setShowDonatePopup(false);
         setDonateValue("");
     };
-    const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
+    //const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
+
+    const isConfirmEnabled = !!donateValue &&
+        (showTestMode
+                ? parseFloat(donateValue) >= 0.01   // modo teste: mínimos 0.01€
+                : parseInt(donateValue)   >= 5      // modo normal: mínimo 5€
+        );
 
     const handleSubmitEdit = async e => {
         e.preventDefault();
@@ -587,6 +614,23 @@ export default function ProfilePage() {
                         </button>
                     ))}
                 </div>
+
+
+                    <button
+                        className="testModeBtn"
+                        type="button"
+                        onClick={() => {
+                            setShowTestMode(true);
+                            setDonateValue("0.01");   // pré-carrega o valor de 0.01€
+                        }}
+                    >
+                        {showTestMode
+                            ? "🧪 Test Mode Active"
+                            : "🧪 Test Donation"
+                        }
+                    </button>
+
+
                 <div className="donateInputSection">
                     <label className="donateInputLabel">
                         Specific ammount (min. 5€)
@@ -629,8 +673,15 @@ export default function ProfilePage() {
     );
 
     const EditModal = (
-        <div className="editOverlay">
-            <form className="editForm" onSubmit={handleSubmitEdit}>
+        <div
+            className="editOverlay"
+            onClick={() => setEditMode(false)}
+        >
+            <form
+                className="editForm"
+                onClick={e => e.stopPropagation()}
+                onSubmit={handleSubmitEdit}
+            >
                 <h2>Edit Profile</h2>
                 {successEdit && <div className="success">{successEdit}</div>}
                 <label>
@@ -695,6 +746,39 @@ export default function ProfilePage() {
         </div>
     );
 
+    const handleFollowToggle = async () => {
+        setShowDropdown(false);
+        const currentlyFollowing = isFollowing;
+        try {
+            if (currentlyFollowing) {
+                // unfollow
+                await api.delete(`/utilizadores/seguir/${encodeURIComponent(profileUsername)}`);
+                setIsFollowing(false);
+                setStats(s => ({ ...s, followers: s.followers - 1 }));
+                setFollowersList(list =>
+                    list.filter(f => f.follower_username !== user.username)
+                );
+            } else {
+                // follow
+                await api.post('/utilizadores/seguir', { seguido_username: profileUsername });
+                setIsFollowing(true);
+                setStats(s => ({ ...s, followers: s.followers + 1 }));
+                setFollowersList(list => [
+                    { follower_username: user.username, follower_photo: user.foto },
+                    ...list
+                ]);
+            }
+        } catch (err) {
+            console.error('Erro ao (un)follow:', err.response?.data || err);
+            // revert se falhar
+            setIsFollowing(f => !f);
+            setStats(s => ({
+                ...s,
+                followers: s.followers + (isFollowing ? +1 : -1)
+            }));
+        }
+    };
+
     return (
         <>
             {showDonatePopup && createPortal(DonatePopup, document.body)}
@@ -745,9 +829,11 @@ export default function ProfilePage() {
                                 />
                                 {showDropdown && (
                                     <div className="dropdownMenu">
-                                        <div className="dropdownItem"
-                                             onClick={() => { setShowDropdown(false); alert("Follow!"); }}>
-                                            Follow
+                                        <div
+                                            className="dropdownItem"
+                                            onClick={handleFollowToggle}
+                                        >
+                                            {isFollowing ? 'Unfollow' : 'Follow'}
                                         </div>
                                         <div
                                             className="dropdownItem"
@@ -781,13 +867,17 @@ export default function ProfilePage() {
                 </div>
 
                 <div className="profileBadges">
-                    {badges.map((b, i) => (
-                        <div key={i} className={`profileBadge ${b.tier}`}>
+                    {selectedBadgesDisplay.map((b, i) => (
+                        <div
+                            key={i}
+                            className={`profileBadge ${b.badge_tier}`}
+                            style={{ backgroundColor: TIER_COLORS[b.badge_tier] }}
+                        >
                             <span
                                 ref={el => badgeRefs.current[i] = el}
                                 className={`badgeText${overflowFlags[i] ? " marquee-hover" : ""}`}
                             >
-                            {b.title}
+                            {b.badge_name}
                             </span>
                         </div>
                     ))}

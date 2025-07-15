@@ -194,11 +194,12 @@ export default function TopIcons() {
 
             {/* === Achievements === */}
             <NavLink
-                to="/achievements"
+                to={`/achievements/${user?.username}`}
                 className={({ isActive }) =>
                     `topIcon${isActive ? ' active' : ''}`
                 }
                 title="Achievements"
+                end
             >
                 <FiAward />
             </NavLink>

@@ -3,40 +3,89 @@ import { NavLink } from 'react-router-dom';
 import { FiSearch } from 'react-icons/fi';
 import '../../css/Pages/LiveStreams.css';
 import { streams } from '../../data/liveStreams';
+import api from "../services/api";
 
 export default function LiveStreamsPage() {
-
+    // Search bar state
     const [searchTerm, setSearchTerm] = useState('');
-    const results = useMemo(() => {
-        const q = searchTerm.trim().toLowerCase();
-        if (!q) return [];
-        return streams
-            .filter(s =>
-                s.owner.toLowerCase().includes(q) ||
-                s.type.toLowerCase().includes(q)
-            )
-            .map(s => ({
-                id: s.id,
-                owner: s.owner,
-                type: s.type,
-                imageUrl: s.imageUrl
-            }));
-    }, [searchTerm]);
+    const [searchResults, setSearchResults] = useState([]); // resultados da API
+
+    // Carousel data states
+    const [recommended, setRecommended] = useState([]);
+    const [topLives, setTopLives] = useState([]);
+    const [favourites, setFavourites] = useState([]);
 
     const [recAll, setRecAll] = useState(false);
     const [topAll, setTopAll] = useState(false);
     const [favAll, setFavAll] = useState(false);
 
-    const handleSearchChange = (e) => {
-        setSearchTerm(e.target.value);
-        console.log('Buscando por:', e.target.value);
+    // Fetch initial data
+    useEffect(() => {
+        api.get('/lives/recommended')
+            .then(({ data }) => setRecommended(data))
+            .catch(err => console.error('Error loading recommended:', err));
+
+        api.get('/lives/top')
+            .then(({ data }) => setTopLives(data))
+            .catch(err => console.error('Error loading top lives:', err));
+
+        api.get('/lives/favourites')
+            .then(({ data }) => setFavourites(data))
+            .catch(err => console.error('Error loading favourites:', err));
+    }, []);
+
+    // Compute fallbackRecommended once when topLives loads; won't change on searchTerm
+    const fallbackRecommended = useMemo(() => {
+        if (recommended.length > 0 || topLives.length === 0) return [];
+        // shuffle topLives array
+        const arr = [...topLives];
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    }, [topLives, recommended]);
+
+    // Decide which array to display: either real recommendations or fallback
+    const displayedRecommended =
+        recommended.length > 0 ? recommended : fallbackRecommended;
+
+    // Handle search input changes: chamada ao endpoint /lives/search
+    const handleSearchChange = async e => {
+        const term = e.target.value;
+        setSearchTerm(term);
+
+        if (term.trim()) {
+            try {
+                const { data } = await api.get('/lives/search', { params: { q: term } });
+                setSearchResults(data);
+            } catch (err) {
+                console.error('Error searching lives:', err);
+                setSearchResults([]);
+            }
+        } else {
+            setSearchResults([]);
+        }
     };
 
-    const handleStreamClick = (id) => {
-        console.log(`Stream ${id} clicado!`);
-        // ex.: navigate(`/livestream/${id}`)
-    }
+    // Generic render for live items
+    const renderStreams = (items, count) =>
+        items.slice(0, count).map(live => (
+            <NavLink
+                key={`${live.url}::${live.criador_username}`}
+                to={`/livestream/${encodeURIComponent(live.url)}`}
+                className="liveCoverCard"
+            >
+                <div
+                    className="liveCoverCircle"
+                    style={{ backgroundImage: `url(${live.capa})` }}
+                />
+                <span className="liveCoverOwner">{live.criador_username}</span>
+                <span className="liveCoverType">{live.tipo}</span>
+            </NavLink>
+        ));
 
+    // Community Events (unchanged)
     const genresStatus = [
         { genre: 'Rock', status: 'Closed' },
         { genre: 'Pop', status: 'On Going' },
@@ -45,41 +94,13 @@ export default function LiveStreamsPage() {
         { genre: 'Indie', status: 'Closed' },
         { genre: 'Funk', status: 'On Going' }
     ];
-
-    // agora renderStreams recebe um inteiro 'count'
-    const renderStreams = (count) =>
-        streams
-            .slice(0, count)               // pega só os primeiros 'count'
-            .map(({ id, owner, type, imageUrl }) => (
-                <NavLink
-                    key={id}
-                    to={`/livestream/${id}`}
-                    className="liveCoverCard"
-                >
-                    <div
-                        className="liveCoverCircle"
-                        style={{ backgroundImage: `url(${imageUrl})` }}
-                    />
-                    <span className="liveCoverOwner">{owner}</span>
-                    <span className="liveCoverType">{type}</span>
-                </NavLink>
-            ));
-
     const renderEventCarousel = () =>
         genresStatus.map(({ genre, status }) => {
-            const isClosed = status === 'Closed';
-            const isOngoing = status === 'On Going';
-            const to = isClosed
+            const to = status === 'Closed'
                 ? `/playlist/community-${encodeURIComponent(genre)}`
-                : isOngoing
-                    ? `/communityEvent/${encodeURIComponent(genre)}`
-                    : undefined;
+                : `/communityEvent/${encodeURIComponent(genre)}`;
             return (
-                <NavLink
-                    key={genre}
-                    to={to}
-                    className="coverCard"
-                >
+                <NavLink key={genre} to={to} className="coverCard">
                     <div className="coverPlaceholder" />
                     <span className="coverTitle">{genre}</span>
                     <span className="coverArtist">{status}</span>
@@ -89,38 +110,35 @@ export default function LiveStreamsPage() {
 
     return (
         <div className="liveSection">
+            {/* Search Bar */}
             <div className="liveSearchBarContainer">
                 <div className="liveSearchWrapper searchContainerLive">
-                    <div
-                        className="liveSearchIcon"
-                        onClick={() => console.log('Clique na lupa de busca!')}
-                    >
+                    <div className="liveSearchIcon">
                         <FiSearch className="searchIcon" />
                     </div>
-
                     <input
                         type="text"
                         className="liveSearchInput"
                         placeholder="Search live streams..."
                         value={searchTerm}
-                        onChange={e => setSearchTerm(e.target.value)}
+                        onChange={handleSearchChange}
                     />
-                    {results.length > 0 && (
+                    {searchResults.length > 0 && (
                         <ul className="suggestions">
-                            {results.map(r => (
+                            {searchResults.map(live => (
                                 <NavLink
-                                    key={r.id}
-                                    to={`/livestream/${r.id}`}
+                                    key={live.url}
+                                    to={`/livestream/${encodeURIComponent(live.url)}`}
                                     className="suggestionItem"
                                     onClick={() => setSearchTerm('')}
                                 >
                                     <div
                                         className="suggestionThumb userThumb"
-                                        style={{ backgroundImage: `url(${r.imageUrl})` }}
+                                        style={{ backgroundImage: `url(${live.capa})` }}
                                     />
                                     <div className="suggestionText">
-                                        <div className="suggestionTitle">{r.owner}</div>
-                                        <div className="suggestionSubtitle">{r.type}</div>
+                                        <div className="suggestionTitle">{live.criador_username}</div>
+                                        <div className="suggestionSubtitle">{live.tipo}</div>
                                     </div>
                                 </NavLink>
                             ))}
@@ -129,7 +147,7 @@ export default function LiveStreamsPage() {
                 </div>
             </div>
 
-            {/* primeira caixa de carrossel */}
+            {/* Recommended Live Streams */}
             <div className="liveCarouselSection">
                 <div className="liveCarouselHeader">
                     <span className="liveSectionTitle">Recommended Live Streams</span>
@@ -142,12 +160,12 @@ export default function LiveStreamsPage() {
                 </div>
                 <div className="liveCarouselWrapper">
                     <div className="liveCarousel">
-                        {renderStreams(recAll ? streams.length : 6)}
+                        {renderStreams(displayedRecommended, recAll ? displayedRecommended.length : 8)}
                     </div>
                 </div>
             </div>
 
-            {/* segunda caixa de carrossel */}
+            {/* Top Live Streams */}
             <div className="liveCarouselSection">
                 <div className="liveCarouselHeader">
                     <span className="liveSectionTitle">Top Live Streams</span>
@@ -160,40 +178,40 @@ export default function LiveStreamsPage() {
                 </div>
                 <div className="liveCarouselWrapper">
                     <div className="liveCarousel">
-                        {renderStreams(topAll ? streams.length : 6)}
+                        {renderStreams(topLives, topAll ? topLives.length : 8)}
                     </div>
                 </div>
             </div>
 
-            {/* terceira caixa de carrossel */}
-            <div className="liveCarouselSection">
-                <div className="liveCarouselHeader">
-                    <span className="liveSectionTitle">Your Favourite Artists</span>
-                    <button
-                        className={`liveSeeAll${favAll ? ' expanded' : ''}`}
-                        onClick={() => setFavAll(p => !p)}
-                    >
-                        see all
-                    </button>
-                </div>
-                <div className="liveCarouselWrapper">
-                    <div className="liveCarousel">
-                        {renderStreams(favAll ? streams.length : 6)}
+            {/* Your Favourite Artists (hide if none) */}
+            {favourites.length > 0 && (
+                <div className="liveCarouselSection">
+                    <div className="liveCarouselHeader">
+                        <span className="liveSectionTitle">Your Favourite Artists</span>
+                        <button
+                            className={`liveSeeAll${favAll ? ' expanded' : ''}`}
+                            onClick={() => setFavAll(p => !p)}
+                        >
+                            see all
+                        </button>
+                    </div>
+                    <div className="liveCarouselWrapper">
+                        <div className="liveCarousel">
+                            {renderStreams(favourites, favAll ? favourites.length : 6)}
+                        </div>
                     </div>
                 </div>
-            </div>
+            )}
 
-            {/* Carrossel de categorias/estados */}
+            {/* Community Events */}
             <div className="liveCarouselSection">
                 <div className="liveCarouselHeader">
                     <span className="liveSectionTitle">Community Events</span>
-                    {/* Não precisas de botão "see all" mas podes adicionar se quiseres */}
                 </div>
                 <div className="liveCarouselWrapper">
                     <div className="carousel">{renderEventCarousel()}</div>
                 </div>
             </div>
-
         </div>
     );
 }

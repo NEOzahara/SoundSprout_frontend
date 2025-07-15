@@ -444,11 +444,25 @@ export default function ProfilePage() {
         setShowDonatePopup(false);
         setDonateValue("");
     };
-    //const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
 
+    const handleConfirmDonate = async () => {
+        try {
+            const { data } = await api.post('/payments/checkout-session', {
+                amount: parseFloat(donateValue),
+                connectedAccountId: profileUser.stripe_account_id,
+                destinatarioUsername: profileUsername
+            });
+            // redireciona para o Stripe Checkout
+            window.location.href = data.url;
+        } catch (err) {
+            console.error('Erro ao iniciar Checkout:', err);
+        }
+    };
+
+    //const isConfirmEnabled = !!donateValue && parseInt(donateValue) >= 5;
     const isConfirmEnabled = !!donateValue &&
         (showTestMode
-                ? parseFloat(donateValue) >= 0.01   // modo teste: mínimos 0.01€
+                ? parseFloat(donateValue) >= 1   // modo teste: mínimos 0.01€
                 : parseInt(donateValue)   >= 5      // modo normal: mínimo 5€
         );
 
@@ -621,7 +635,7 @@ export default function ProfilePage() {
                         type="button"
                         onClick={() => {
                             setShowTestMode(true);
-                            setDonateValue("0.01");   // pré-carrega o valor de 0.01€
+                            setDonateValue("1");   // pré-carrega o valor de 0.01€
                         }}
                     >
                         {showTestMode
@@ -657,12 +671,7 @@ export default function ProfilePage() {
                     <button
                         className="donateConfirmBtn"
                         type="button"
-                        onClick={() => {
-                            if (isConfirmEnabled) {
-                                alert(`Doou ${donateValue}€ para ${showUsername}`);
-                                handleCloseDonate();
-                            }
-                        }}
+                        onClick={handleConfirmDonate}
                         disabled={!isConfirmEnabled}
                     >
                         Confirm

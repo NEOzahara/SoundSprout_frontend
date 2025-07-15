@@ -12,23 +12,30 @@ export default function SignupPage() {
     const navigate = useNavigate();
 
     const handleSignup = async (e) => {
-        e.preventDefault();
-        setError(null);
+        e.preventDefault()
+        setError(null)
 
         try {
-            const { data } = await api.post('/auth/register', {
+            await api.post('/auth/register', {
                 email,
                 username,
                 password
-            });
-            // localStorage.setItem('accessToken', data.accessToken);
-            // redireciona para a página principal ou dashboard
-            navigate('/login');
+            })
+
+            // Redirect para o login
+            navigate('/login')
         } catch (err) {
-            console.error('Erro no signup:', err);
-            setError('Credenciais inválidas.');
+            if (err.response?.data?.errors) {
+                // Mostra todas as mensagens de validação
+                const msgs = err.response.data.errors.map(e => e.msg).join(' ')
+                setError(msgs)
+            } else {
+                console.error('Erro no signup:', err)
+                setError('Erro ao registar. Tenta novamente.')
+            }
         }
-    };
+    }
+
 
     return (
         <div className="background loginBackground">

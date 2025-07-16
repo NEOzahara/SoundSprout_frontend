@@ -4,7 +4,6 @@ import '../../css/Pages/Player.css';
 import {NavLink, useParams, useLocation} from "react-router-dom";
 import { createPortal } from 'react-dom';
 import api from '../services/api';
-import { playlists } from '../../data/playlists';
 
 export default function PlayerPage () {
 
@@ -12,7 +11,28 @@ export default function PlayerPage () {
     const id = parseInt(songId, 10) || 0;
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, "");
 
+    const [userPlaylists, setUserPlaylists] = useState([]);
+    const [savedPlaylists, setSavedPlaylists] = useState([]);
+    const [remainingPlaylists, setRemainingPlaylists] = useState([]);
+
     const [music, setMusic] = useState(null);
+    const [liked, setLiked] = useState(false);
+
+    async function toggleLike() {
+        try {
+            if (liked) {
+                await api.delete(`/musicas/like/${id}`);
+                setLiked(false);
+            } else {
+                await api.post(`/musicas/like`, { id });
+                setLiked(true);
+            }
+        } catch (err) {
+            console.error('Erro ao (un)like:', err);
+        }
+    }
+
+
     const [artistUser, setArtistUser] = useState({});
     const [audioDuration, setAudioDuration] = useState(0);
     const scrollRef = useRef(null);
@@ -48,10 +68,11 @@ export default function PlayerPage () {
 
     useEffect(() => {
         let mounted = true;
+        setLiked(false);
+        console.log('▶️  Debug: fetching music details for id', id);
         api.get(`/musicas/${id}`)
             .then(({ data }) => {
                 if (!mounted) return;
-
                 const rawDate = data.dataPublicacao ?? data.datapublicacao;
                 const formattedDate = rawDate
                     ? new Date(rawDate).toLocaleDateString()
@@ -77,6 +98,10 @@ export default function PlayerPage () {
                     })
                 .catch(console.error);
 
+                api.get(`/musicas/${id}/is-liked`)
+                    .then(({ data }) => mounted && setLiked(data.liked))
+                    .catch(console.error);
+
             })
             .catch(console.error);
         return () => { mounted = false };
@@ -90,6 +115,7 @@ export default function PlayerPage () {
         api.get(`/musicas/${id}/similar`)
             .then(({ data }) => {
                 if (!mounted) return;
+                console.log('🔍  Debug: similar tracks fetched, count=', data.length, data);
                 setSimilarTracks(data.map(m => ({
                     id:      m.id,
                     title:   m.titulo,
@@ -98,7 +124,7 @@ export default function PlayerPage () {
                     cover:   m.foto,
                 })));
             })
-            .catch(console.error);
+            .catch(err => console.error('❌  Debug: error fetching similar', err));
         return () => { mounted = false };
     }, [id, music]);
 
@@ -171,33 +197,55 @@ export default function PlayerPage () {
     // inicializa seleção quando o popup abre
     useEffect(() => {
         if (!showAddToPlaylist) return;
-        const saved = playlists
-            .filter(pl => pl.trackIds.includes(id))
-            .map(pl => pl.id);
-        setSelectedIds(new Set(saved));
         setFilterText('');
-    }, [showAddToPlaylist, id]);
+        setSelectedIds(new Set());
+
+        const stored = localStorage.getItem('user');
+        if (!stored) {
+            console.error('Usuário não autenticado');
+            return;
+        }
+        const { username } = JSON.parse(stored);
+
+        api.get(`/playlists/utilizador/${username}`)
+            .then(({ data: playlists }) => {
+                // 3) para cada playlist, buscar as músicas e marcar se contém a música atual
+                return Promise.all(
+                    playlists.map(pl =>
+                            api.get(
+                                `/playlists/${encodeURIComponent(pl.nome)}/${username}/musicas`
+                            ).then(({ data: musics }) => ({
+                                ...pl,
+                                contains: musics.some(m => m.id === id),
+                                total_songs: musics.length
+                            }))
+                    )
+                );
+            })
+            .then(plsWithFlag => {
+                const saved  = plsWithFlag.filter(pl => pl.contains);
+                const remain = plsWithFlag.filter(pl => !pl.contains);
+                setSavedPlaylists(saved);
+                setRemainingPlaylists(remain);
+                setSelectedIds(new Set(saved.map(pl => pl.nome))); // pré-seleciona
+            })
+            .catch(console.error);
+        }, [showAddToPlaylist, id]);
 
     // “Saved” e “Remaining”, memorizados
-    const saved = useMemo(
-        () => playlists.filter(pl => pl.trackIds.includes(id)),
-        [id]
-    );
-    const remaining = useMemo(
-        () => playlists.filter(pl => !pl.trackIds.includes(id)),
-        [id]
-    );
+    const saved  = useMemo(() => savedPlaylists, [savedPlaylists]);
+    const remaining = useMemo(() => remainingPlaylists, [remainingPlaylists]);
     const savedFiltered = useMemo(
-        () => saved.filter(pl => pl.title.toLowerCase().includes(filterText.toLowerCase())),
+        () => saved.filter(pl => pl.nome.toLowerCase().includes(filterText.toLowerCase())),
         [saved, filterText]
     );
     const remainingFiltered = useMemo(
-        () => remaining.filter(pl => pl.title.toLowerCase().includes(filterText.toLowerCase())),
+        () => remaining.filter(pl => pl.nome.toLowerCase().includes(filterText.toLowerCase())),
         [remaining, filterText]
     );
 
     // detecta mudanças para habilitar “Confirm”
-    const initialSet = useMemo(() => new Set(saved.map(pl => pl.id)), [saved]);
+    const initialSet = useMemo(() => new Set(saved.map(pl => pl.nome)), [saved]);
     const hasChanged =
         selectedIds.size !== initialSet.size ||
         [...selectedIds].some(pid => !initialSet.has(pid));
@@ -222,9 +270,28 @@ export default function PlayerPage () {
     // usa diretamente do objeto music
     const { title, artist, date, listens, lyrics, genres, participants, creditsInfo, streamPath } = music;
 
-    function handleConfirmAdd() {
-        console.log('Playlists seleccionadas:', [...selectedIds]);
-        setShowAddToPlaylist(false);
+    async function handleConfirmAdd() {
+        // obtém o username do utilizador logado
+        const stored = localStorage.getItem('user');
+        if (!stored) {
+            console.error('Usuário não autenticado');
+            return;
+        }
+        const { username } = JSON.parse(stored);
+        const toAdd = [...selectedIds].filter(pl => !initialSet.has(pl));
+        const toRemove = [...initialSet].filter(pl => !selectedIds.has(pl));
+        try {
+            await api.post('/playlists/atualizar-musicas', {
+                playlist_username: username,
+                musica_id: id,
+                to_add: toAdd,
+                to_remove: toRemove
+            });
+            // só fecha o modal quando tudo tiver corrido bem
+            setShowAddToPlaylist(false);
+        } catch (err) {
+            console.error('Erro ao atualizar playlists:', err);
+        }
     }
 
     // More menu & popup components
@@ -251,6 +318,91 @@ export default function PlayerPage () {
                     </div>
                 </div>
             )}
+        </div>
+    );
+
+    const AddToPlaylistPopup = (  // ← ALTERAÇÃO: extraído para constante
+        <div
+            className="modalOverlay"
+            onClick={() => setShowAddToPlaylist(false)}  // fecha ao clicar no overlay
+            tabIndex={-1}
+            role="dialog"
+        >
+            <div
+                className="addToPlaylistModal"
+                ref={addToRef}
+                onClick={e => e.stopPropagation()}        // impede fechar ao clicar dentro
+            >
+                <input
+                    type="text"
+                    className="playlistFilterInput"
+                    placeholder="Find a playlist"
+                    value={filterText}
+                    onChange={e => setFilterText(e.target.value)}
+                />
+                <div className="newPlaylistRow" onClick={() => console.log('Criar nova playlist')}>
+                    <FiPlus className="subIcon" /><span className="subText">New Playlist</span>
+                </div>
+                <hr className="modalDividerSmall"/>
+
+                <div className="playlistsScrollWrapper">
+                    {saved.length > 0 && (
+                        <div className="playlistSection">
+                            <div className="playlistSectionTitle">Saved in</div>
+                            <div className="playlistList">
+                                {savedFiltered.map(pl => (
+                                    <div
+                                        key={pl.nome}
+                                        className="playlistItem"
+                                        onClick={() => toggleSelect(pl.nome)}
+                                    >
+                                        <div
+                                            className="playlistThumbSquare"
+                                            style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                        />
+                                        <div className="playlistText">
+                                            <div className="playlistTitle">{pl.nome}</div>
+                                            <div className="playlistCount">
+                                                {pl.total_songs} songs</div>
+                                        </div>
+                                        <button
+                                            className={`checkButton${selectedIds.has(pl.nome)?' checked':''}`}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="playlistSection">
+                        <div className="playlistSectionTitle">Remaining</div>
+                        <div className="playlistList">
+                            {remainingFiltered.map(pl => (
+                                <div
+                                    key={pl.nome}
+                                    className="playlistItem"
+                                    onClick={() => toggleSelect(pl.nome)}
+                                >
+                                    <div
+                                        className="playlistThumbSquare"
+                                        style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                    />
+                                    <div className="playlistText">
+                                        <div className="playlistTitle">{pl.nome}</div>
+                                        <div className="playlistCount">{pl.total_songs} songs</div>
+                                    </div>
+                                    <button className={`checkButton${selectedIds.has(pl.nome)?' checked':''}`}/>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="modalButtons">
+                    <button onClick={() => setShowAddToPlaylist(false)}>Cancel</button>
+                    <button onClick={handleConfirmAdd} disabled={!hasChanged}>Confirm</button>
+                </div>
+            </div>
         </div>
     );
 
@@ -333,7 +485,17 @@ export default function PlayerPage () {
             <div className="playerSection">
                 {/* === PARTE SUPERIOR === */}
                 <div className="playerDetail">
-                    <div className="coverLarge" onClick={() => console.log('Cover clicked')} />
+                    <div
+                        className="coverLarge"
+                        onClick={() => console.log('Cover clicked')}
+                        style={{
+                            backgroundImage: music.coverUrl
+                                ? `url(${baseUrl}/${music.coverUrl})`
+                                : undefined,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center'
+                        }}
+                    />
 
                     <div className="detailInfo">
                         <h1 className="songTitle">{title}</h1>
@@ -354,7 +516,10 @@ export default function PlayerPage () {
                                     }
                                 </button>
                             </div>
-                            <FiHeart className="playerIcon" onClick={() => console.log('Like clicked')} />
+                            <FiHeart
+                                className={`playerIcon${liked ? ' liked' : ''}`}
+                                onClick={toggleLike}
+                            />
                             <FiPlus
                                 className="playerIcon"
                                 onClick={() => setShowAddToPlaylist(true)}
@@ -487,68 +652,9 @@ export default function PlayerPage () {
 
 
             {/* === Modal “Add to playlist” === */}
-            {showAddToPlaylist && (
-                <div className="modalOverlay">
-                    <div className="addToPlaylistModal" ref={addToRef}>
-                        <input
-                            type="text"
-                            className="playlistFilterInput"
-                            placeholder="Find a playlist"
-                            value={filterText}
-                            onChange={e => setFilterText(e.target.value)}
-                        />
-                        <div className="newPlaylistRow" onClick={() => console.log('Criar nova playlist')}>
-                            <FiPlus className="subIcon" /><span className="subText">New Playlist</span>
-                        </div>
-                        <hr className="modalDividerSmall"/>
+            {showAddToPlaylist && createPortal(AddToPlaylistPopup, document.body)}
 
-                        {saved.length > 0 && (
-                            <div className="playlistSection">
-                                <div className="playlistSectionTitle">Saved in</div>
-                                <div className="playlistList">
-                                    {savedFiltered.map(pl => (
-                                        <div key={pl.id} className="playlistItem" onClick={() => toggleSelect(pl.id)}>
-                                            <div
-                                                className="playlistThumbSquare"
-                                                style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
-                                            />
-                                            <div className="playlistText">
-                                                <div className="playlistTitle">{pl.title}</div>
-                                                <div className="playlistCount">{pl.songs} songs</div>
-                                            </div>
-                                            <button className={`checkButton${selectedIds.has(pl.id)?' checked':''}`}/>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-
-                        <div className="playlistSection">
-                            <div className="playlistSectionTitle">Remaining</div>
-                            <div className="playlistList">
-                                {remainingFiltered.map(pl => (
-                                    <div key={pl.id} className="playlistItem" onClick={() => toggleSelect(pl.id)}>
-                                        <div
-                                            className="playlistThumbSquare"
-                                            style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
-                                        />
-                                        <div className="playlistText">
-                                            <div className="playlistTitle">{pl.title}</div>
-                                            <div className="playlistCount">{pl.songs} songs</div>
-                                        </div>
-                                        <button className={`checkButton${selectedIds.has(pl.id)?' checked':''}`}/>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="modalButtons">
-                            <button onClick={() => setShowAddToPlaylist(false)}>Cancel</button>
-                            <button onClick={handleConfirmAdd} disabled={!hasChanged}>Confirm</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {/* Donate via portal (já estava assim) */}
             {showDonatePopup && createPortal(DonatePopup, document.body)}
         </div>
     );

@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import { NavLink } from 'react-router-dom';
 import '../../css/Pages/Home.css';
+import { PlayerContext } from '../../context/PlayerContext';
 import api from "../services/api";
 
 export default function HomePage() {
+    const { setTrack } = useContext(PlayerContext);
     // ─── Base URL sem o /api para montar URLs de imagens ──────────────
     const baseUrl = process.env.REACT_APP_API_BASE_URL
         ? process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '')
@@ -92,33 +94,58 @@ export default function HomePage() {
         return items.slice(0, count);
     };
 
-    // ─── Handlers de clique (placeholders) ───────────────────────────
-    const handlePlaylistClick = pl => console.log(`Playlist ${pl.nome} clicada!`)
-    const handleArtistClick   = ar => console.log(`Artist ${ar.username} clicado!`)
-
     // ─── Render Recommended Songs ────────────────────────────────────
     const renderRecommended = () =>
-        visibleItems(recommended, showAllRec).map(m => (
-            <div key={m.id} className="coverCard">
-                <NavLink to={`/player/${m.id}`}>
-                    {m.foto
-                        ? <img
-                            className="coverPlaceholder"
-                            src={`${baseUrl}/${m.foto}`}
-                            alt={`Capa ${m.titulo}`}
-                        />
-                        : <div className="coverPlaceholder"/>
-                    }
-                </NavLink>
-                <NavLink to={`/player/${m.id}`} className="coverTitle">
-                    {m.titulo}
-                </NavLink>
+        visibleItems(recommended, showAllRec).map(m => {
+            // ** ALTERAÇÃO: handler que carrega duração e atualiza o PlayerContext
+            const handleClickTitle = e => {
+                e.preventDefault();
 
-                <NavLink to={`/profile/${m.username}`} className="coverArtist">
-                    por {m.username}
-                </NavLink>
-            </div>
-        ))
+                const audio = new Audio();  // carrega ficheiro para metadata
+
+                audio.addEventListener('loadedmetadata', () => {
+                    setTrack({
+                        id:       m.id,
+                        title:    m.titulo,
+                        artist:   m.username,
+                        coverUrl: m.foto ? `${baseUrl}/${m.foto}` : '',
+                        duration: audio.duration
+                    });
+                });
+
+                audio.src = `${baseUrl}/${m.pathficheiro}`;
+
+                audio.load();
+            };
+
+            return (
+                <div key={m.id} className="coverCard">
+                    <NavLink to={`/player/${m.id}`}>
+                        {m.foto
+                            ? <img
+                                className="coverPlaceholder"
+                                src={`${baseUrl}/${m.foto}`}
+                                alt={`Capa ${m.titulo}`}
+                            />
+                            : <div className="coverPlaceholder"/>
+                        }
+                    </NavLink>
+
+                    {/* ** ALTERAÇÃO: usamos <a> com onClick para atualizar PlayerContext */}
+                    <a
+                        href="#!"
+                        className="coverTitle"
+                        onClick={handleClickTitle}
+                    >
+                        {m.titulo}
+                    </a>
+
+                    <NavLink to={`/profile/${m.username}`} className="coverArtist">
+                        por {m.username}
+                    </NavLink>
+                </div>
+            );
+        });
 
     // ─── Render Top Playlists ────────────────────────────────────────
     const renderTopPlaylists = () =>
@@ -154,7 +181,7 @@ export default function HomePage() {
                             src={`${baseUrl}/${ar.foto}`}
                             alt={`Foto de ${ar.username}`}
                         />
-                        : <div className="coverPlaceholder" onClick={() => handleArtistClick(ar)} />
+                        : <div className="coverPlaceholder"/>
                     }
                 </NavLink>
                 <NavLink to={`/profile/${encodeURIComponent(ar.username)}`} className="coverTitle">
@@ -177,7 +204,7 @@ export default function HomePage() {
                             src={`${baseUrl}/${ar.artist_foto}`}
                             alt={`Avatar de ${ar.artist_username}`}
                         />
-                    : <div className="coverPlaceholder" onClick={() => handleArtistClick(ar)} />
+                    : <div className="coverPlaceholder"/>
                     }
                 </NavLink>
                 <NavLink to={`/profile/${encodeURIComponent(ar.artist_username)}`} className="coverTitle">

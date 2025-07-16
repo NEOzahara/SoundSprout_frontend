@@ -801,7 +801,7 @@ export default function ProfilePage() {
                         <div
                             className="profileAvatar"
                             style={{
-                                backgroundImage: user?.foto
+                                backgroundImage: profileUser?.foto
                                     ? `url(${baseUrl}${profileUser.foto.startsWith('/') ? '' : '/'}${profileUser.foto})`
                                     : undefined
                             }}

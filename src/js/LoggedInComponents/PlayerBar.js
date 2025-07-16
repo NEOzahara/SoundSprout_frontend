@@ -1,5 +1,6 @@
-import React, {useState, useRef, useEffect, useLayoutEffect} from 'react';
-import { NavLink } from 'react-router-dom';
+import React, {useState, useRef, useEffect, useContext, useLayoutEffect} from 'react';
+import { createPortal } from 'react-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
     FiSkipBack,
     FiPause,
@@ -13,13 +14,24 @@ import {
     FiMessageCircle,
     FiList
 } from 'react-icons/fi';
+import { PlayerContext } from '../../context/PlayerContext';
 import api from '../services/api';
-import { playlists } from '../../data/playlists';
-import { musics } from '../../data/musics';
 
 export default function PlayerBar() {
+
+    const { track } = useContext(PlayerContext);
+    const id = track.id;
+    const [liked, setLiked] = useState(false);
+    const formatTime = time => {
+        const minutes = Math.floor(time / 60);
+        const seconds = String(Math.floor(time % 60)).padStart(2, '0');
+        return `${minutes}:${seconds}`;
+    };
+
+
     const [playlist, setPlaylist] = useState([]);
     const [trackIndex, setTrackIndex] = useState(0);
+
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
@@ -37,19 +49,19 @@ export default function PlayerBar() {
     // ref para detetar clicks fora do popup
     const volumeRef = useRef(null);
 
-        // sempre que o popup estiver aberto, adiciona listener para clicks fora
-        useEffect(() => {
-            if (!showVolume) return;
-            function handleClickOutside(e) {
-                if (volumeRef.current && !volumeRef.current.contains(e.target)) {
-                    setShowVolume(false);
-                }
+    // sempre que o popup estiver aberto, adiciona listener para clicks fora
+    useEffect(() => {
+        if (!showVolume) return;
+        function handleClickOutside(e) {
+            if (volumeRef.current && !volumeRef.current.contains(e.target)) {
+                setShowVolume(false);
             }
-            document.addEventListener('mousedown', handleClickOutside);
-            return () => document.removeEventListener('mousedown', handleClickOutside);
-        }, [showVolume]);
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showVolume]);
 
-        //Comentado temporariamente
+    //Comentado temporariamente
     // Carregar playlist do utilizador 'joao'
     /* useEffect(() => {
         api.get(`/musicas/utilizador/joao`)
@@ -60,10 +72,6 @@ export default function PlayerBar() {
             .catch(err => console.error('Erro ao carregar playlist:', err));
     }, []);*/
 
-    //Usado para testes
-    useEffect(() => {
-        setPlaylist(musics);
-    }, []);
 
     const currentTrack = playlist[trackIndex] || {};
     const streamUrl = currentTrack.titulo
@@ -86,6 +94,32 @@ export default function PlayerBar() {
         }
         console.log("titleOverflow:", titleOverflow, "artistOverflow:", artistOverflow);
     }, [currentTrack.titulo, currentTrack.username]);
+
+    useEffect(() => {
+        if (!id) return;
+        let mounted = true;
+        api.get(`/musicas/${id}/is-liked`)
+            .then(({ data }) => {
+                if (mounted) setLiked(data.liked);
+            })
+            .catch(console.error);
+        return () => { mounted = false };
+    }, [id]);
+
+    async function toggleLike() {
+        if (!id) return;
+        try {
+            if (liked) {
+                await api.delete(`/musicas/like/${id}`);
+                setLiked(false);
+            } else {
+                await api.post(`/musicas/like`, { id });
+                setLiked(true);
+            }
+        } catch (err) {
+            console.error('Erro ao (un)like:', err);
+        }
+    }
 
     // Atualizar áudio ao mudar de faixa
     useEffect(() => {
@@ -133,12 +167,6 @@ export default function PlayerBar() {
         setIsPlaying(true);
     };
 
-    const formatTime = time => {
-        const minutes = Math.floor(time / 60);
-        const seconds = String(Math.floor(time % 60)).padStart(2, '0');
-        return `${minutes}:${seconds}`;
-    };
-
     useEffect(() => {
         if (audioRef.current) audioRef.current.volume = volume;
     }, [volume]);
@@ -146,6 +174,8 @@ export default function PlayerBar() {
     const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
     const [filterText, setFilterText] = useState('');
     const [selectedIds, setSelectedIds] = useState(new Set());
+    const [savedPlaylists, setSavedPlaylists] = useState([]);
+    const [remainingPlaylists, setRemainingPlaylists] = useState([]);
     const addToRef = useRef(null);
 
     // Fecha popup ao clicar fora
@@ -160,36 +190,54 @@ export default function PlayerBar() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [showAddToPlaylist]);
 
-    // sempre que muda a faixa, reinicia seleção
-    const currentTrackId = currentTrack.id; // pressupõe que currentTrack.id existe
     useEffect(() => {
-        const saved = playlists
-            .filter(pl => pl.trackIds.includes(currentTrackId))
-            .map(pl => pl.id);
-        setSelectedIds(new Set(saved));
+        if (!showAddToPlaylist) return;
         setFilterText('');
-    }, [currentTrackId]);
+        setSelectedIds(new Set());
 
-    // separa playlists em “Saved” e “Remaining”
-    const saved = playlists.filter(pl =>
-        pl.trackIds.includes(currentTrackId)
-    );
-    const remaining = playlists.filter(pl =>
-        !pl.trackIds.includes(currentTrackId)
-    );
-    // filtra segundo o texto
-    const savedFiltered = saved.filter(pl =>
-        pl.title.toLowerCase().includes(filterText.toLowerCase())
-    );
-    const remainingFiltered = remaining.filter(pl =>
-        pl.title.toLowerCase().includes(filterText.toLowerCase())
-    );
+        const stored = localStorage.getItem('user');
+        if (!stored) {
+            console.error('Usuário não autenticado');
+            return;
+        }
+        const { username } = JSON.parse(stored);
 
-    // detecta se houve alguma mudança para habilitar “Confirmar”
-    const initialSet = new Set(saved.map(pl => pl.id));
+        api.get(`/playlists/utilizador/${username}`)
+            .then(({ data: playlists }) => {
+                return Promise.all(
+                    playlists.map(pl =>
+                            api.get(
+                                `/playlists/${encodeURIComponent(pl.nome)}/${username}/musicas`
+                            ).then(({ data: musics }) => ({
+                                ...pl,
+                                contains: musics.some(m => m.id === id),
+                                total_songs: musics.length
+                            }))
+                    )
+                );
+            })
+            .then(plsWithFlag => {
+                const saved  = plsWithFlag.filter(pl => pl.contains);
+                const remain = plsWithFlag.filter(pl => !pl.contains);
+                setSavedPlaylists(saved);
+                setRemainingPlaylists(remain);
+                // pré-seleciona as que já tinham a música
+                setSelectedIds(new Set(saved.map(pl => pl.nome)));
+            })
+            .catch(console.error);
+        }, [showAddToPlaylist, id]);
+
+    // filtros e estado inicial
+    const savedFiltered = savedPlaylists.filter(pl =>
+            pl.nome.toLowerCase().includes(filterText.toLowerCase())
+    );
+    const remainingFiltered = remainingPlaylists.filter(pl =>
+            pl.nome.toLowerCase().includes(filterText.toLowerCase())
+    );
+    const initialSet = new Set(savedPlaylists.map(pl => pl.nome));
     const hasChanged =
         selectedIds.size !== initialSet.size ||
-        [...selectedIds].some(id => !initialSet.has(id));
+        [...selectedIds].some(pid => !initialSet.has(pid));
 
     function toggleSelect(id) {
         setSelectedIds(prev => {
@@ -201,9 +249,25 @@ export default function PlayerBar() {
     }
 
     function handleConfirmAdd() {
-        console.log('Playlists seleccionadas:', [...selectedIds]);
-        setShowAddToPlaylist(false);
+        const toAdd = [...selectedIds].filter(pl => !initialSet.has(pl));
+        const toRemove = [...initialSet].filter(pl => !selectedIds.has(pl));
+        const stored = localStorage.getItem('user');
+        if (!stored) return;
+        const { username } = JSON.parse(stored);
+        api.post('/playlists/atualizar-musicas', {
+            playlist_username: username,
+            musica_id: id,
+            to_add: toAdd,
+            to_remove: toRemove
+        })
+            .then(() => setShowAddToPlaylist(false))
+            .catch(console.error);
     }
+
+    const location = useLocation();
+    const commentsActive =
+        location.pathname === `/player/${id}` &&
+        new URLSearchParams(location.search).get("comments") === "true";
 
     return (
         <>
@@ -225,7 +289,7 @@ export default function PlayerBar() {
                     console.log('Loop toggled');
                 }}/>
 
-                <span className="currentTime">{formatTime(currentTime)}</span>
+                <span className="currentTime">0:00</span>
                 <div className="progressContainer" onClick={e => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const pct = (e.clientX - rect.left) / rect.width;
@@ -234,7 +298,7 @@ export default function PlayerBar() {
                     <div className="progressTrack"/>
                     <div className="progressFill" style={{width: `${(currentTime / duration) * 100}%`}}/>
                 </div>
-                <span className="totalTime">{formatTime(duration)}</span>
+                <span className="totalTime">{formatTime(track.duration || 0)}</span>
                 <div className="volumeContainer" ref={volumeRef}>
                     <FiVolume2
                         className="volumeIcon"
@@ -261,35 +325,47 @@ export default function PlayerBar() {
                     )}
                 </div>
 
-                <NavLink to={`/player/${currentTrack.id}`} className="albumArtLink">
-                    <div className="albumArt"/>
+                <NavLink to={`/player/${track.id}`} className="albumArtLink">
+                    <div
+                        className="albumArt"
+                        style={{
+                            backgroundImage: track.coverUrl
+                                ? `url(${track.coverUrl})`
+                                : undefined,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center'
+                        }}
+                    />
                 </NavLink>
 
                 <div className="trackInfo">
                     <NavLink
-                        to={`/player/${currentTrack.id}`}
+                        to={`/player/${track.id}`}
                         className={`trackTitle ${titleOverflow ? "marquee-hover" : ""}`}
                         ref={titleInnerRef}
                     >
-                        {currentTrack.title || "TESTEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"} {/*currentTrack.titulo*/}
+                        {track.title || "TESTEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"} {/*currentTrack.titulo*/}
                     </NavLink>
                     <NavLink
-                        to={`/profile/${encodeURIComponent(currentTrack.artist)}`}
+                        to={`/profile/${encodeURIComponent(track.artist)}`}
                         className={`trackArtist ${artistOverflow ? "marquee-hover" : ""}`}
                         ref={artistInnerRef}
                     >
-                        {currentTrack.artist || "ARTISTA"} {/*currentTrack.username*/}
+                        {track.artist || "ARTISTA"} {/*currentTrack.username*/}
                     </NavLink>
                 </div>
 
-                <FiHeart className="actionIcon" onClick={() => console.log('Heart clicado!')}/>
+                <FiHeart
+                    className={`actionIcon${liked ? ' liked' : ''}`}
+                    onClick={toggleLike}
+                />
                 <FiPlus
                     className="actionIcon"
                     onClick={() => setShowAddToPlaylist(true)}
                 />
                 <NavLink
-                    to={`/player/${currentTrack.id}?comments=true`}
-                    className="actionIcon"
+                    to={`/player/${id}?comments=true`}
+                    className={`actionIcon${commentsActive ? ' commentActive' : ''}`}
                 >
                     <FiMessageCircle />
                 </NavLink>
@@ -298,14 +374,18 @@ export default function PlayerBar() {
                 </NavLink>
             </div>
 
-            {/* === Popup “Add to playlist” === */}
-            {showAddToPlaylist && (
-                <div className="modalOverlay">
+            {showAddToPlaylist && createPortal(
+                <div
+                    className="modalOverlay"
+                    onClick={() => setShowAddToPlaylist(false)}
+                    tabIndex={-1}
+                    role="dialog"
+                >
                     <div
                         className="addToPlaylistModal"
                         ref={addToRef}
+                        onClick={e => e.stopPropagation()}
                     >
-                        {/* campo de filtro */}
                         <input
                             type="text"
                             className="playlistFilterInput"
@@ -313,43 +393,32 @@ export default function PlayerBar() {
                             value={filterText}
                             onChange={e => setFilterText(e.target.value)}
                         />
-
-                        {/* linha “New Playlist” */}
-                        <div
-                            className="newPlaylistRow"
-                            onClick={() => console.log('Criar nova playlist')}
-                        >
-                            <FiPlus className="subIcon" />
-                            <span className="subText">New Playlist</span>
+                        <div className="newPlaylistRow" onClick={() => console.log('Criar nova playlist')}>
+                            <FiPlus className="subIcon" /><span className="subText">New Playlist</span>
                         </div>
+                        <hr className="modalDividerSmall"/>
 
-                        {/* divisor pequeno */}
-                        <hr className="modalDividerSmall" />
-
-                        {/* “Saved in” só se houver playlists salvas */}
                         <div className="playlistsScrollWrapper">
-                            {saved.length > 0 && (
+                            {savedPlaylists.length > 0 && (
                                 <div className="playlistSection">
                                     <div className="playlistSectionTitle">Saved in</div>
                                     <div className="playlistList">
                                         {savedFiltered.map(pl => (
                                             <div
-                                                key={pl.id}
+                                                key={pl.nome}
                                                 className="playlistItem"
-                                                onClick={() => toggleSelect(pl.id)}
+                                                onClick={() => toggleSelect(pl.nome)}
                                             >
                                                 <div
                                                     className="playlistThumbSquare"
-                                                    style={{
-                                                        backgroundImage: `url(${pl.imageUrl || '/placeholder.png'})`
-                                                    }}
+                                                    style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
                                                 />
                                                 <div className="playlistText">
-                                                    <div className="playlistTitle">{pl.title}</div>
-                                                    <div className="playlistCount">{pl.songs} songs</div>
+                                                    <div className="playlistTitle">{pl.nome}</div>
+                                                    <div className="playlistCount">{pl.total_songs} songs</div>
                                                 </div>
                                                 <button
-                                                    className={`checkButton${selectedIds.has(pl.id) ? ' checked' : ''}`}
+                                                    className={`checkButton${selectedIds.has(pl.nome)?' checked':''}`}
                                                 />
                                             </div>
                                         ))}
@@ -357,46 +426,37 @@ export default function PlayerBar() {
                                 </div>
                             )}
 
-                            {/* Remaining */}
                             <div className="playlistSection">
                                 <div className="playlistSectionTitle">Remaining</div>
                                 <div className="playlistList">
                                     {remainingFiltered.map(pl => (
                                         <div
-                                            key={pl.id}
+                                            key={pl.nome}
                                             className="playlistItem"
-                                            onClick={() => toggleSelect(pl.id)}
+                                            onClick={() => toggleSelect(pl.nome)}
                                         >
                                             <div
                                                 className="playlistThumbSquare"
-                                                style={{
-                                                    backgroundImage: `url(${pl.imageUrl || '/placeholder.png'})`
-                                                }}
+                                                style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
                                             />
                                             <div className="playlistText">
-                                                <div className="playlistTitle">{pl.title}</div>
-                                                <div className="playlistCount">{pl.songs} songs</div>
+                                                <div className="playlistTitle">{pl.nome}</div>
+                                                <div className="playlistCount">{pl.total_songs} songs</div>
                                             </div>
-                                            <button
-                                                className={`checkButton${selectedIds.has(pl.id) ? ' checked' : ''}`}
-                                            />
+                                            <button className={`checkButton${selectedIds.has(pl.nome)?' checked':''}`}/>
                                         </div>
                                     ))}
                                 </div>
                             </div>
                         </div>
 
-                        {/* botões Cancel / Confirm */}
                         <div className="modalButtons">
-                            <button type="button" onClick={() => setShowAddToPlaylist(false)}>
-                                Cancel
-                            </button>
-                            <button type="button" disabled={!hasChanged} onClick={handleConfirmAdd}>
-                                Confirm
-                            </button>
+                            <button onClick={() => setShowAddToPlaylist(false)}>Cancel</button>
+                            <button onClick={handleConfirmAdd} disabled={!hasChanged}>Confirm</button>
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body
             )}
         </>
     );

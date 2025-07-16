@@ -3,9 +3,20 @@ import api from '../services/api';
 import '../../css/Pages/Explore.css';
 import {FiSearch, FiUser} from 'react-icons/fi';
 import { NavLink } from 'react-router-dom';
-import { testPlaylists, testMusics, testUsers } from '../../data/test';
 
 export default function ExplorePage() {
+
+    const INITIAL_VISIBLE = 6;
+    const MAX_VISIBLE= 20;
+
+    const [showAllDiscover, setShowAllDiscover]  = useState(false);
+    const [showAllGenres, setShowAllGenres] = useState(false);
+    const [showAllPlaylists, setShowAllPlaylists] = useState(false);
+    const [showAllArtists, setShowAllArtists] = useState(false);
+
+    const visibleItems = (items, showAll) =>
+        items.slice(0, showAll ? Math.min(items.length, MAX_VISIBLE) : INITIAL_VISIBLE);
+
     // Search bar (mantenho intacto)
     const [query, setQuery] = useState('')
     const results = useMemo(() => {
@@ -77,9 +88,7 @@ export default function ExplorePage() {
 
     // ─── Render Functions ──────────────────────────────────────────
     const renderMusicCarrousel = musics =>
-        musics
-            .slice(0, 8)
-            .map(m => (
+        visibleItems(musics, showAllDiscover).map(m => (
             <NavLink key={m.id} to={`/player/${m.id}`} className="coverCard">
                 {m.foto
                     ? <img
@@ -94,9 +103,7 @@ export default function ExplorePage() {
         ))
 
     const renderGenreCarrousel = genres =>
-        genres
-            .slice(0, 8)
-            .map(g => {
+        visibleItems(genres, showAllGenres).map(g => {
             // use a capa da primeira música ou placeholder
             const first = g.songs[0]
             const thumb = first
@@ -122,7 +129,7 @@ export default function ExplorePage() {
         })
 
     const renderPlaylistCarrousel = pls =>
-        pls.map(pl => (
+        visibleItems(pls, showAllPlaylists).map(pl => (
             <NavLink
                 key={`${pl.username}::${pl.nome}`}
                 to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}
@@ -141,7 +148,7 @@ export default function ExplorePage() {
         ))
 
     const renderUserCarrousel = users =>
-        users.map(u => (
+        visibleItems(users, showAllArtists).map(u => (
             <NavLink
                 key={u.username}
                 to={`/profile/${encodeURIComponent(u.username)}`}
@@ -164,11 +171,35 @@ export default function ExplorePage() {
 
     // ─── Seções com título e carrossel ─────────────────────────────
     const sections = [
-        { title: 'Discover',          render: () => renderMusicCarrousel(discoverMusics)      },
-        { title: 'Genres',            render: () => renderGenreCarrousel(genresPlaylists)   },
-        { title: 'Playlists',         render: () => renderPlaylistCarrousel(mainPlaylists)  },
-        { title: 'Artists to Explore',render: () => renderUserCarrousel(exploreArtists)     },
-    ]
+        {
+            title: 'Discover',
+            items: discoverMusics,
+            showAll: showAllDiscover,
+            toggle: () => setShowAllDiscover(v => !v),
+            render: () => renderMusicCarrousel(discoverMusics)
+        },
+        {
+            title: 'Genres',
+            items: genresPlaylists,
+            showAll: showAllGenres,
+            toggle: () => setShowAllGenres(v => !v),
+            render: () => renderGenreCarrousel(genresPlaylists)
+        },
+        {
+            title: 'Playlists',
+            items: mainPlaylists,
+            showAll: showAllPlaylists,
+            toggle: () => setShowAllPlaylists(v => !v),
+            render: () => renderPlaylistCarrousel(mainPlaylists)
+        },
+        {
+            title: 'Artists to Explore',
+            items: exploreArtists,
+            showAll: showAllArtists,
+            toggle: () => setShowAllArtists(v => !v),
+            render: () => renderUserCarrousel(exploreArtists)
+        },
+    ];
 
     return (
         <>
@@ -224,11 +255,15 @@ export default function ExplorePage() {
             </div>
 
             <div className="exploreSection">
-                {sections.map(({ title, render }, idx) => (
+                {sections.map(({ title, items, showAll, toggle, render }, idx) => (
                     <React.Fragment key={idx}>
                         <div className="recommendHeader">
                             <span className="sectionTitle">{title}</span>
-                            <button className="seeAll">see all</button>
+                            {items.length > INITIAL_VISIBLE && (
+                                <button className="seeAll" onClick={toggle}>
+                                    {showAll ? 'show less' : 'see all'}
+                                </button>
+                            )}
                         </div>
                         <div className="carouselWrapper">
                             <div className="carousel">

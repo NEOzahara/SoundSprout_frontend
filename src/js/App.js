@@ -17,6 +17,7 @@ import ProfilePage from './Pages/ProfilePage';
 import AchievementsPage from './Pages/AchievementsPage';
 import LibraryPlaylistsPage from './Pages/LibraryPlaylistsPage';
 import PlaylistPage from './Pages/PlaylistPage';
+import GenrePlaylistPage from "./Pages/GenrePlaylistPage";
 import LibraryMusicsPage from './Pages/LibraryMusicsPage';
 import LibraryLikesPage from './Pages/LibraryLikesPage';
 import LiveStreamsPage from './Pages/LiveStreamsPage';
@@ -36,40 +37,41 @@ import ResetPasswordPage  from './Pages/ResetPasswordPage';
 export default function App() {
     return (
         <BrowserRouter>
-            <Routes>
-                <Route path="login" element={<LoginPage />} />
-                <Route path="signup" element={<SignupPage />} />
-                <Route path="forgot-password" element={<ForgotPasswordPage />} />
-                <Route path="/reset-password"  element={<ResetPasswordPage />} />
+                <Routes>
+                    <Route path="login" element={<LoginPage />} />
+                    <Route path="signup" element={<SignupPage />} />
+                    <Route path="forgot-password" element={<ForgotPasswordPage />} />
+                    <Route path="/reset-password"  element={<ResetPasswordPage />} />
 
-                <Route element={<Layout />}>
-                    <Route index element={<HomePage />} />
-                    <Route path="explore" element={<ExplorePage />} />
-                    <Route path="following" element={<FollowingPage />} />
-                    <Route path="settings" element={<SettingsPage />} />
-                    <Route path="subscription" element={<SubscriptionPage />} />
-                    <Route path="playlists" element={<LibraryPlaylistsPage />} />
-                    <Route path="playlist/:creator/:playlistName" element={<PlaylistPage />} />
-                    {/*<Route path="playlist/:id" element={<PlaylistPage />} />*/}
-                    <Route path="musics" element={<LibraryMusicsPage />} />
-                    <Route path="likes" element={<LibraryLikesPage />} />
-                    <Route path="liveStreams" element={<LiveStreamsPage />} />
-                    <Route path="liveStream/:id" element={<LiveStreamPage />} />
-                    <Route path="queue" element={<QueuePage />} />
-                    <Route path="communityEvent/:category" element={<CommunityEventPage />} />
+                    <Route element={<Layout />}>
+                        <Route index element={<HomePage />} />
+                        <Route path="explore" element={<ExplorePage />} />
+                        <Route path="following" element={<FollowingPage />} />
+                        <Route path="settings" element={<SettingsPage />} />
+                        <Route path="subscription" element={<SubscriptionPage />} />
+                        <Route path="genre/:genreName" element={<GenrePlaylistPage />} />
+                        <Route path="playlists" element={<LibraryPlaylistsPage />} />
+                        <Route path="playlist/:creator/:playlistName" element={<PlaylistPage />} />
+                        {/*<Route path="playlist/:id" element={<PlaylistPage />} />*/}
+                        <Route path="musics" element={<LibraryMusicsPage />} />
+                        <Route path="likes" element={<LibraryLikesPage />} />
+                        <Route path="liveStreams" element={<LiveStreamsPage />} />
+                        <Route path="liveStream/:id" element={<LiveStreamPage />} />
+                        <Route path="queue" element={<QueuePage />} />
+                        <Route path="communityEvent/:category" element={<CommunityEventPage />} />
 
-                    <Route path="player/:songId?" element={<PlayerPage />} />
-                    {/*<Route path="profile" element={<ProfilePage />} />*/} {/*Para fallback*/}
-                    <Route path="profile/:username" element={<ProfilePage />} />
+                        <Route path="player/:songId?" element={<PlayerPage />} />
+                        {/*<Route path="profile" element={<ProfilePage />} />*/} {/*Para fallback*/}
+                        <Route path="profile/:username" element={<ProfilePage />} />
 
-                    <Route path="achievements/:username" element={<AchievementsPage />} />
-                </Route>
-                <Route element={<LayoutLoggedOff />}>
-                    <Route path="homeLoggedOff" element={<HomeLoggedOffPage />} />
-                    <Route path="exploreLoggedOff" element={<ExploreLoggedOffPage />} />
-                    <Route path="settingsLoggedOff" element={<SettingsLoggedOffPage />} />
-                </Route>
-            </Routes>
+                        <Route path="achievements/:username" element={<AchievementsPage />} />
+                    </Route>
+                    <Route element={<LayoutLoggedOff />}>
+                        <Route path="homeLoggedOff" element={<HomeLoggedOffPage />} />
+                        <Route path="exploreLoggedOff" element={<ExploreLoggedOffPage />} />
+                        <Route path="settingsLoggedOff" element={<SettingsLoggedOffPage />} />
+                    </Route>
+                </Routes>
         </BrowserRouter>
     );
 }

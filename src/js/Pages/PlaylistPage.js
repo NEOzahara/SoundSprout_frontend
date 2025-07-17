@@ -1,4 +1,4 @@
-import React, {useState, useMemo, useEffect } from 'react';
+import React, {useState, useMemo, useEffect, useRef } from 'react';
 import '../../css/Pages/Playlist.css';
 import { eventPlaylists } from '../../data/eventPlaylists';
 import { playlists } from '../../data/playlists';
@@ -20,6 +20,14 @@ export default function PlaylistPage() {
 
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
 
+    const [showDropdown, setShowDropdown] = useState(false);
+    const moreRef = useRef(null);
+    const navigate = useNavigate();
+
+    const [likedTracks, setLikedTracks] = useState({});
+    const [playlistLiked, setPlaylistLiked] = useState(false);
+    const [isFollowingCreator, setIsFollowingCreator] = useState(false);
+
     const { creator, playlistName } = useParams();
     const [meta, setMeta] = useState(null);
     const [tracks, setTracks] = useState([]);
@@ -28,8 +36,10 @@ export default function PlaylistPage() {
     const [recentAsc, setRecentAsc] = useState(true);
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
+    const searchRef = useRef(null);
     const [durations, setDurations] = useState({});
     const [totalDuration, setTotalDuration] = useState('');
+    const [openTrackDropdown, setOpenTrackDropdown] = useState(null);
 
     useEffect(() => {
         // 1) metadata da playlist
@@ -41,6 +51,29 @@ export default function PlaylistPage() {
             .then(({ data }) => setTracks(data))
             .catch(err => console.error('Erro músicas:', err));
     }, [creator, playlistName]);
+
+    useEffect(() => {
+        tracks.forEach(track => {
+            api.get(`/musicas/${track.id}/is-liked`)
+                .then(({ data }) => {
+                    setLikedTracks(prev => ({ ...prev, [track.id]: data.liked }));
+                })
+                .catch(err => console.error('Erro is-liked:', err));
+        });
+    }, [tracks]);
+
+    async function toggleTrackLike(trackId) {
+        try {
+            if (likedTracks[trackId]) {
+                await api.delete(`/musicas/like/${trackId}`);
+            } else {
+                await api.post('/musicas/like', { id: trackId });
+            }
+            setLikedTracks(prev => ({ ...prev, [trackId]: !prev[trackId] }));
+        } catch (err) {
+            console.error('Erro ao (un)like:', err);
+        }
+    }
 
     useEffect(() => {
         api.get(`/utilizadores/${encodeURIComponent(creator)}`)
@@ -79,7 +112,7 @@ export default function PlaylistPage() {
             if (!dur) return sum;
             const [min, sec] = dur.split(':').map(Number);
             return sum + min * 60 + sec;
-            }, 0);
+        }, 0);
         const hours = Math.floor(totalSec / 3600);
         const mins  = Math.floor((totalSec % 3600) / 60);
         const secs  = totalSec % 60;
@@ -90,15 +123,74 @@ export default function PlaylistPage() {
         setTotalDuration(formatted);
     }, [durations, tracks]);
 
+    // Fecha a search ao clicar fora
+    useEffect(() => {
+        if (!showSearch) return;
+        function handleClickOutside(e) {
+            if (searchRef.current && !searchRef.current.contains(e.target)) {
+                setShowSearch(false);
+                setQuery('');
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showSearch]);
+
+    useEffect(() => {
+        if (!showDropdown) return;
+        function handleClickOutside(e) {
+            if (moreRef.current && !moreRef.current.contains(e.target)) {
+                setShowDropdown(false);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showDropdown]);
+
+    useEffect(() => {
+        if (!meta) return;
+        api.get(`/playlists/${encodeURIComponent(playlistName)}/${encodeURIComponent(creator)}/is-liked`)
+            .then(({ data }) => setPlaylistLiked(data.liked))
+            .catch(console.error);
+    }, [meta, creator, playlistName]);
+
+    // 3) Estado inicial de Follow do criador
+    useEffect(() => {
+        const stored = localStorage.getItem('user');
+        if (!stored) return;
+        const { username: logged } = JSON.parse(stored);
+        if (logged === creator) return; // não seguir a si mesmo
+        api.get(`/utilizadores/${encodeURIComponent(logged)}/following`)
+            .then(({ data }) => {
+                const names = data.map(u => u.following_username);
+                setIsFollowingCreator(names.includes(creator));
+            })
+            .catch(console.error);
+    }, [creator]);
+
+    useEffect(() => {
+        function handleClickOutside() {
+            setOpenTrackDropdown(null);
+        }
+        if (openTrackDropdown !== null) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [openTrackDropdown]);
+
     // lista ordenada / filtrada
     const displayedTracks = useMemo(() => {
-        let arr = recentAsc ? [...tracks] : [...tracks].reverse();
-        if (query.trim()) {
-            const q = query.trim().toLowerCase();
-            arr = arr.filter(m => m.titulo.toLowerCase().includes(q));
-        }
-        return arr;
-    }, [tracks, recentAsc, query]);
+        return recentAsc ? [...tracks] : [...tracks].reverse();
+    }, [tracks, recentAsc]);
+
+    // sugestões de autocomplete: filtra por título dentro de tracks
+    const suggestions = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return [];
+        return tracks
+            .filter(m => m.titulo.toLowerCase().includes(q))
+            .map(m => ({ id: m.id, titulo: m.titulo, username: m.username, foto: m.foto }));
+    }, [tracks, query]);
 
     const { id: rawId } = useParams();
     const playlist = useMemo(() => {
@@ -109,6 +201,41 @@ export default function PlaylistPage() {
         const num = Number(rawId);
         return playlists.find(pl => pl.id === num) || {};
     }, [rawId]);
+
+    async function togglePlaylistLike() {
+        try {
+            if (playlistLiked) {
+                await api.delete(
+                    `/playlists/like/${encodeURIComponent(playlistName)}/${encodeURIComponent(creator)}`
+                );
+            } else {
+                await api.post('/playlists/like', {
+                    playlist_nome: playlistName,
+                    playlist_username: creator
+                });
+            }
+            setPlaylistLiked(pl => !pl);
+        } catch (err) {
+            console.error('Erro ao (un)like playlist:', err);
+        }
+    }
+
+    // função de toggle Follow/Unfollow do criador
+    async function toggleFollowCreator() {
+        const stored = localStorage.getItem('user');
+        if (!stored) return;
+        try {
+            if (isFollowingCreator) {
+                await api.delete(`/utilizadores/seguir/${encodeURIComponent(creator)}`);
+            } else {
+                await api.post('/utilizadores/seguir', { seguido_username: creator });
+            }
+            setIsFollowingCreator(f => !f);
+        } catch (err) {
+            console.error('Erro ao (un)follow usuário:', err);
+        }
+        setShowDropdown(false);
+    }
 
     const {
         type = 'Public',
@@ -148,7 +275,11 @@ export default function PlaylistPage() {
                     {/* 1) Quadrado de capa */}
                     <div
                         className="playlistCover"
-                        style={{ backgroundImage: meta.cover ? `url(${meta.cover})` : undefined }}
+                        style={{
+                            backgroundImage: meta.cover
+                                ? `url(${baseUrl}/${meta.cover.replace(/^\/+/, '')})`
+                                : undefined
+                        }}
                     />
 
                     {/* 2) Textos */}
@@ -163,11 +294,16 @@ export default function PlaylistPage() {
                                 className="userAvatarSmall"
                                 style={{
                                     backgroundImage: creatorFoto
-                                        ? `url(${baseUrl}${creatorFoto})`
+                                        ? `url(${baseUrl}/${creatorFoto.replace(/^\/+/, '')})`
                                         : undefined
                                 }}
                             />
-                            <span className="metaOwner">{meta.owner}</span>
+                            <NavLink
+                                to={`/profile/${encodeURIComponent(meta.owner)}`}
+                                className="metaOwner"
+                            >
+                                {meta.owner}
+                            </NavLink>
                             <span className="metaRest">– {meta.listens} listens – {meta.songs} songs – {totalDuration} total time</span>
                         </div>
                     </div>
@@ -190,20 +326,20 @@ export default function PlaylistPage() {
                             onClick={() => setIsPlaying(p => !p)}
                         >
                             {isPlaying ? (
-                            <svg
-                                className="playlistToggleIcon"
-                                width="22"
-                                height="22"
-                                viewBox="0 0 22 22"
-                                fill="#e0e0e0"
-                                stroke="#e0e0e0"
-                                strokeWidth="1.5"
-                                strokeLinejoin="round"
-                                style={{ display: 'block' }}
-                            >
-                                <rect x="4" y="4" width="4" height="14" />
-                                <rect x="14" y="4" width="4" height="14" />
-                            </svg>
+                                <svg
+                                    className="playlistToggleIcon"
+                                    width="22"
+                                    height="22"
+                                    viewBox="0 0 22 22"
+                                    fill="#e0e0e0"
+                                    stroke="#e0e0e0"
+                                    strokeWidth="1.5"
+                                    strokeLinejoin="round"
+                                    style={{ display: 'block' }}
+                                >
+                                    <rect x="4" y="4" width="4" height="14" />
+                                    <rect x="14" y="4" width="4" height="14" />
+                                </svg>
 
                             ) : (
 
@@ -243,7 +379,10 @@ export default function PlaylistPage() {
                 <span className="playlistToolbarText playlistToolbarItem">Filter: All</span>
 
                 {/* === autocomplete search === */}
-                <div className={`searchContainerLib${showSearch ? ' active' : ''}`}>
+                <div
+                    ref={searchRef}
+                    className={`searchContainerLib${showSearch ? ' active' : ''}`}
+                >
                     {showSearch && (
                         <input
                             className="searchInputLib"
@@ -261,17 +400,27 @@ export default function PlaylistPage() {
                             setQuery('');
                         }}
                     />
-                    {showSearch && displayedTracks.length > 0 && (
+                    {showSearch && query.trim() !== '' && suggestions.length > 0 && (
                         <ul className="suggestionsLib">
-                            {displayedTracks.map(m => (
-                                <li key={m.id} className="suggestionItem">
+                            {suggestions.map(item => (
+                                <li key={item.id} className="suggestionItem">
                                     <NavLink
-                                        to={`/player/${m.id}`}
+                                        to={`/player/${item.id}`}
                                         onClick={() => setShowSearch(false)}
-                                        className="suggestionText"
+                                        className="suggestionItemLib"
                                     >
-                                        <div className="suggestionTitle">{m.title}</div>
-                                        <div className="suggestionSubtitle">{m.artist}</div>
+                                        <div
+                                            className="suggestionThumbLib"
+                                            style={{
+                                                backgroundImage: item.foto
+                                                    ? `url(${baseUrl}/${item.foto.replace(/^\/+/, '')})`
+                                                    : undefined
+                                            }}
+                                        />
+                                        <div className="suggestionTextLib">
+                                            <div className="suggestionTitleLib">{item.titulo}</div>
+                                            <div className="suggestionSubtitleLib">{item.username}</div>
+                                        </div>
                                     </NavLink>
                                 </li>
                             ))}
@@ -279,19 +428,53 @@ export default function PlaylistPage() {
                     )}
                 </div>
 
-                <FiMoreHorizontal className="playlistToolbarIcon playlistAddIcon" />
+                <div className="moreDropdownWrapper playlistAddIcon" ref={moreRef}>
+                    <FiMoreHorizontal
+                        className="playlistToolbarIcon playlistAddIcon moreIcon"
+                        onClick={() => setShowDropdown(v => !v)}
+                    />
+                    {showDropdown && (
+                        <div className="dropdownMenu">
+                            <div className="dropdownItem"
+                                 onClick={() => {
+                                     togglePlaylistLike();
+                                     setShowDropdown(false);
+                                 }}
+                            >
+                                {playlistLiked ? 'Remove Like' : 'Like'}
+                            </div>
+                            <div className="dropdownItem"
+                                 onClick={() => {
+                                     toggleFollowCreator();
+                                     setShowDropdown(false);
+                                 }}
+                            >
+                                {isFollowingCreator ? 'Unfollow' : 'Follow'}
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* === Song list === */}
             <div className="playlistContent">
                 <div className="playlistSongList">
                     {displayedTracks.map((track, idx) => (
-                        <NavLink key={track.id} to={`/player/${track.id}`} className="trackRow">
+                        <NavLink
+                            key={track.id}
+                            to={`/player/${track.id}`}
+                            className="trackRow"
+                            onClick={() => setOpenTrackDropdown(null)}
+                        >
                             <span className="trackNumber">{idx + 1}</span>
 
                             <div
                                 className="coverPlaceholderSmall"
-                                style={{ backgroundImage: track.foto ? `url(${track.foto})` : undefined }}
+                                style={{
+                                    backgroundImage: track.foto
+                                        ? `url(${baseUrl}/${track.foto.replace(/^\/+/, '')})`
+                                        : undefined
+                                }}
                                 onClick={() => console.log(`Cover ${idx + 1} clicked`)}
                             />
 
@@ -310,23 +493,49 @@ export default function PlaylistPage() {
                                 </NavLink>
                             </div>
 
-                            <FiHeart className="actionIcon" onClick={e => { e.preventDefault(); /* like */ }} />
-                            <NavLink
-                                to={`/player/${track.id}?comments=true`}
+                            <FiHeart
+                                className={`actionIcon${likedTracks[track.id] ? ' liked' : ''}`}
+                                onClick={e => {
+                                    e.preventDefault(); /* like */
+                                    toggleTrackLike(track.id);
+                                }} />
+                            <div
                                 className="actionIcon"
-                                onClick={e => e.preventDefault()}
+                                onClick={e => {
+                                    e.preventDefault();      // não deixa o NavLink pai disparar
+                                    e.stopPropagation();     // não propaga o clique para a linha inteira
+                                    navigate(`/player/${track.id}?comments=true`);
+                                }}
                             >
                                 <FiMessageCircle />
-
-                            </NavLink>
+                            </div>
 
                             <span className="smallDuration">{durations[track.id] || '--:--'}</span>
                             <span className="smallListens">{track.visualizacoes}</span>
 
-                            <FiMoreHorizontal
-                                className="actionIcon"
-                                onClick={() => console.log('Options')}
-                            />
+                            <div className="trackMoreWrapper">
+                                <FiMoreHorizontal
+                                    className="actionIcon"
+                                    onClick={e => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setOpenTrackDropdown(track.id);
+                                    }}
+                                />
+                                {openTrackDropdown === track.id && (
+                                    <div className="dropdownMenu">
+                                        <div
+                                            className="dropdownItem"
+                                            onClick={e => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                            }}
+                                        >
+                                            Follow
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </NavLink>
                     ))}
                 </div>

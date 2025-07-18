@@ -11,9 +11,64 @@ import {
 import '../../css/Pages/LibraryPlaylists.css';
 import {NavLink} from "react-router-dom";
 import { createPortal } from 'react-dom';
-import { playlists } from '../../data/playlists';
+import api from '../services/api';
 
 export default function LibraryPlaylistsPage() {
+
+    const formatDuration = totalSec => {
+        const h = Math.floor(totalSec/3600);
+        const m = Math.floor((totalSec%3600)/60);
+        const s = totalSec%60;
+        if (h>0) return `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+        return `${m}:${s.toString().padStart(2,'0')}`;
+    };
+
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+    const [playlists, setPlaylists] = useState([]);
+    const [durations, setDurations] = useState({});
+
+    // 1) obter user auth
+    const stored = JSON.parse(localStorage.getItem('user') || 'null');
+    const token  = localStorage.getItem('accessToken');
+    const username = stored?.username;
+    const isPremium = stored?.premium;
+
+    // 2) fetch das playlists do usuário
+    useEffect(() => {
+        if (!username) return;
+        api.get(`/playlists/utilizador/${username}/library`)
+            .then(({ data }) => setPlaylists(data))
+            .catch(err => console.error('Erro ao carregar playlists:', err));
+    }, [username, token]);
+
+    // 3) para cada playlist, carregar músicas e calcular duração
+    useEffect(() => {
+        playlists.forEach(pl => {
+            api.get(`/playlists/${encodeURIComponent(pl.nome)}/${encodeURIComponent(pl.username)}/musicas`)
+                .then(({ data: tracks }) => {
+                    const promises = tracks.map(track => {
+                        return new Promise(resolve => {
+                            const raw = track.pathFicheiro || track.pathficheiro;
+                            if (!raw) return resolve(0);
+                            const src = `${process.env.REACT_APP_API_BASE_URL.replace(/\/api$/,'')}`
+                                + (raw.startsWith('/') ? raw : `/${raw}`);
+                            const audio = new Audio(src);
+                            audio.addEventListener('loadedmetadata', () => resolve(audio.duration));
+                            audio.addEventListener('error', () => resolve(0));
+                        });
+                    });
+                    Promise.all(promises).then(durationsArr => {
+                        const totalSec = durationsArr.reduce((sum, d) => sum + d, 0);
+                        setDurations(d => ({
+                            ...d,
+                            [`${pl.nome}|${pl.username}`]: formatDuration(Math.round(totalSec))
+                        }));
+                    });
+                })
+                .catch(console.error);
+        });
+    }, [playlists, token]);
+
     // qual view está ativa: 'list' ou 'grid'
     const [view, setView] = useState('list');
 
@@ -31,19 +86,38 @@ export default function LibraryPlaylistsPage() {
     // === estados para o search-autocomplete ===
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
+    const searchRef = useRef(null);
     const results = useMemo(() => {
         const q = query.trim().toLowerCase();
         if (!q) return [];
         return playlists
-            .filter(pl => pl.title.toLowerCase().includes(q))
-            .map(pl => ({ id: pl.id, title: pl.title, owner: pl.owner, imageUrl: pl.imageUrl }));
-    }, [query]);
+            .filter(pl => pl.nome.toLowerCase().includes(q))
+            .map(pl => ({
+                nome: pl.nome,
+                username: pl.username,
+                foto: pl.foto
+            }));
+        }, [query, playlists]);
+
+    useEffect(() => {
+        if (!showSearch) return;
+        function handleClickOutside(e) {
+            if (searchRef.current && !searchRef.current.contains(e.target)) {
+                setShowSearch(false);
+                setQuery('');
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showSearch]);
 
     // --- novos estados para o modal “New Playlist” ---
     const [createPlaylistOpen, setCreatePlaylistOpen] = useState(false);
     const [newPlName, setNewPlName] = useState('');
     const [newPlCover, setNewPlCover] = useState(null);
     const [newPlVisibility, setNewPlVisibility] = useState(null);
+    const [newPlError, setNewPlError] = useState('');
+    const [newPlSuccess, setNewPlSuccess] = useState(false);
     const plCoverRef = useRef(null);
     const [plDragOver, setPlDragOver] = useState(false);
 
@@ -52,15 +126,60 @@ export default function LibraryPlaylistsPage() {
         setNewPlName('');
         setNewPlCover(null);
         setNewPlVisibility(null);
+        setNewPlError('');
+        setNewPlSuccess(false);
     };
 
-    const handleConfirmPlaylist = () => {
-        console.log({
-            name: newPlName,
-            cover: newPlCover,
-            visibility: newPlVisibility
-        });
-        closeAll();
+    const handleConfirmPlaylist = async () => {
+
+        setNewPlError('');
+        setNewPlSuccess(false);
+
+        if (!isPremium) {
+            setNewPlError("Its required to be a Premium user to create a Playlist");
+            return;
+        }
+
+        const form = new FormData();
+        form.append('nome', newPlName);
+        form.append('privacidade', newPlVisibility === 'public' ? 'publico' : 'privado');
+        form.append('onlyPremium', 'false');
+        form.append('dataCriacao', new Date().toISOString());
+        if (newPlCover) form.append('foto', newPlCover);
+
+        try {
+            // decide qual endpoint usar
+            if (newPlCover) {
+                await api.post(
+                    '/playlists/with-cover',
+                    form,
+                    { headers: { 'Content-Type': 'multipart/form-data' } }
+                );
+            } else {
+                const priv = newPlVisibility === 'public' ? 'publico' : 'privado';
+                await api.post('/playlists', {
+                    nome: newPlName,
+                    privacidade: priv,
+                    onlyPremium: false,
+                    foto: null,
+                    dataCriacao: new Date().toISOString()
+                });
+            }
+            // atualiza a lista
+            const { data: updated } = await api.get(`/playlists/utilizador/${username}/library`);
+            setPlaylists(updated);
+            setNewPlSuccess(true);
+
+            // fecha modal depois de 2s, dando tempo para ver a mensagem
+            setTimeout(closeAll, 2000);
+        } catch (err) {
+            console.error('Erro ao criar playlist:', err);
+            if (err.response?.status === 400 && err.response.data.error.includes('Já existe')) {
+                setNewPlError('Já existe uma playlist com esse nome');
+            } else {
+                setNewPlError('Erro ao criar playlist. Tente novamente.');
+            }
+        }
     };
 
     const toggleRecent = () => setRecentAsc((p) => !p);
@@ -120,7 +239,7 @@ export default function LibraryPlaylistsPage() {
                     </div>
 
                     {/* === aqui começa o search-autocomplete === */}
-                    <div className={`searchContainerLib${showSearch ? ' active' : ''}`}>
+                    <div ref={searchRef} className={`searchContainerLib${showSearch ? ' active' : ''}`}>
                         {showSearch && (
                             <input
                                 className="searchInputLib"
@@ -138,30 +257,32 @@ export default function LibraryPlaylistsPage() {
                                 setQuery('');
                             }}
                         />
-                        {showSearch && results.length > 0 && (
+                        {showSearch && query.trim() !== '' && results.length > 0 && (
                             <ul className="suggestionsLib">
                                 {results.map(pl => (
-                                    <NavLink
-                                        key={pl.id}
-                                        to={`/playlist/${pl.id}`}
-                                        className="suggestionItem"
-                                        onClick={() => {
-                                            // fecha a autocomplete ao navegar
-                                            setShowSearch(false);
-                                            setQuery('');
-                                        }}
-                                    >
-                                        <div
-                                            className="suggestionThumb playlistThumb"
-                                            style={{
-                                                backgroundImage: `url(${pl.imageUrl || '/placeholder.png'})`
+                                    <li key={`${pl.username}|${pl.nome}`} className="suggestionItem">
+                                        <NavLink
+                                            to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}
+                                            className="suggestionItemLib"
+                                            onClick={() => {
+                                                setShowSearch(false);
+                                                setQuery('');
                                             }}
-                                        />
-                                        <div className="suggestionText">
-                                            <div className="suggestionTitle">{pl.title}</div>
-                                            <div className="suggestionSubtitle">{pl.owner}</div>
-                                        </div>
-                                    </NavLink>
+                                        >
+                                            <div
+                                                className="suggestionThumbLib"
+                                                style={{
+                                                    backgroundImage: pl.foto
+                                                        ? `url(${pl.foto})`
+                                                        : `url(/placeholder.png)`
+                                            }}
+                                            />
+                                            <div className="suggestionTextLib">
+                                                <div className="suggestionTitleLib">{pl.nome}</div>
+                                                <div className="suggestionSubtitleLib">{pl.username}</div>
+                                            </div>
+                                        </NavLink>
+                                    </li>
                                 ))}
                             </ul>
                         )}
@@ -189,35 +310,49 @@ export default function LibraryPlaylistsPage() {
                 <div className="libraryContent">
                     <div className="songList">
                         {playlists.map((pl, idx) => (
-                            <NavLink
-                                key={idx}
-                                to={`/playlist/${pl.id}`}
-                                className="trackRow"
-                            >
+                            <div key={idx} className="trackRow">
                                 <span className="trackNumber">{idx+1}</span>
-                                <div
-                                    className="coverPlaceholderSmall"
-                                    onClick={() => console.log(`Cover ${idx+1} clicked`)}
-                                />
+
+                                {/* cover clicável */}
+                                <NavLink
+                                    to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}
+                                >
+                                    <div
+                                        className="coverPlaceholderSmall"
+                                        style={{
+                                            backgroundImage: pl.foto
+                                                ? `url(${
+                                                pl.foto.startsWith('http')
+                                                    ? pl.foto
+                                                    : `${baseUrl}${pl.foto}`
+                                            })`
+                                                : undefined
+                                        }}
+                                    />
+                                </NavLink>
+                                {/* título clicável */}
                                 <div className="trackInfoSmall">
-                                        <span
-                                            className="smallTitle"
-                                            onClick={() => console.log(`Title ${idx+1} clicked`)}
-                                        >
-                                            {pl.title}
-                                        </span>
                                     <NavLink
-                                        to={`/profile/${encodeURIComponent(pl.owner)}`}
+                                        to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}
+                                        className="smallTitle"
+                                    >
+                                        {pl.nome}
+                                    </NavLink>
+                                    <NavLink
+                                        to={`/profile/${encodeURIComponent(pl.username)}`}
                                         className="smallArtist"
                                     >
-                                        {pl.owner}
+                                        {pl.username}
                                     </NavLink>
                                 </div>
                                 <span className="playlistSongsCount">{pl.songs}</span>
-                                <span className="playlistTotalDuration">{pl.duration}</span>
+                                <span className="playlistTotalDuration">{durations[`${pl.nome}|${pl.username}`] || '–:–'}</span>
                                 <span className="playlistLikesCount">{pl.listens}</span>
-                                <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
-                            </NavLink>
+                                <FiMoreHorizontal
+                                    className="actionIcon"
+                                    onClick={() => console.log('Options')}
+                                />
+                            </div>
                         ))}
                     </div>
                 </div>
@@ -228,6 +363,11 @@ export default function LibraryPlaylistsPage() {
                 <div className="modalOverlay" onClick={closeAll}>
                     <div className="modalContent" onClick={e => e.stopPropagation()}>
                         <h2>Create New Playlist</h2>
+
+                        {/* **ALTERAÇÃO**: mensagens de erro/sucesso */}
+                        {newPlError && <div className="modalMessage error">{newPlError}</div>}
+                        {newPlSuccess && <div className="modalMessage success">Playlist criada com sucesso</div>}
+
                         <form onSubmit={e => { e.preventDefault(); handleConfirmPlaylist(); }}>
                             <label>
                                 Name

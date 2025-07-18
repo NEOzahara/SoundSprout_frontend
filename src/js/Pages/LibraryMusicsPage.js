@@ -15,10 +15,23 @@ import '../../css/Pages/LibraryPlaylists.css';
 import '../../css/Pages/LibraryMusics.css';
 import {NavLink, useLocation, useNavigate} from "react-router-dom";
 import { createPortal } from 'react-dom';
-import { musics } from '../../data/musics';
 import api from '../services/api';
 
 export default function LibraryMusicsPage() {
+
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+
+    const stored = JSON.parse(localStorage.getItem('user') || 'null');
+    const token = localStorage.getItem('accessToken');
+    const username = stored?.username;
+
+    // lista das músicas carregadas pelo user
+    const [musicsList, setMusicsList] = useState([]);
+    // durações calculadas { [musicId]: "M:SS" }
+    const [durations, setDurations] = useState({});
+
+    const [likedTracks, setLikedTracks] = useState({});
+
     const [view, setView] = useState('list');
     const [recentAsc, setRecentAsc] = useState(true);
     const filterRef = useRef(null);
@@ -29,21 +42,97 @@ export default function LibraryMusicsPage() {
         if (el) setFilterOverflow(el.scrollWidth > el.clientWidth);
     }, []);
 
+    // === buscar músicas do próprio utilizador ===
+    useEffect(() => {
+        if (!username) return;
+        api.get(`/musicas/utilizador/${encodeURIComponent(username)}`)
+            .then(({ data }) => setMusicsList(data))
+            .catch(err => console.error('Erro ao carregar músicas:', err));
+    }, [username, token]);
+
+    useEffect(() => {
+        if (!musicsList.length) return;
+        musicsList.forEach(m => {
+            api.get(`/musicas/${m.id}/is-liked`)
+                .then(({ data }) =>
+                    setLikedTracks(prev => ({ ...prev, [m.id]: data.liked }))
+                )
+                .catch(err => console.error('Erro ao buscar is-liked:', err));
+        });
+    }, [musicsList]);
+
+    // === calcular duração de cada ficheiro de áudio ===
+    useEffect(() => {
+        musicsList.forEach(m => {
+            const audio = new Audio();
+            // Apontamos ao nosso endpoint de stream para carregar os metadados
+            audio.src = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${m.id}`;
+            audio.preload = 'metadata';
+            audio.addEventListener('loadedmetadata', () => {
+                const d = audio.duration;
+                const mins = Math.floor(d / 60);
+                const secs = Math.round(d % 60).toString().padStart(2, '0');
+                setDurations(prev => ({ ...prev, [m.id]: `${mins}:${secs}` }));
+            });
+            audio.addEventListener('error', () => {
+                setDurations(prev => ({ ...prev, [m.id]: '--:--' }));
+            });
+            audio.load();
+        });
+    }, [musicsList]);
+
+    async function toggleTrackLike(musicId) {
+        try {
+            if (likedTracks[musicId]) {
+                await api.delete(`/musicas/like/${musicId}`);
+                setLikedTracks(prev => ({ ...prev, [musicId]: false }));
+            } else {
+                await api.post('/musicas/like', { id: musicId });
+                setLikedTracks(prev => ({ ...prev, [musicId]: true }));
+            }
+        } catch (err) {
+            console.error('Erro ao (un)like:', err);
+        }
+    }
+
     // === estados do autocomplete ===
+    const searchRef = useRef(null);
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
     const results = useMemo(() => {
         const q = query.trim().toLowerCase();
         if (!q) return [];
-        return musics
-            .filter(m => m.title.toLowerCase().includes(q))
+        return musicsList
+            .filter(m => m.titulo.toLowerCase().includes(q))
             .map(m => ({
                 id: m.id,
-                title: m.title,
-                artist: m.artist,
-                imageUrl: m.imageUrl
+                title: m.titulo,
+                username: m.username,
+                foto: m.foto
             }));
-    }, [query]);
+    }, [query, musicsList]);
+
+    useEffect(() => {
+        if (!showSearch) return;
+        function handleClickOutside(e) {
+            if (searchRef.current && !searchRef.current.contains(e.target)) {
+                setShowSearch(false);
+                setQuery('');
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [showSearch]);
+
+    // === ordenar por dataPublicacao ===
+    const displayedMusics = useMemo(() => {
+        const sorted = [...musicsList].sort((a, b) => {
+            const dA = new Date(a.dataPublicacao);
+            const dB = new Date(b.dataPublicacao);
+            return recentAsc ? dA - dB : dB - dA;
+        });
+        return sorted;
+    }, [musicsList, recentAsc]);
 
     // --- estados do modal “New Song” ---
     const [createSongOpen, setCreateSongOpen] = useState(false);
@@ -161,7 +250,10 @@ export default function LibraryMusicsPage() {
                     </div>
 
                     {/* === autocomplete search === */}
-                    <div className={`searchContainerLib${showSearch ? ' active' : ''}`}>
+                    <div
+                        ref={searchRef}
+                        className={`searchContainerLib${showSearch ? ' active' : ''}`}
+                    >
                         {showSearch && (
                             <input
                                 className="searchInputLib"
@@ -179,28 +271,33 @@ export default function LibraryMusicsPage() {
                                 setQuery('');
                             }}
                         />
-                        {showSearch && results.length > 0 && (
+                        {showSearch && query.trim() !== '' && results.length > 0 && (
                             <ul className="suggestionsLib">
-                                {results.map(m => (
-                                    <NavLink
-                                        key={m.id}
-                                        to={`/player/${m.id}`}
-                                        className="suggestionItem"
-                                        onClick={() => {
-                                            // fecha o autocomplete
-                                            setShowSearch(false);
-                                            setQuery('');
-                                        }}
-                                    >
-                                        <div
-                                            className="suggestionThumb songThumb"
-                                            style={{ backgroundImage: `url(${m.imageUrl||'/placeholder.png'})` }}
-                                        />
-                                        <div className="suggestionText">
-                                            <div className="suggestionTitle">{m.title}</div>
-                                            <div className="suggestionSubtitle">{m.artist}</div>
-                                        </div>
-                                    </NavLink>
+                                {results.map(item => (
+                                    <li key={item.id} className="suggestionItem">
+                                        <NavLink
+                                            to={`/player/${item.id}`}
+                                            className="suggestionItemLib"
+                                            onClick={() => {
+                                                // fecha o autocomplete
+                                                setShowSearch(false);
+                                                setQuery('');
+                                            }}
+                                        >
+                                            <div
+                                                className="suggestionThumbLib"
+                                                style={{
+                                                    backgroundImage: item.foto
+                                                        ? `url(${baseUrl}/${item.foto.replace(/^\/+/, '')})`
+                                                        : undefined
+                                                }}
+                                            />
+                                            <div className="suggestionTextLib">
+                                                <div className="suggestionTitleLib">{item.title}</div>
+                                                <div className="suggestionSubtitleLib">{item.username}</div>
+                                            </div>
+                                        </NavLink>
+                                    </li>
                                 ))}
                             </ul>
                         )}
@@ -219,35 +316,46 @@ export default function LibraryMusicsPage() {
 
                 <div className="libraryContent">
                     <div className="songList">
-                        {musics.map((m, idx) => (
-                            <NavLink
+                        {displayedMusics.map((m, idx) => (
+                            <div
                                 key={m.id}
-                                to={`/player/${m.id}`}
                                 className="trackRow"
                             >
                                 <span className="trackNumber">{idx + 1}</span>
 
-                                <div
+                                <NavLink
+                                    to={`/player/${m.id}`}
                                     className="coverPlaceholderSmall"
-                                    onClick={() => console.log(`Cover ${idx + 1} clicked`)}
+                                    style={{
+                                        backgroundImage: m.foto
+                                            ? `url(${baseUrl}/${m.foto.replace(/^\/+/, '')})`
+                                            : undefined
+                                    }}
                                 />
 
                                 <div className="trackInfoSmall">
-                                    <span
-                                        className="smallTitle"
-                                        onClick={() => console.log(`Title ${idx + 1} clicked`)}
-                                    >
-                                        {m.title}
-                                    </span>
                                     <NavLink
-                                        to={`/profile/${encodeURIComponent(m.artist)}`}
+                                        to={`/player/${m.id}`}
+                                        className="smallTitle"
+                                    >
+                                        {m.titulo}
+                                    </NavLink>
+                                    <NavLink
+                                        to={`/profile/${encodeURIComponent(m.username)}`}
                                         className="smallArtist"
                                     >
-                                        {m.artist}
+                                        {m.username}
                                     </NavLink>
                                 </div>
 
-                                <FiHeart className="actionIcon" onClick={() => console.log('Like')} />
+                                <FiHeart
+                                    className={`actionIcon${likedTracks[m.id] ? ' liked' : ''}`}
+                                    onClick={e => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        toggleTrackLike(m.id);
+                                    }}
+                                />
                                 <NavLink
                                     to={`/player/${m.id}?comments=true`}
                                     className="actionIcon"
@@ -255,18 +363,14 @@ export default function LibraryMusicsPage() {
                                     <FiMessageCircle />
                                 </NavLink>
 
-                                <span className="smallDuration" onClick={() => console.log(`Duration ${idx+1}`)}>
-                                    {m.duration}
-                                </span>
-                                <span className="smallListens" onClick={() => console.log(`Listens ${idx+1}`)}>
-                                    {m.listens}
-                                </span>
+                                <span className="smallDuration">{durations[m.id] || '--:--'}</span>
+                                <span className="smallListens">{m.visualizacoes}</span>
 
                                 <FiMoreHorizontal
                                     className="actionIcon"
                                     onClick={() => console.log('Options')}
                                 />
-                            </NavLink>
+                            </div>
                         ))}
                     </div>
                 </div>

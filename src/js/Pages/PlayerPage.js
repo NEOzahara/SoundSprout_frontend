@@ -7,6 +7,10 @@ import api from '../services/api';
 
 export default function PlayerPage () {
 
+    // Adicione estes estados no início do componente
+    const [comments, setComments] = useState([]);
+    const [newComment, setNewComment] = useState('');
+
     const { songId } = useParams();
     const id = parseInt(songId, 10) || 0;
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, "");
@@ -65,6 +69,66 @@ export default function PlayerPage () {
     const [filterText, setFilterText] = useState('');
     const [selectedIds, setSelectedIds] = useState(new Set());
     const addToRef = useRef(null);
+
+    // Adicionar função para carregar comentários
+    const loadComments = useCallback(async () => {
+        try {
+            const { data } = await api.get(`/comentarios/musica/${id}`);
+            setComments(data);
+        } catch (err) {
+            console.error('Erro ao carregar comentários:', err);
+        }
+    }, [id]);
+
+    // --- NOVOS ESTADOS PARA COMENTÁRIOS ---
+    const [commentText, setCommentText]   = useState("");
+
+    // 1) Buscar os comentários (e replies) ao abrir a secção
+    useEffect(() => {
+        if (!showComments) return;
+        (async () => {
+            try {
+                // busca todos os comentários principais
+                const { data: main } = await api.get(`/comentarios/musica/${id}`);
+                // para cada um, busca as replies
+                const withReplies = await Promise.all(
+                    main.map(async cm => {
+                        const { data: reps } = await api.get(`/comentarios/replies/${cm.idcomentario}`);
+                        return { ...cm, replies: reps };
+                    })
+                );
+                setComments(withReplies);
+            } catch (err) {
+                console.error("Erro a carregar comentários:", err);
+            }
+        })();
+    }, [showComments, id]);
+
+    // 2) Submeter um comentário novo
+    const handleCommentSubmit = async (e) => {
+        e.preventDefault();
+        if (!commentText.trim()) return;
+        try {
+            await api.post('/comentarios', {
+                musica_id:     id,
+                conteudo:     commentText,
+                tempoNaMusica: null,
+                parentId:     null
+            });
+            setCommentText("");
+            // recarrega os comentários
+            const { data: main } = await api.get(`/comentarios/musica/${id}`);
+            const withReplies = await Promise.all(
+                main.map(async cm => {
+                    const { data: reps } = await api.get(`/comentarios/replies/${cm.idcomentario}`);
+                    return { ...cm, replies: reps };
+                })
+            );
+            setComments(withReplies);
+        } catch (err) {
+            console.error("Erro ao postar comentário:", err);
+        }
+    };
 
     useEffect(() => {
         let mounted = true;
@@ -174,13 +238,16 @@ export default function PlayerPage () {
     const [isPlaying, setIsPlaying] = useState(false);
     const togglePlay = () => {
         const audio = audioRef.current;
-        /*Teste*/
-        setIsPlaying(prev => !prev);
+        if (!audio) return;
 
-        /*if (!audio) return;
-        if (isPlaying) audio.pause(); else audio.play();
-        setIsPlaying(prev => !prev);*/
+        if (isPlaying) {
+            audio.pause();
+        } else {
+            audio.play();
+        }
+        setIsPlaying(prev => !prev);
     };
+
 
     // fecha popup ao clicar fora
     useEffect(() => {
@@ -638,13 +705,50 @@ export default function PlayerPage () {
                     </>
                 ) : (
                     <div className="commentsSection">
-                        <input
-                            type="text"
-                            className="commentInput"
-                            placeholder="Escreva um comentário"
-                        />
+                        {/* Formulário de comentário */}
+                        <form className="commentInputWrapper" onSubmit={handleCommentSubmit}>
+                            <input
+                                type="text"
+                                className="commentInput"
+                                placeholder="Escreve um comentário"
+                                value={commentText}
+                                onChange={e => setCommentText(e.target.value)}
+                            />
+                            <button type="submit" className="commentSubmitBtn">
+                                Enviar
+                            </button>
+                        </form>
+
+                        {/* Lista de comentários */}
                         <div className="commentsList">
-                            {/* nada por enquanto, ou podes popular via API */}
+                            {comments.map(cm => (
+                                <div key={cm.idcomentario} className="commentItem">
+                                    <div className="commentHeader">
+                                        <strong>{cm.autor_username}</strong>
+                                        <span className="commentTime">
+              {new Date(cm.comentario_timestamp).toLocaleString()}
+            </span>
+                                    </div>
+                                    <p className="commentContent">{cm.conteudo}</p>
+
+                                    {/* Replies aninhadas */}
+                                    {cm.replies.length > 0 && (
+                                        <div className="commentReplies">
+                                            {cm.replies.map(rep => (
+                                                <div key={rep.idcomentario} className="replyItem">
+                                                    <div className="replyHeader">
+                                                        <strong>{rep.autor_username}</strong>
+                                                        <span className="replyTime">
+                      {new Date(rep.comentario_timestamp).toLocaleString()}
+                    </span>
+                                                    </div>
+                                                    <p className="replyContent">{rep.conteudo}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
                         </div>
                     </div>
                 )}

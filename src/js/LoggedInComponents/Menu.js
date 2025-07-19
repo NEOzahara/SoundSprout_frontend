@@ -1,10 +1,15 @@
-import React, {useState, useRef} from 'react'
+import React, {useState, useRef, useEffect} from 'react'
 import { NavLink } from 'react-router-dom';
 import {FiHome, FiGlobe, FiUsers, FiRss, FiFolder, FiPlus, FiMusic, FiHeart, FiSettings, FiCheckSquare, FiLogOut
 } from 'react-icons/fi'
-import { playlists } from '../../data/playlists';
 import { musics } from '../../data/musics';
+import api from "../services/api";
 export default function Menu() {
+
+    const [user] = useState(() => JSON.parse(localStorage.getItem('user') || 'null'));
+    const [userPlaylists, setUserPlaylists] = useState([]);
+    const [userMusics, setUserMusics] = useState([]);
+    const [userLiked, setUserLiked] = useState([]);
 
     const [playlistsOpen, setPlaylistsOpen] = useState(false);
     const [musicOpen, setMusicOpen] = useState(false);
@@ -65,13 +70,42 @@ export default function Menu() {
         setPlaylistsOpen(open => !open);
     };
 
+    useEffect(() => {
+        if (!user?.username) return;
+        api.get(`/playlists/utilizador/${encodeURIComponent(user.username)}`)
+            .then(({ data }) => setUserPlaylists(data))
+            .catch(err => console.error('Erro a carregar playlists:', err));
+        }, [user]);
+
     const toggleMusic = () => {
         setMusicOpen(open => !open);
     };
 
+    useEffect(() => {
+        if (!user?.username) return;
+        api.get(`/musicas/utilizador/${encodeURIComponent(user.username)}`)
+            .then(({ data }) => setUserMusics(data))
+            .catch(err => console.error('Erro a carregar músicas:', err));
+    }, [user]);
+
     const toggleLikes = () => {
         setLikesOpen(open => !open);
     };
+
+    useEffect(() => {
+        if (!user?.username) return;
+        const fetchLikes = () => {
+            api.get(`/musicas/utilizador/${encodeURIComponent(user.username)}/liked`)
+                .then(({ data }) => setUserLiked(data))
+                .catch(err => console.error('Erro a carregar likes:', err));
+        };
+
+        fetchLikes();
+        window.addEventListener('likeChanged', fetchLikes);
+        return () => {
+            window.removeEventListener('likeChanged', fetchLikes);
+        };
+    }, [user]);
 
     return (
         <>
@@ -171,14 +205,14 @@ export default function Menu() {
                         <span className="subText">New Playlist</span>
                     </div>
 
-                    {playlists.map(pl => (
+                    {userPlaylists.map(pl => (
                         <NavLink
-                            key={pl.id}
-                            to={`/playlist/${pl.id}`}
+                            key={pl.nome}
+                            to={`/playlist/${encodeURIComponent(pl.nome)}/${encodeURIComponent(pl.username)}`}
                             className="subItem"
                         >
                             <span className="subIcon"><FiFolder className="Icon" /></span>
-                            <span className="subText">{pl.title}</span>
+                            <span className="subText">{pl.nome}</span>
                     </NavLink>
                     ))}
                 </div>
@@ -218,14 +252,14 @@ export default function Menu() {
                         <span className="subText">New Song</span>
                     </div>
 
-                    {musics.map(m => (
+                    {userMusics.map(m => (
                         <NavLink
                             key={m.id}
                             to={`/player/${m.id}`}
                             className="subItem"
                         >
                             <span className="subIcon"><FiMusic className="Icon" /></span>
-                            <span className="subText">{m.title}</span>
+                            <span className="subText">{m.titulo}</span>
                         </NavLink>
                     ))}
                 </div>
@@ -261,14 +295,14 @@ export default function Menu() {
 
                 {/* Submenu de Likes */}
                 <div className={`subMenu ${likesOpen ? 'open' : ''}`}>
-                    {musics.map(m => (
+                    {userLiked.map(m => (
                         <NavLink
                             key={m.id}
                             to={`/player/${m.id}`}
                             className="subItem"
                         >
                             <span className="subIcon"><FiHeart className="Icon" /></span>
-                            <span className="subText">{m.title}</span>
+                            <span className="subText">{m.titulo}</span>
                         </NavLink>
                     ))}
                     {/* ... mais itens ... */}

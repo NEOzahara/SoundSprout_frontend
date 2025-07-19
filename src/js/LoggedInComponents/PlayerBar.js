@@ -1,4 +1,4 @@
-import React, {useState, useRef, useEffect, useContext, useLayoutEffect} from 'react';
+import React, {useState, useRef, useEffect, useContext, useLayoutEffect, useCallback} from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
@@ -109,9 +109,11 @@ export default function PlayerBar() {
             if (liked) {
                 await api.delete(`/musicas/like/${id}`);
                 setLiked(false);
+                window.dispatchEvent(new Event('likeChanged'));
             } else {
                 await api.post(`/musicas/like`, { id });
                 setLiked(true);
+                window.dispatchEvent(new Event('likeChanged'));
             }
         } catch (err) {
             console.error('Erro ao (un)like:', err);

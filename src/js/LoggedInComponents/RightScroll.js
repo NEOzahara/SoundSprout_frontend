@@ -1,8 +1,8 @@
-import React, {useState, useEffect} from 'react'
+import React, {useState, useEffect, useContext} from 'react'
+import { PlayerContext } from '../../context/PlayerContext';
 import { NavLink, useLocation } from 'react-router-dom';
 import {FiMusic, FiFolder, FiHome, FiChevronDown} from 'react-icons/fi'
 import api from '../services/api';
-import { musics }   from '../../data/musics';
 
 function CardIcon({ activeTab, foto }) {
     if (activeTab === 'Playlist') return <FiFolder className="cardIcon" />;
@@ -24,10 +24,14 @@ function CardIcon({ activeTab, foto }) {
 export default function RightScroll() {
 
     const location = useLocation();
+    const { track } = useContext(PlayerContext)
     const [activeTab, setActiveTab] = useState('Playlist');
     const [recentPlaylists, setRecentPlaylists] = useState([]);
     const [recentMusics, setRecentMusics] = useState([]);
     const [recentUsers, setRecentUsers] = useState([]);
+    const [showAll, setShowAll] = useState(false);
+    const [discShowAll, setDiscShowAll] = useState(false);
+    const [discography, setDiscography] = useState([]);
 
     const loggedUser = JSON.parse(localStorage.getItem('user'));
     const username = loggedUser.username;
@@ -76,6 +80,7 @@ export default function RightScroll() {
     // dispara ao mudar de tab ou rota
     useEffect(() => {
         fetchHistory();
+        setShowAll(false);
         }, [activeTab, username, location.pathname]);
 
     useEffect(() => {
@@ -96,67 +101,93 @@ export default function RightScroll() {
         };
     }, [activeTab, username]);
 
+    useEffect(() => {
+        if (!track.id) return
+        // 1) buscamos detalhes da música para obter o uploader (username)
+        api.get(`/musicas/${track.id}`)
+            .then(({ data: musica }) => {
+                const uploader = musica.username
+                // 2) buscamos todas as músicas desse uploader
+                return api.get(`/musicas/utilizador/${encodeURIComponent(uploader)}`)
+            })
+            .then(({ data }) => {
+                setDiscography(data)
+            })
+            .catch(err => console.error('Erro ao carregar discografia:', err))
+    }, [track.id])
+
     const renderCards = () => {
+        const count = showAll ? 20 : 6;
         if (activeTab === 'Playlist') {
-            return recentPlaylists.map(pl => (
+            return recentPlaylists
+                .slice(0, count)
+                .map(pl => (
+                    <NavLink
+                        key={`${pl.owner}-${pl.nome}`}
+                        to={`/playlist/${encodeURIComponent(pl.owner)}/${encodeURIComponent(pl.nome)}`}
+                        className="cardItem"
+                    >
+                        <CardIcon activeTab="Playlist" />
+                        <div className="cardText">
+                            <span className="cardTitle">{pl.nome}</span>
+                            <span className="cardSubtitle">{pl.owner}</span>
+                        </div>
+                        <FiChevronDown className="cardArrow" />
+                    </NavLink>
+                ));
+        }
+
+        if (activeTab === 'Music') {
+            return recentMusics
+                .slice(0, count)
+                .map(m => (
+                    <NavLink
+                        key={m.id}
+                        to={`/player/${m.id}`}
+                        className="cardItem"
+                    >
+                        <CardIcon activeTab="Music" />
+                        <div className="cardText">
+                            <span className="cardTitle">{m.titulo}</span>
+                            <span className="cardSubtitle">{m.username}</span>
+                        </div>
+                        <FiChevronDown className="cardArrow" />
+                    </NavLink>
+                ));
+        }
+
+        return recentUsers
+            .slice(0, count)
+            .map(u => (
                 <NavLink
-                    key={`${pl.owner}-${pl.nome}`}
-                    to={`/playlist/${encodeURIComponent(pl.owner)}/${encodeURIComponent(pl.nome)}`}
+                    key={u.username}
+                    to={`/profile/${encodeURIComponent(u.username)}`}
                     className="cardItem"
                 >
-                    <CardIcon activeTab="Playlist" />
+                    <CardIcon activeTab="User" foto={u.foto}/>
                     <div className="cardText">
-                        <span className="cardTitle">{pl.nome}</span>
-                        <span className="cardSubtitle">{pl.owner}</span>
+                        <span className="cardTitle">{u.username}</span>
                     </div>
                     <FiChevronDown className="cardArrow" />
                 </NavLink>
             ));
-        }
+    };
 
-        if (activeTab === 'Music') {
-            return recentMusics.map(m => (
-                <NavLink
-                    key={m.id}
-                    to={`/player/${m.id}`}
-                    className="cardItem"
-                >
-                    <CardIcon activeTab="Music" />
+    const renderDiscography = () => {
+        const count = discShowAll ? 20 : 6;
+        return discography
+            .slice(0, count)
+            .map(m => (
+                <NavLink key={m.id} to={`/player/${m.id}`} className="cardItem">
+                    <FiMusic className="cardIcon"/>
                     <div className="cardText">
                         <span className="cardTitle">{m.titulo}</span>
                         <span className="cardSubtitle">{m.username}</span>
                     </div>
-                    <FiChevronDown className="cardArrow" />
+                    <FiChevronDown className="cardArrow"/>
                 </NavLink>
             ));
-        }
-
-        return recentUsers.map(u => (
-            <NavLink
-                key={u.username}
-                to={`/profile/${encodeURIComponent(u.username)}`}
-                className="cardItem"
-            >
-                <CardIcon activeTab="User" foto={u.foto}/>
-                <div className="cardText">
-                    <span className="cardTitle">{u.username}</span>
-                </div>
-                <FiChevronDown className="cardArrow" />
-            </NavLink>
-        ));
     };
-
-    const renderOtherCards = () =>
-        musics.slice(0, 6).map(m => (
-            <NavLink key={m.id} to={`/player/${m.id}`} className="cardItem">
-                <FiMusic className="cardIcon" />
-                <div className="cardText">
-                    <span className="cardTitle">{m.title}</span>
-                    <span className="cardSubtitle">{m.artist}</span>
-                </div>
-                <FiChevronDown className="cardArrow" />
-            </NavLink>
-        ));
 
     return (
         <div className="rightScroll">
@@ -164,8 +195,11 @@ export default function RightScroll() {
             <div className="section">
                 <div className="sectionHeader">
                     <h2>Recently Played</h2>
-                    <button className="seeAll">
-                        <span>see all</span>
+                    <button
+                        className="seeAll"
+                        onClick={() => setShowAll(prev => !prev)}
+                    >
+                        <span>{showAll ? 'show less' : 'see all'}</span>
                     </button>
                 </div>
                 <div className="tabs">
@@ -184,11 +218,14 @@ export default function RightScroll() {
             <div className="section">
                 <div className="sectionHeader">
                     <h2>Discography</h2>
-                    <button className="seeAll">
-                        <span>see all</span>
+                    <button
+                        className="seeAll"
+                        onClick={() => setDiscShowAll(prev => !prev)} // SUGGESTION
+                    >
+                        <span>{discShowAll ? 'show less' : 'see all'}</span> {/* SUGGESTION */}
                     </button>
                 </div>
-                <div className="cardList">{renderOtherCards()}</div>
+                <div className="cardList">{renderDiscography()}</div>
             </div>
 
             {/* Queue */}

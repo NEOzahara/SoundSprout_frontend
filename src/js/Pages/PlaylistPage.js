@@ -70,6 +70,7 @@ export default function PlaylistPage() {
                 await api.post('/musicas/like', { id: trackId });
             }
             setLikedTracks(prev => ({ ...prev, [trackId]: !prev[trackId] }));
+            window.dispatchEvent(new Event('likeChanged'));
         } catch (err) {
             console.error('Erro ao (un)like:', err);
         }

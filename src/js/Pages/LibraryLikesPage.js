@@ -435,9 +435,11 @@ export default function LibraryLikesPage() {
                 setLikedTracks(prev => ({ ...prev, [musicId]: false }));
                 // remove a música logo da lista de likedSongs
                 setLikedSongs(prev => prev.filter(m => m.id !== musicId));
+                window.dispatchEvent(new Event('likeChanged'));
             } else {
                 await api.post('/musicas/like', { id: musicId });
                 setLikedTracks(prev => ({ ...prev, [musicId]: true }));
+                window.dispatchEvent(new Event('likeChanged'));
             }
         } catch (err) {
             console.error('Erro ao (un)like:', err);

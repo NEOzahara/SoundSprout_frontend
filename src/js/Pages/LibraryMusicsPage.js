@@ -90,6 +90,7 @@ export default function LibraryMusicsPage() {
                 await api.post('/musicas/like', { id: musicId });
                 setLikedTracks(prev => ({ ...prev, [musicId]: true }));
             }
+            window.dispatchEvent(new Event('likeChanged'));
         } catch (err) {
             console.error('Erro ao (un)like:', err);
         }

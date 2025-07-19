@@ -23,6 +23,21 @@ export default function FollowingPage() {
             }));
     }, [query]);
 
+    const [following, setFollowing] = useState([]);
+    // obtém o user logado do localStorage (guardado no login)
+    const stored = localStorage.getItem('user');
+    const me = stored ? JSON.parse(stored) : null;
+    // baseUrl para fotos e capas
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+
+    // ao montar, busca o following com status e playlists públicas
+    useEffect(() => {
+        if (!me) return;
+        api.get(`/utilizadores/${me.username}/following-with-status`)
+            .then(({ data }) => setFollowing(data))
+            .catch(console.error);
+    }, [me]);
+
     // Para simular playlist carousel:
     function renderFollowedPlaylists(playlists) {
         return playlists.map((playlist) => (
@@ -91,51 +106,75 @@ export default function FollowingPage() {
                 </button>
             </div>
 
-            {followingBoxes.map((box, index) => (
-                <div key={index} className="chartsSection">
+            {following.map(u => (
+                <div key={u.username} className="chartsSection">
                     <div className="recommendHeader">
                         <div className="followedHeader">
                             <FiUser className="followedIcon" />
+                            <div
+                                className="followerPlaceholder userThumb"
+                                style={{
+                                    backgroundImage: u.foto
+                                        ? `url(${baseUrl}${u.foto.startsWith('/')?'':'/'}${u.foto})`
+                                        : undefined
+                                }}
+                            />
                             <div className="followedText">
                                 <NavLink
                                     className="followedName"
-                                    to={`/profile/${encodeURIComponent(box.followedUser.username)}`}
+                                    to={`/profile/${encodeURIComponent(u.username)}`}
                                 >
-                                    {box.followedUser.name}
+                                    {u.username}
                                 </NavLink>
-                                {box.isListening && box.song ? (
+                                {u.is_listening && u.current_song ? (
                                     <span className="followedSong">
-                            <FiBarChart className="audioIcon" />
-                            <NavLink
-                                className="songName"
-                                to={`/player/${box.song.id}`}
-                            >
-                                {box.song.title}
-                            </NavLink>
-                            <NavLink
-                                className="dashArtist"
-                                to={`/profile/${encodeURIComponent(box.song.artist.username)}`}
-                            >
-                                &nbsp;– {box.song.artist.name}
-                            </NavLink>
-                        </span>
+                                        <FiBarChart className="audioIcon" />
+                                        <NavLink
+                                            className="songName"
+                                            to={`/player/${u.current_song.id}`}
+                                        >
+                                            {u.current_song.title}
+                                        </NavLink>
+                                        <NavLink
+                                            className="dashArtist"
+                                            to={`/profile/${encodeURIComponent(u.current_song.artist)}`}
+                                        >
+                                            &nbsp;– {u.current_song.artist}
+                                        </NavLink>
+                                    </span>
                                 ) : (
                                     <span className="followedSong">
-                            <FiX className="audioIcon" />
-                        </span>
+                                        <FiX className="audioIcon" />
+                                    </span>
                                 )}
                             </div>
                         </div>
                         <button
                             className="seeAll"
-                            onClick={() => console.log(`See all for ${box.followedUser.name}`)}
+                            onClick={() => console.log(`See all for ${u.username}`)}
                         >
                             see all
                         </button>
                     </div>
                     <div className="carouselWrapper">
                         <div className="carousel">
-                            {renderFollowedPlaylists(box.playlists)}
+                            {u.playlists.map(pl => (
+                                <NavLink
+                                    key={`${pl.username}-${pl.nome}`}
+                                    to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}
+                                    className="coverCard"
+                                >
+                                    <div
+                                        className="coverPlaceholder"
+                                        style={{
+                                            backgroundImage: pl.foto
+                                                ? `url(${baseUrl}${pl.foto.startsWith('/')?'':'/'}${pl.foto})`
+                                                : undefined
+                                    }}
+                                    />
+                                    <span className="coverTitle">{pl.nome}</span>
+                                </NavLink>
+                            ))}
                         </div>
                     </div>
                 </div>

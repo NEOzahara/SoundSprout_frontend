@@ -23,18 +23,37 @@ export default function PlayerPage () {
     const [music, setMusic] = useState(null);
     const { setTrack } = useContext(PlayerContext);
     const [liked, setLiked] = useState(false);
+    const [similarLiked, setSimilarLiked] = useState({});
 
     async function toggleLike() {
         try {
             if (liked) {
                 await api.delete(`/musicas/like/${id}`);
                 setLiked(false);
+                window.dispatchEvent(new Event('likeChanged'));
             } else {
                 await api.post(`/musicas/like`, { id });
                 setLiked(true);
+                window.dispatchEvent(new Event('likeChanged'));
             }
         } catch (err) {
             console.error('Erro ao (un)like:', err);
+        }
+    }
+
+    async function toggleSimilarLike(trackId) {
+        try {
+            if (similarLiked[trackId]) {
+                await api.delete(`/musicas/like/${trackId}`);
+                setSimilarLiked(prev => ({ ...prev, [trackId]: false }));
+                window.dispatchEvent(new Event('likeChanged'));
+            } else {
+                await api.post(`/musicas/like`, { id: trackId });
+                setSimilarLiked(prev => ({ ...prev, [trackId]: true }));
+                window.dispatchEvent(new Event('likeChanged'));
+            }
+        } catch (err) {
+            console.error('Erro ao (un)like similar track:', err);
         }
     }
 
@@ -184,6 +203,30 @@ export default function PlayerPage () {
             .catch(err => console.error('❌  Debug: error fetching similar', err));
         return () => { mounted = false };
     }, [id, music]);
+
+    useEffect(() => {
+        if (similarTracks.length === 0) return;
+
+        (async () => {
+            try {
+                const statuses = await Promise.all(
+                    similarTracks.map(item =>
+                        api
+                            .get(`/musicas/${item.id}/is-liked`)
+                            .then(res => res.data.liked)
+                            .catch(() => false)
+                    )
+                );
+                const likedMap = {};
+                similarTracks.forEach((item, i) => {
+                    likedMap[item.id] = statuses[i];
+                });
+                setSimilarLiked(likedMap);
+            } catch (err) {
+                console.error('Erro ao carregar estado de likes das faixas semelhantes:', err);
+            }
+        })();
+    }, [similarTracks]);
 
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = 0;
@@ -662,7 +705,15 @@ export default function PlayerPage () {
                                                 {item.artist}
                                             </NavLink>
                                         </div>
-                                        <FiHeart className="actionIcon" onClick={()=>{}}/>
+                                        <FiHeart
+                                            className="actionIcon"
+                                            onClick={() => toggleSimilarLike(item.id)}
+                                            style={{
+                                                color: similarLiked[item.id] ? '#B08D57' : '#b0b0b0',
+                                                fill: similarLiked[item.id] ? '#B08D57' : 'none',
+                                                cursor: 'pointer'
+                                            }}
+                                        />
                                         <NavLink
                                             to={`/player/${item.id}?comments=true`}
                                             className={`actionIcon${

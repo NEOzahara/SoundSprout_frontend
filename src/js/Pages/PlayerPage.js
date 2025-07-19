@@ -1,9 +1,10 @@
-import React, {useEffect, useRef, useState, useMemo, useCallback} from "react";
+import React, {useEffect, useRef, useState, useMemo, useCallback, useContext} from "react";
 import {FiPlay, FiHeart, FiPlus, FiMessageCircle, FiList, FiMoreHorizontal, FiUser, FiPause} from 'react-icons/fi';
 import '../../css/Pages/Player.css';
 import {NavLink, useParams, useLocation} from "react-router-dom";
 import { createPortal } from 'react-dom';
 import api from '../services/api';
+import {PlayerContext} from "../../context/PlayerContext";
 
 export default function PlayerPage () {
 
@@ -20,6 +21,7 @@ export default function PlayerPage () {
     const [remainingPlaylists, setRemainingPlaylists] = useState([]);
 
     const [music, setMusic] = useState(null);
+    const { setTrack } = useContext(PlayerContext);
     const [liked, setLiked] = useState(false);
 
     async function toggleLike() {
@@ -70,15 +72,6 @@ export default function PlayerPage () {
     const [selectedIds, setSelectedIds] = useState(new Set());
     const addToRef = useRef(null);
 
-    // Adicionar função para carregar comentários
-    const loadComments = useCallback(async () => {
-        try {
-            const { data } = await api.get(`/comentarios/musica/${id}`);
-            setComments(data);
-        } catch (err) {
-            console.error('Erro ao carregar comentários:', err);
-        }
-    }, [id]);
 
     // --- NOVOS ESTADOS PARA COMENTÁRIOS ---
     const [commentText, setCommentText]   = useState("");
@@ -237,16 +230,15 @@ export default function PlayerPage () {
     const audioRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const togglePlay = () => {
-        const audio = audioRef.current;
-        if (!audio) return;
-
-        if (isPlaying) {
-            audio.pause();
-        } else {
-            audio.play();
-        }
-        setIsPlaying(prev => !prev);
+        setTrack({
+            id: id,
+            title: music.title,
+            artist: music.artist,
+            coverUrl: `${baseUrl}/${music.coverUrl}`,
+            duration: 0  // A duração será atualizada no PlayerBar
+        });
     };
+
 
 
     // fecha popup ao clicar fora

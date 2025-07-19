@@ -74,10 +74,7 @@ export default function PlayerBar() {
 
 
     const currentTrack = playlist[trackIndex] || {};
-    const streamUrl = currentTrack.titulo
-        ? `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/` +
-        `${currentTrack.features}/${encodeURIComponent(currentTrack.titulo)}/${currentTrack.username}`
-        : '';
+
 
     // Sempre que a faixa muda, verifica overflow
     // detecta overflow logo após o layout
@@ -121,23 +118,27 @@ export default function PlayerBar() {
         }
     }
 
-    // Atualizar áudio ao mudar de faixa
-    useEffect(() => {
-        const audio = audioRef.current;
-        if (audio && streamUrl) {
-            audio.src = streamUrl;
-            audio.load();
-            if (isPlaying) audio.play();
-        }
-    }, [streamUrl]);
 
-    // Eventos: metadata, progresso e fim da faixa
+
+    useEffect(() => {
+        if (!track.id) return;
+        const audio = audioRef.current;
+        if (audio) {
+            const url = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${track.id}`;
+            audio.src = url;
+            audio.load();
+            audio.play().then(() => {
+                setIsPlaying(true);
+            }).catch(err => console.error("Erro ao reproduzir áudio:", err));
+        }
+    }, [track.id]);
+
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio) return;
         const onLoaded = () => setDuration(audio.duration);
         const onTimeUpdate = () => setCurrentTime(audio.currentTime);
-        const onEnded = () => handleNext();
+        const onEnded = () => console.log('Música terminou (implementar handleNext)');
         audio.addEventListener('loadedmetadata', onLoaded);
         audio.addEventListener('timeupdate', onTimeUpdate);
         audio.addEventListener('ended', onEnded);
@@ -146,7 +147,8 @@ export default function PlayerBar() {
             audio.removeEventListener('timeupdate', onTimeUpdate);
             audio.removeEventListener('ended', onEnded);
         };
-    }, [playlist, trackIndex]);
+    }, [track.id]);
+
 
     const togglePlay = () => {
         const audio = audioRef.current;
@@ -289,7 +291,7 @@ export default function PlayerBar() {
                     console.log('Loop toggled');
                 }}/>
 
-                <span className="currentTime">0:00</span>
+                <span className="currentTime">{formatTime(currentTime)}</span>
                 <div className="progressContainer" onClick={e => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const pct = (e.clientX - rect.left) / rect.width;
@@ -298,7 +300,7 @@ export default function PlayerBar() {
                     <div className="progressTrack"/>
                     <div className="progressFill" style={{width: `${(currentTime / duration) * 100}%`}}/>
                 </div>
-                <span className="totalTime">{formatTime(track.duration || 0)}</span>
+                <span className="totalTime">{formatTime(duration)}</span>
                 <div className="volumeContainer" ref={volumeRef}>
                     <FiVolume2
                         className="volumeIcon"
@@ -344,14 +346,14 @@ export default function PlayerBar() {
                         className={`trackTitle ${titleOverflow ? "marquee-hover" : ""}`}
                         ref={titleInnerRef}
                     >
-                        {track.title || "TESTEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"} {/*currentTrack.titulo*/}
+                        {track.title} {/*currentTrack.titulo*/}
                     </NavLink>
                     <NavLink
                         to={`/profile/${encodeURIComponent(track.artist)}`}
                         className={`trackArtist ${artistOverflow ? "marquee-hover" : ""}`}
                         ref={artistInnerRef}
                     >
-                        {track.artist || "ARTISTA"} {/*currentTrack.username*/}
+                        {track.artist } {/*currentTrack.username*/}
                     </NavLink>
                 </div>
 

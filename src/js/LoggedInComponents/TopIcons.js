@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { NavLink } from 'react-router-dom'
 import { FiSearch, FiBell, FiAward, FiUser } from 'react-icons/fi'
-import { notifications } from '../../data/notifications'
 import api from '../services/api'
 
 export default function TopIcons() {
     // Base URL sem o /api para servir imagens estáticas
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '')
-
+    const [notifications, setNotifications] = useState([]);
+    const [unreadCount, setUnreadCount] = useState(0);
     // Estado da searchbox
     const [showSearch, setShowSearch] = useState(false)
     const [query, setQuery] = useState('')
@@ -76,17 +76,36 @@ export default function TopIcons() {
 
     // Fecha o dropdown de notificações ao clicar fora
     useEffect(() => {
-        function handleClickOutside(e) {
-            if (showNotifications &&
-                notifRef.current &&
-                !notifRef.current.contains(e.target)) {
-                setShowNotifications(false)
+        if (!showNotifications || !user) return;
+        async function marcarComoVistas() {
+            try {
+                await api.put('/notificacoes/marcar-vistas');
+                setNotifications(prev => prev.map(n => ({ ...n, visto: true })));                //setUnreadCount(0);         // remove badge
+            } catch (err) {
+                console.error('Erro ao marcar notificações como vistas:', err);
             }
         }
-        document.addEventListener('mousedown', handleClickOutside)
-        return () => document.removeEventListener('mousedown', handleClickOutside)
-    }, [showNotifications])
+        marcarComoVistas();
+    }, [showNotifications, user]);
 
+
+
+    //fetch das notificações
+
+// Vai buscar notificações não vistas ao carregar (ou quando o user muda)
+    useEffect(() => {
+        if (!user) return;
+        async function fetchNotifications() {
+            try {
+                const { data } = await api.get('/notificacoes/novas');
+                setNotifications(data);            // só notificações não vistas
+                setUnreadCount(data.length);       // todas são novas
+            } catch (err) {
+                console.error("Erro ao carregar notificações:", err);
+            }
+        }
+        fetchNotifications();
+    }, [user]);
     return (
         <div className="topIcons">
             {/* === Search Bar === */}
@@ -175,19 +194,34 @@ export default function TopIcons() {
                     className={`topIcon${showNotifications ? ' active' : ''}`}
                     onClick={() => setShowNotifications(n => !n)}
                 />
+                {unreadCount > 0 && (
+                    <span className="notificationBadge">{unreadCount}</span>
+                )}
                 {showNotifications && (
                     <ul className="notificationsDropdown">
-                        {notifications.map(n => (
-                            <li key={n.id} className="notificationItem">
-                                <NavLink
-                                    to={n.link}
-                                    className="notificationLink"
-                                    onClick={() => setShowNotifications(false)}
-                                >
-                                    {n.message}
-                                </NavLink>
-                            </li>
-                        ))}
+                        <button
+                            className="notificationsClearButton"
+                            onClick={() => {
+                                setNotifications([]);
+                                setUnreadCount(0);
+                            }}
+                            title="Limpar todas as notificações"
+                        >
+                            🗑️
+                        </button>
+
+                        {notifications.length === 0 ? (
+                            <li className="notificationItem">Sem notificações</li>
+                        ) : (
+                            notifications.map(n => (
+                                <li key={n.id_notificacao} className={`notificationItem ${!n.visto ? 'unread' : ''}`}>
+                <span className="notificationLink">
+                    {n.descricao}
+
+                </span>
+                                </li>
+                            ))
+                        )}
                     </ul>
                 )}
             </div>

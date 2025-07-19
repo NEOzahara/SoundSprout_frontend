@@ -698,43 +698,46 @@ export default function PlayerPage () {
                 ) : (
                     <div className="commentsSection">
                         {/* Formulário de comentário */}
-                        <form className="commentInputWrapper" onSubmit={handleCommentSubmit}>
                             <input
                                 type="text"
                                 className="commentInput"
                                 placeholder="Escreve um comentário"
                                 value={commentText}
                                 onChange={e => setCommentText(e.target.value)}
+                                onKeyDown={e => { if (e.key === 'Enter') handleCommentSubmit(e); }}
                             />
-                            <button type="submit" className="commentSubmitBtn">
-                                Enviar
-                            </button>
-                        </form>
 
                         {/* Lista de comentários */}
                         <div className="commentsList">
                             {comments.map(cm => (
                                 <div key={cm.idcomentario} className="commentItem">
-                                    <div className="commentHeader">
-                                        <strong>{cm.autor_username}</strong>
-                                        <span className="commentTime">
-              {new Date(cm.comentario_timestamp).toLocaleString()}
-            </span>
+                                    <div
+                                        className="commentAvatar"
+                                    />
+                                    <div className="commentContent">
+                                        <span className="commentUser">{cm.autor_username}:&nbsp; </span>
+                                        <span className="commentText">{cm.conteudo}</span>
                                     </div>
-                                    <p className="commentContent">{cm.conteudo}</p>
+                                    <div className="commentMeta">
+                                        <FiHeart className="commentHeart" />
+                                        <span className="commentTime">{new Date(cm.comentario_timestamp).toLocaleString()}
+                                        </span>
+                                    </div>
 
                                     {/* Replies aninhadas */}
                                     {cm.replies.length > 0 && (
                                         <div className="commentReplies">
                                             {cm.replies.map(rep => (
-                                                <div key={rep.idcomentario} className="replyItem">
-                                                    <div className="replyHeader">
-                                                        <strong>{rep.autor_username}</strong>
-                                                        <span className="replyTime">
-                      {new Date(rep.comentario_timestamp).toLocaleString()}
-                    </span>
+                                                <div key={rep.idcomentario} className="commentItem replyItem">
+                                                    <div className="commentAvatar"/>
+                                                    <div className="commentContent">
+                                                        <span className="commentUser">{rep.autor_username}:&nbsp; </span>
+                                                        <span className="commentText">{rep.conteudo}</span>
                                                     </div>
-                                                    <p className="replyContent">{rep.conteudo}</p>
+                                                    <div className="commentMeta">
+                                                        <FiHeart className="commentHeart" />
+                                                        <span className="commentTime">{new Date(rep.comentario_timestamp).toLocaleString()}</span>
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>

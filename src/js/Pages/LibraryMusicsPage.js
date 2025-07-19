@@ -43,12 +43,23 @@ export default function LibraryMusicsPage() {
     }, []);
 
     // === buscar músicas do próprio utilizador ===
-    useEffect(() => {
+    const fetchUserMusics = async () => {
         if (!username) return;
-        api.get(`/musicas/utilizador/${encodeURIComponent(username)}`)
-            .then(({ data }) => setMusicsList(data))
-            .catch(err => console.error('Erro ao carregar músicas:', err));
-    }, [username, token]);
+        try {
+            const { data } = await api.get(
+                `/musicas/utilizador/${encodeURIComponent(username)}`
+            );
+            setMusicsList(data);
+        } catch (err) {
+            console.error('Erro ao carregar músicas:', err);
+        }
+    };
+
+    useEffect(() => {
+        fetchUserMusics();
+        window.addEventListener('musicsUpdated', fetchUserMusics);
+        return () => window.removeEventListener('musicsUpdated', fetchUserMusics);
+        }, [username]);
 
     useEffect(() => {
         if (!musicsList.length) return;
@@ -196,6 +207,10 @@ export default function LibraryMusicsPage() {
             console.log('Música publicada:', data);
             setSuccess(true);
             closeAll();
+            // 1) adiciona nova música localmente
+            setMusicsList(prev => [data, ...prev]);
+            // 2) dispara evento para Menu.js atualizar submenu
+            window.dispatchEvent(new Event('musicsUpdated'));
         } catch (err) {
             console.error('Erro ao publicar música:', err.response?.data || err.message);
             setError(err.response?.data?.error || 'Erro ao publicar música');
@@ -381,7 +396,7 @@ export default function LibraryMusicsPage() {
                 <div className="modalOverlay" onClick={closeAll}>
                     <div className="modalContent" onClick={e => e.stopPropagation()}>
                         <h2>Create New Song</h2>
-                        <form onSubmit={handleConfirmSong}>
+                        <form onSubmit={handleConfirmSong} noValidate>
                             <label>
                                 Title
                                 <input
@@ -417,6 +432,7 @@ export default function LibraryMusicsPage() {
                                 </button>
                                 <input
                                     type="file"
+                                    name="audio"
                                     accept="audio/*"
                                     ref={audioRef}
                                     style={{ display: 'none' }}
@@ -450,6 +466,7 @@ export default function LibraryMusicsPage() {
                                 </button>
                                 <input
                                     type="file"
+                                    name="foto"
                                     accept="image/*"
                                     ref={songCoverRef}
                                     style={{ display: 'none' }}
@@ -482,6 +499,7 @@ export default function LibraryMusicsPage() {
                                 </button>
                                 <input
                                     type="file"
+                                    name="lyric"
                                     accept=".txt"
                                     ref={lyricRef}
                                     style={{ display: 'none' }}

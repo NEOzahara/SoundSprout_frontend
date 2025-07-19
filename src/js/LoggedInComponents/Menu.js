@@ -1,8 +1,8 @@
 import React, {useState, useRef, useEffect} from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom';
 import {FiHome, FiGlobe, FiUsers, FiRss, FiFolder, FiPlus, FiMusic, FiHeart, FiSettings, FiCheckSquare, FiLogOut
 } from 'react-icons/fi'
-import { musics } from '../../data/musics';
 import api from "../services/api";
 export default function Menu() {
 
@@ -36,6 +36,8 @@ export default function Menu() {
     const lyricRef = useRef(null);
     const songCoverRef = useRef(null);
     const [songCoverDrag, setSongCoverDrag] = useState(false);
+    const [error, setError] = useState(null);
+    const [success, setSuccess] = useState(false);
 
     const closeAll = () => {
         // fecha ambos modais e repõe estados
@@ -44,26 +46,65 @@ export default function Menu() {
         setCreateSongOpen(false);
         setNewSongName(''); setNewAudioFile(null);
         setNewSongCover(null); setNewLyricFile(null);
+        setError(null); setSuccess(false);
+        setAudioDragOver(false); setSongCoverDrag(false); setLyricDragOver(false);
     };
 
     // simula criação (substituir pela API real)
-    const handleConfirmPlaylist = () => {
-        console.log({
-            name: newPlName,
-            cover: newPlCover,
-            visibility: newPlVisibility
-        });
-        closeAll();
+    const handleConfirmPlaylist = async (e) => {
+        e.preventDefault();
+        const formData = new FormData();
+        formData.append('nome', newPlName);
+        formData.append('privacidade', newPlVisibility);
+        formData.append('dataCriacao', new Date().toISOString());
+        formData.append('onlyPremium', false);
+        if (newPlCover) {
+            formData.append('foto', newPlCover);
+        }
+        try {
+            // Cria a playlist (com ou sem capa)
+            await api.post(
+                '/playlists/with-cover',
+                formData,
+                { headers: { 'Content-Type': 'multipart/form-data' } }
+            );
+            // Recarrega as playlists do submenu
+            const { data: pls } = await api.get(
+                `/playlists/utilizador/${encodeURIComponent(user.username)}`
+            );
+            setUserPlaylists(pls);
+            closeAll();
+        } catch (err) {
+            console.error('Erro ao criar playlist:', err.response?.data || err);
+        }
     };
 
-    const handleConfirmSong = () => {
-        console.log({
-            title: newSongName,
-            audio: newAudioFile,
-            cover: newSongCover,
-            lyric: newLyricFile
-        });
-        closeAll();
+    const handleConfirmSong = async (e) => {
+        e.preventDefault();
+        setError(null); setSuccess(false);
+        if (!newSongName || !newAudioFile) {
+            setError('Título e ficheiro de áudio são obrigatórios.');
+            return;
+        }
+        try {
+            const formData = new FormData();
+            formData.append('audio', newAudioFile);
+            formData.append('titulo', newSongName);
+            if (newSongCover) formData.append('foto', newSongCover);
+            if (newLyricFile) formData.append('lyric', newLyricFile);
+
+            const { data } = await api.post('/musicas', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            console.log('Música publicada:', data);
+            setSuccess(true);
+            closeAll();
+            // avisa LibraryMusicsPage e refaz submenu
+            window.dispatchEvent(new Event('musicsUpdated'));
+        } catch (err) {
+            console.error('Erro ao publicar música:', err.response?.data || err.message);
+            setError(err.response?.data?.error || 'Erro ao publicar música');
+        }
     };
 
     const togglePlaylists = () => {
@@ -208,7 +249,7 @@ export default function Menu() {
                     {userPlaylists.map(pl => (
                         <NavLink
                             key={pl.nome}
-                            to={`/playlist/${encodeURIComponent(pl.nome)}/${encodeURIComponent(pl.username)}`}
+                            to={`/playlist/${encodeURIComponent(pl.username)}/${encodeURIComponent(pl.nome)}`}
                             className="subItem"
                         >
                             <span className="subIcon"><FiFolder className="Icon" /></span>
@@ -354,7 +395,7 @@ export default function Menu() {
                 <div className="modalOverlay" onClick={closeAll}>
                     <div className="modalContent" onClick={e => e.stopPropagation()}>
                         <h2>Create New Playlist</h2>
-                        <form onSubmit={e => { e.preventDefault(); handleConfirmPlaylist(); }}>
+                        <form onSubmit={handleConfirmPlaylist}>
                             <label>
                                 Name
                                 <input
@@ -420,12 +461,11 @@ export default function Menu() {
             )}
 
             {/* === Modal “New Song” === */}
-            {createSongOpen && (
+            {createSongOpen && createPortal(
                 <div className="modalOverlay" onClick={closeAll}>
                     <div className="modalContent" onClick={e => e.stopPropagation()}>
                         <h2>Create New Song</h2>
-                        <form onSubmit={e => { e.preventDefault(); handleConfirmSong(); }}>
-
+                        <form onSubmit={handleConfirmSong} noValidate>
                             <label>
                                 Title
                                 <input
@@ -440,7 +480,7 @@ export default function Menu() {
                             <div
                                 className={`fileDropArea${audioDragOver ? ' drag-over' : ''}`}
                                 onDragOver={e => { e.preventDefault(); setAudioDragOver(true); }}
-                                onDragLeave={() => setAudioDragOver(false)}
+                                onDragLeave={e => { e.preventDefault(); setAudioDragOver(false); }}
                                 onDrop={e => {
                                     e.preventDefault();
                                     setAudioDragOver(false);
@@ -459,6 +499,7 @@ export default function Menu() {
                                 >Choose File</button>
                                 <input
                                     type="file"
+                                    name="audio"
                                     accept="audio/*"
                                     ref={audioRef}
                                     style={{display:'none'}}
@@ -471,7 +512,7 @@ export default function Menu() {
                             <div
                                 className={`fileDropArea${songCoverDrag ? ' drag-over' : ''}`}
                                 onDragOver={e => { e.preventDefault(); setSongCoverDrag(true); }}
-                                onDragLeave={() => setSongCoverDrag(false)}
+                                onDragLeave={e => { e.preventDefault(); setSongCoverDrag(false); }}
                                 onDrop={e => {
                                     e.preventDefault();
                                     setSongCoverDrag(false);
@@ -490,6 +531,7 @@ export default function Menu() {
                                 >Choose File</button>
                                 <input
                                     type="file"
+                                    name="foto"
                                     accept="image/*"
                                     ref={songCoverRef}
                                     style={{display:'none'}}
@@ -501,7 +543,7 @@ export default function Menu() {
                             <div
                                 className={`fileDropArea${lyricDragOver ? ' drag-over' : ''}`}
                                 onDragOver={e => { e.preventDefault(); setLyricDragOver(true); }}
-                                onDragLeave={() => setLyricDragOver(false)}
+                                onDragLeave={e => { e.preventDefault(); setLyricDragOver(false); }}
                                 onDrop={e => {
                                     e.preventDefault();
                                     setLyricDragOver(false);
@@ -520,12 +562,16 @@ export default function Menu() {
                                 >Choose File</button>
                                 <input
                                     type="file"
+                                    name="lyric"
                                     accept=".txt"
                                     ref={lyricRef}
                                     style={{display:'none'}}
                                     onChange={e => setNewLyricFile(e.target.files[0]||null)}
                                 />
                             </div>
+
+                            {error && <p className="error">{error}</p>}
+                            {success && <p className="success">Música publicada com sucesso!</p>}
 
                             <div className="modalButtons">
                                 <button type="button" onClick={closeAll}>Cancelar</button>
@@ -535,7 +581,8 @@ export default function Menu() {
                             </div>
                         </form>
                     </div>
-                </div>
+                </div>,
+                document.body
             )}
         </>
     )

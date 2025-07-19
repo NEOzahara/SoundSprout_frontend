@@ -63,6 +63,7 @@ export default function ProfilePage() {
         api.get(`/utilizadores/${profileUsername}`)
             .then(({ data }) => {
                 setProfileUser(data);
+                window.dispatchEvent(new Event('historyUpdated'));
             })
             .catch(err => {
                 console.error('Erro a carregar perfil:', err);
@@ -244,10 +245,10 @@ export default function ProfilePage() {
 
     const displayedArtists = useMemo(() => {
         return topArtists.map(art => (
-            <div
+            <NavLink
                 key={art.username}
+                to={`/profile/${encodeURIComponent(art.username)}`}
                 className="coverCard artistCard"
-                onClick={() => navigate(`/profile/${encodeURIComponent(art.username)}`)}
             >
                 <div
                     className="coverPlaceholder"
@@ -258,7 +259,7 @@ export default function ProfilePage() {
                     }}
                 />
                 <span className="coverTitle">{art.username}</span>
-            </div>
+            </NavLink>
         ));
     }, [topArtists, baseUrl, navigate]);
 
@@ -347,7 +348,11 @@ export default function ProfilePage() {
 
     const displayedFollowers = useMemo(() =>                     // ADDED
             followersList.map(f => (
-                <div key={f.follower_username} className="coverCard followerCard">
+                <NavLink
+                    key={f.follower_username}
+                    to={`/profile/${encodeURIComponent(f.follower_username)}`}
+                    className="coverCard followerCard"
+                >
                     <div
                         className="followerPlaceholder"
                         style={{
@@ -357,17 +362,17 @@ export default function ProfilePage() {
                         }}
                     />
                     <span className="coverTitle">{f.follower_username}</span>
-                </div>
+                </NavLink>
             ))
         , [followersList, baseUrl]);
 
     const displayedFollowing = useMemo(() => {
         const slice = showAllFollowing ? followingList : followingList.slice(0,6);
         return slice.map(u => (
-            <div
+            <NavLink
                 key={u.following_username}
+                to={`/profile/${encodeURIComponent(u.following_username)}`}
                 className="coverCard followerCard"
-                onClick={() => navigate(`/profile/${encodeURIComponent(u.following_username)}`)}
             >
                 <div
                     className="followerPlaceholder"
@@ -378,7 +383,7 @@ export default function ProfilePage() {
                     }}
                 />
                 <span className="coverTitle">{u.following_username}</span>
-            </div>
+            </NavLink>
         ));
     }, [followingList, showAllFollowing, baseUrl, navigate]);
 

@@ -1,7 +1,8 @@
-import React, {useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo} from 'react';
+import React, {useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, useContext} from 'react';
 import { useParams, useNavigate, NavLink  } from 'react-router-dom'
 import { createPortal } from 'react-dom';
 import { FiEdit2, FiShare2, FiHeart, FiMessageCircle, FiList, FiMoreHorizontal } from 'react-icons/fi';
+import { PlayerContext } from '../../context/PlayerContext';
 import '../../css/Pages/Profile.css';
 import api from '../services/api';
 
@@ -14,6 +15,8 @@ export default function ProfilePage() {
     const [profileUser, setProfileUser] = useState(user);
     const [isFollowing, setIsFollowing] = useState(false);
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+
+    const { setTrack } = useContext(PlayerContext);
 
     const profileUsername = usernameParam || user?.username;
     const isOwnProfile = profileUsername === user?.username;
@@ -213,6 +216,22 @@ export default function ProfilePage() {
         return () => { isMounted = false; };
     }, [profileUsername]);
 
+    const handleClickTitle = track => e => {
+        e.preventDefault();
+        const audio = new Audio();
+        audio.addEventListener('loadedmetadata', () => {
+            setTrack({
+                id: track.id,
+                title: track.titulo,
+                artist: track.username,
+                coverUrl: track.foto ? `${baseUrl}/${track.foto}` : '',
+                duration: audio.duration
+            });
+        });
+        audio.src = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${track.id}`;
+        audio.load();
+        };
+
     const [showAllPlaylists, setShowAllPlaylists] = useState(false);
 
     // ← ADDED: prepara apenas as 6 iniciais ou todas, conforme flag
@@ -282,10 +301,13 @@ export default function ProfilePage() {
                     }}
                 />
                 <div className="trackInfoSmall">
-                    <span className="smallTitle"
-                          onClick={() => console.log(track.titulo)}>
+                    <a
+                        href="#!"
+                        className="smallTitle"
+                        onClick={handleClickTitle(track)}
+                    >
                         {track.titulo}
-                    </span>
+                    </a>
                     <span
                         className="smallArtist"
                         onClick={() => console.log(track.username)}
@@ -339,7 +361,13 @@ export default function ProfilePage() {
                     }}
                 />
                 <div className="trackInfoSmall">
-                    <span className="smallTitle">{track.titulo}</span>
+                    <a
+                        href="#!"
+                        className="smallTitle"
+                        onClick={handleClickTitle(track)}
+                    >
+                        {track.titulo}
+                    </a>
                     <span className="smallArtist">{track.artist_username}</span>
                 </div>
             </NavLink>

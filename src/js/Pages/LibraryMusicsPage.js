@@ -1,4 +1,4 @@
-import React, { useState, useRef, useLayoutEffect, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useLayoutEffect, useEffect, useMemo, useContext } from 'react';
 import {
     FiList,
     FiGrid,
@@ -14,10 +14,13 @@ import {
 import '../../css/Pages/LibraryPlaylists.css';
 import '../../css/Pages/LibraryMusics.css';
 import {NavLink, useLocation, useNavigate} from "react-router-dom";
+import { PlayerContext } from '../../context/PlayerContext';
 import { createPortal } from 'react-dom';
 import api from '../services/api';
 
 export default function LibraryMusicsPage() {
+
+    const { setTrack } = useContext(PlayerContext);
 
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
 
@@ -145,6 +148,24 @@ export default function LibraryMusicsPage() {
         });
         return sorted;
     }, [musicsList, recentAsc]);
+
+    const handleClickTitle = m => e => {
+        e.preventDefault();
+
+        const audio = new Audio();
+        audio.addEventListener('loadedmetadata', () => {
+            setTrack({
+                id: m.id,
+                title: m.titulo,
+                artist: m.username,
+                coverUrl: m.foto ? `${baseUrl}/${m.foto.replace(/^\/+/, '')}` : '',
+                duration: audio.duration
+            });
+        });
+        // usa o mesmo endpoint de stream do PlayerBar
+        audio.src = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${m.id}`;
+        audio.load();
+    };
 
     // --- estados do modal “New Song” ---
     const [createSongOpen, setCreateSongOpen] = useState(false);
@@ -350,12 +371,13 @@ export default function LibraryMusicsPage() {
                                 />
 
                                 <div className="trackInfoSmall">
-                                    <NavLink
-                                        to={`/player/${m.id}`}
+                                    <a
+                                        href="#!"
                                         className="smallTitle"
+                                        onClick={handleClickTitle(m)}
                                     >
                                         {m.titulo}
-                                    </NavLink>
+                                    </a>
                                     <NavLink
                                         to={`/profile/${encodeURIComponent(m.username)}`}
                                         className="smallArtist"

@@ -57,6 +57,23 @@ export default function PlayerPage () {
         }
     }
 
+    const handleClickSimilar = item => e => {
+        e.preventDefault();
+        const audio = new Audio();
+        audio.preload = 'metadata';
+        audio.addEventListener('loadedmetadata', () => {
+            setTrack({
+                id: item.id,
+                title: item.title,
+                artist: item.artist,
+                coverUrl: item.cover ? `${baseUrl}/${item.cover.replace(/^\/+/, '')}` : '',
+                duration: audio.duration
+            });
+        });
+        audio.src = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${item.id}`;
+        audio.load();
+    };
+
 
     const [artistUser, setArtistUser] = useState({});
     const [audioDuration, setAudioDuration] = useState(0);
@@ -698,9 +715,13 @@ export default function PlayerPage () {
                                                  style={{ backgroundImage: `url(${baseUrl}/${item.cover})` }}/>
                                         </NavLink>
                                         <div className="trackInfoSmall">
-                                            <NavLink to={`/player/${item.id}`} className="infoLink">
-                                                <span className="smallTitle">{item.title}</span>
-                                            </NavLink>
+                                            <a
+                                                href="#!"
+                                                className="smallTitle infoLink"
+                                                onClick={handleClickSimilar(item)}
+                                            >
+                                                {item.title}
+                                            </a>
                                             <NavLink to={`/profile/${item.artist}`} className="smallArtist">
                                                 {item.artist}
                                             </NavLink>

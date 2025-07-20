@@ -1,7 +1,8 @@
-import React, { useState, useRef, useLayoutEffect, useEffect, useMemo } from "react";
+import React, { useState, useRef, useLayoutEffect, useEffect, useMemo, useContext } from "react";
 import { FiList, FiGrid, FiArrowUp, FiArrowDown, FiFilter, FiSearch, FiPlus, FiMoreHorizontal, FiHeart, FiMessageCircle } from "react-icons/fi";
 import { NavLink, useLocation } from "react-router-dom";
 import api from '../services/api';
+import { PlayerContext } from '../../context/PlayerContext';
 import '../../css/Pages/LibraryLikes.css';
 
 export default function LibraryLikesPage() {
@@ -33,6 +34,8 @@ export default function LibraryLikesPage() {
     const username = stored?.username;
 
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+
+    const { setTrack } = useContext(PlayerContext);
 
     // Toolbar e filtros (como nas outras pages)
     const [view, setView] = useState("list");
@@ -132,6 +135,27 @@ export default function LibraryLikesPage() {
                 .catch(console.error);
         });
     }, [likedSongs]);
+
+    const handleClickTitle = m => e => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const audio = new Audio();
+        audio.preload = 'metadata';
+        audio.addEventListener('loadedmetadata', () => {
+            setTrack({
+                id: m.id,
+                title: m.titulo,
+                artist: m.artist_username,
+                coverUrl: m.cover
+                    ? `${baseUrl}/${m.cover.replace(/^\/+/, '')}`
+                    : '',
+                duration: audio.duration
+            });
+        });
+        audio.src = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${m.id}`;
+        audio.load();
+    };
 
     // 2) para cada playlist gostada, busca metadata e calcula duração total
     useEffect(() => {
@@ -465,9 +489,13 @@ export default function LibraryLikesPage() {
                      />
 
                     <div className="trackInfoSmall">
-                        <NavLink to={`/player/${m.id}`} className="smallTitle">
+                        <a
+                            href="#!"
+                            className="smallTitle"
+                            onClick={handleClickTitle(m)}
+                        >
                             {m.titulo}
-                        </NavLink>
+                        </a>
                         <NavLink
                             to={`/profile/${encodeURIComponent(m.artist_username)}`}
                             className="smallArtist"

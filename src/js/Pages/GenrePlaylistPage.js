@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import { NavLink, useParams } from 'react-router-dom';
 import {
     FiShuffle,
@@ -11,19 +11,30 @@ import {
     FiMessageCircle
 } from 'react-icons/fi';
 import api from '../services/api';
-import '../../css/Pages/Playlist.css';  // reaproveita estilos de lista
+import { PlayerContext } from '../../context/PlayerContext';
+import '../../css/Pages/Playlist.css';
 
 export default function GenrePlaylistPage() {
     const { genreName } = useParams();                     // /genre/:genreName
     const [tracks, setTracks]     = useState([]);
     const [durations, setDurations] = useState({});
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+    const { setTrack } = useContext(PlayerContext);
 
     // estados para toolbar (mesmos do PlaylistPage)
     const [isPlaying, setIsPlaying] = useState(false);
     const [recentAsc, setRecentAsc] = useState(true);
     const [showSearch, setShowSearch] = useState(false);
     const [query, setQuery] = useState('');
+
+    const suggestions = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return [];
+        return tracks.filter(m =>
+                m.titulo.toLowerCase().includes(q) ||
+                m.username.toLowerCase().includes(q)
+        );
+    }, [tracks, query]);
 
     // 1) fetch das músicas
     useEffect(() => {
@@ -49,6 +60,23 @@ export default function GenrePlaylistPage() {
         });
     }, [tracks, baseUrl]);
 
+    const handleClickTitle = track => e => {
+        e.preventDefault();
+        const audio = new Audio();
+        audio.addEventListener('loadedmetadata', () => {
+            setTrack({
+                id: track.id,
+                title: track.titulo,
+                artist: track.username,
+                coverUrl: track.foto ? `${baseUrl}/${track.foto}` : '',
+                duration: audio.duration
+            });
+        });
+        // define src com o endpoint de stream
+        audio.src = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${track.id}`;
+        audio.load();
+    };
+
     // 3) ordenação + pesquisa (igual PlaylistPage)
     const displayedTracks = useMemo(() => {
         let arr = recentAsc ? [...tracks] : [...tracks].reverse();
@@ -67,7 +95,7 @@ export default function GenrePlaylistPage() {
             <div className="playlistHeader">
                 <div className="playlistMain">
                     <div className="playlistDetails">
-                        <span className="playlistTitle">{genreName} Playlist</span>
+                        <span className="playlistTitle">{genreName}</span>
                     </div>
                 </div>
             </div>
@@ -159,17 +187,28 @@ export default function GenrePlaylistPage() {
                             setQuery('');
                         }}
                     />
-                    {showSearch && displayedTracks.length > 0 && (
+                    {showSearch && query.trim() !== '' && suggestions.length > 0 && (
                         <ul className="suggestionsLib">
-                            {displayedTracks.map(m => (
+                            {suggestions.map(m => (
                                 <li key={m.id} className="suggestionItem">
                                     <NavLink
                                         to={`/player/${m.id}`}
                                         onClick={() => setShowSearch(false)}
-                                        className="suggestionText"
+                                        className="suggestionItemLib"
                                     >
-                                        <div className="suggestionTitle">{m.titulo}</div>
-                                        <div className="suggestionSubtitle">{m.username}</div>
+                                        <div
+                                            className="suggestionThumbLib"
+                                            style={{
+                                                backgroundImage: m.foto
+                                                    ? `url(${baseUrl}/${m.foto.replace(/^\/+/, '')})`
+                                                    : undefined
+                                            }}
+                                        />
+
+                                        <div className="suggestionTextLib">
+                                            <div className="suggestionTitleLib">{m.titulo}</div>
+                                            <div className="suggestionSubtitleLib">{m.username}</div>
+                                        </div>
                                     </NavLink>
                                 </li>
                             ))}
@@ -200,7 +239,13 @@ export default function GenrePlaylistPage() {
                                 }}
                             />
                             <div className="trackInfoSmall">
-                                <span className="smallTitle">{track.titulo}</span>
+                                <a
+                                    href="#!"
+                                    className="smallTitle"
+                                    onClick={handleClickTitle(track)}
+                                >
+                                    {track.titulo}
+                                </a>
                                 <NavLink
                                     to={`/profile/${encodeURIComponent(track.username)}`}
                                     className="smallArtist"

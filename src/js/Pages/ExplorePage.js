@@ -1,10 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import api from '../services/api';
 import '../../css/Pages/Explore.css';
 import {FiSearch, FiUser} from 'react-icons/fi';
 import { NavLink } from 'react-router-dom';
+import { PlayerContext } from '../../context/PlayerContext';
 
 export default function ExplorePage() {
+
+    const { setTrack } = useContext(PlayerContext);
 
     const INITIAL_VISIBLE = 6;
     const MAX_VISIBLE= 20;
@@ -26,6 +29,23 @@ export default function ExplorePage() {
 
     // Base URL sem “/api” para imagens
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '')
+
+    const handleClickTitle = m => e => {
+        e.preventDefault();
+        const audio = new Audio();
+        audio.addEventListener('loadedmetadata', () => {
+            setTrack({
+                id: m.id,
+                title: m.titulo,
+                artist: m.username,
+                coverUrl: m.foto ? `${baseUrl}/${m.foto}` : '',
+                duration: audio.duration
+            });
+        });
+        // carrega ficheiro
+        audio.src = `${baseUrl}/${m.pathficheiro}`;
+        audio.load();
+    };
 
     // ─── Estados para cada carrossel ────────────────────────────────
     const [discoverMusics, setDiscoverMusics] = useState([])
@@ -89,17 +109,33 @@ export default function ExplorePage() {
     // ─── Render Functions ──────────────────────────────────────────
     const renderMusicCarrousel = musics =>
         visibleItems(musics, showAllDiscover).map(m => (
-            <NavLink key={m.id} to={`/player/${m.id}`} className="coverCard">
-                {m.foto
-                    ? <img
-                        className="coverPlaceholder"
-                        src={`${baseUrl}/${m.foto}`}
-                        alt={m.titulo}
-                    />
-                    : <div className="coverPlaceholder" />
-                }
-                <span className="coverTitle">{m.titulo}</span>
-            </NavLink>
+            <div key={m.id} className="coverCard">
+                <NavLink to={`/player/${m.id}`}>
+                    {m.foto
+                        ? <img
+                            className="coverPlaceholder"
+                            src={`${baseUrl}/${m.foto}`}
+                            alt={m.titulo}
+                        />
+                        : <div className="coverPlaceholder" />
+                    }
+                </NavLink>
+
+                <a
+                    href="#!"
+                    className="coverTitle"
+                    onClick={handleClickTitle(m)}
+                >
+                    {m.titulo}
+                </a>
+
+                <NavLink
+                    to={`/profile/${encodeURIComponent(m.username)}`}
+                    className="coverArtist"
+                >
+                    por {m.username}
+                </NavLink>
+            </div>
         ))
 
     const renderGenreCarrousel = genres =>

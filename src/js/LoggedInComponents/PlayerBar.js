@@ -120,8 +120,6 @@ export default function PlayerBar() {
         }
     }
 
-
-
     useEffect(() => {
         if (!track.id) return;
         const audio = audioRef.current;

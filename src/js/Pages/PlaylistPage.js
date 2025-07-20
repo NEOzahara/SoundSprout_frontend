@@ -1,8 +1,9 @@
-import React, {useState, useMemo, useEffect, useRef } from 'react';
+import React, {useState, useMemo, useEffect, useRef, useContext } from 'react';
 import '../../css/Pages/Playlist.css';
 import { eventPlaylists } from '../../data/eventPlaylists';
 import { playlists } from '../../data/playlists';
 import { musics } from '../../data/musics';
+import { PlayerContext } from '../../context/PlayerContext';
 import {
     FiShuffle,
     FiArrowUp,
@@ -19,6 +20,7 @@ import api from '../services/api';
 export default function PlaylistPage() {
 
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+    const { setTrack } = useContext(PlayerContext);
 
     const [showDropdown, setShowDropdown] = useState(false);
     const moreRef = useRef(null);
@@ -61,6 +63,29 @@ export default function PlaylistPage() {
                 .catch(err => console.error('Erro is-liked:', err));
         });
     }, [tracks]);
+
+    const handleClickTitle = track => e => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const audio = new Audio();
+        audio.preload = 'metadata';
+        audio.addEventListener('loadedmetadata', () => {
+            const raw = track.pathFicheiro ?? track.pathficheiro;
+            const normalized = raw.startsWith('/') ? raw : `/${raw}`;
+            setTrack({
+                id: track.id,
+                title: track.titulo,
+                artist: track.username,
+                coverUrl: track.foto ? `${baseUrl}/${track.foto.replace(/^\/+/, '')}` : '',
+                duration: audio.duration
+            });
+        });
+        const raw = track.pathFicheiro ?? track.pathficheiro;
+        const normalized = raw.startsWith('/') ? raw : `/${raw}`;
+        audio.src = `${baseUrl}${normalized}`;
+        audio.load();
+    };
 
     async function toggleTrackLike(trackId) {
         try {
@@ -480,12 +505,13 @@ export default function PlaylistPage() {
                             />
 
                             <div className="trackInfoSmall">
-                                <span
+                                <a
+                                    href="#!"
                                     className="smallTitle"
-                                    onClick={() => console.log(`Title ${idx+1} clicked`)}
+                                    onClick={handleClickTitle(track)}
                                 >
                                     {track.titulo}
-                                </span>
+                                </a>
                                 <NavLink
                                     to={`/profile/${encodeURIComponent(track.username)}`}
                                     className="smallArtist"

@@ -53,6 +53,22 @@ export default function TopIcons() {
     const [showNotifications, setShowNotifications] = useState(false)
     const notifRef = useRef(null)
 
+    useEffect(() => {
+        function handleNotifClickOutside(e) {
+            if (
+                showNotifications &&
+                notifRef.current &&
+                !notifRef.current.contains(e.target)
+            ) {
+                setShowNotifications(false);
+            }
+        }
+        document.addEventListener('mousedown', handleNotifClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleNotifClickOutside);
+        };
+    }, [showNotifications]);
+
     // Estado do utilizador logado (ler do localStorage)
     const [user, setUser] = useState(() =>
         JSON.parse(localStorage.getItem('user') || 'null')

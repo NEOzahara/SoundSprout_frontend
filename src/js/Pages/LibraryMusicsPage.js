@@ -139,6 +139,19 @@ export default function LibraryMusicsPage() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [showSearch]);
 
+    const [openMenuIdx, setOpenMenuIdx] = useState(null);
+
+    useEffect(() => {
+        if (openMenuIdx === null) return;
+        function handleClickOutside(e) {
+            if (!e.target.closest('.moreMenuWrapper')) {
+                setOpenMenuIdx(null);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [openMenuIdx])
+
     // === ordenar por dataPublicacao ===
     const displayedMusics = useMemo(() => {
         const sorted = [...musicsList].sort((a, b) => {
@@ -407,10 +420,39 @@ export default function LibraryMusicsPage() {
                                 <span className="smallDuration">{durations[m.id] || '--:--'}</span>
                                 <span className="smallListens">{m.visualizacoes}</span>
 
-                                <FiMoreHorizontal
-                                    className="actionIcon"
-                                    onClick={() => console.log('Options')}
-                                />
+                                <div
+                                    className={`moreMenuWrapper ${openMenuIdx === idx ? 'open' : ''}`}
+                                    onClick={e => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setOpenMenuIdx(openMenuIdx === idx ? null : idx);
+                                    }}
+                                >
+                                    <FiMoreHorizontal className="actionIcon" />
+                                    {openMenuIdx === idx && (
+                                        <ul
+                                            className={
+                                            `playlistOptions ${
+                                                idx >= Math.ceil(displayedMusics.length / 2)
+                                                    ? 'above'
+                                                    : 'below'
+                                            }`
+                                        }
+                                        >
+                                            <li
+                                                onClick={e => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    // TODO: queue song logic
+                                                    console.log('Queue song', m);
+                                                    setOpenMenuIdx(null);
+                                                }}
+                                            >
+                                                Queue
+                                            </li>
+                                        </ul>
+                                    )}
+                                </div>
                             </div>
                         ))}
                     </div>

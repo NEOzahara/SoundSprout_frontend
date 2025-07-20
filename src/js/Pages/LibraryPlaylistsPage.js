@@ -111,6 +111,18 @@ export default function LibraryPlaylistsPage() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [showSearch]);
 
+    const [openMenuIdx, setOpenMenuIdx] = useState(null);
+    useEffect(() => {
+        if (openMenuIdx === null) return;
+        function handleClickOutside(e) {
+            if (!e.target.closest('.moreMenuWrapper')) {
+                setOpenMenuIdx(null);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [openMenuIdx]);
+
     // --- novos estados para o modal “New Playlist” ---
     const [createPlaylistOpen, setCreatePlaylistOpen] = useState(false);
     const [newPlName, setNewPlName] = useState('');
@@ -346,10 +358,36 @@ export default function LibraryPlaylistsPage() {
                                 <span className="playlistSongsCount">{pl.songs}</span>
                                 <span className="playlistTotalDuration">{durations[`${pl.nome}|${pl.username}`] || '–:–'}</span>
                                 <span className="playlistLikesCount">{pl.listens}</span>
-                                <FiMoreHorizontal
-                                    className="actionIcon"
-                                    onClick={() => console.log('Options')}
-                                />
+                                <div
+                                    className={`moreMenuWrapper ${openMenuIdx === idx ? 'open' : ''}`}
+                                    onClick={e => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setOpenMenuIdx(openMenuIdx === idx ? null : idx);
+                                    }}
+                                >
+                                    <FiMoreHorizontal className="actionIcon" />
+                                    {openMenuIdx === idx && (
+                                        <ul
+                                            className={`playlistOptions ${
+                                                idx >= Math.ceil(playlists.length / 2)
+                                                    ? 'above'
+                                                    : 'below'
+                                            }`}
+                                        >
+                                            <li
+                                                onClick={e => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    console.log('Queue playlist', pl);
+                                                    setOpenMenuIdx(null);
+                                                }}
+                                            >
+                                                Queue
+                                            </li>
+                                        </ul>
+                                    )}
+                                </div>
                             </div>
                         ))}
                     </div>

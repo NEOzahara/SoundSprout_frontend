@@ -365,7 +365,7 @@ export default function LibraryLikesPage() {
                         <span className="playlistLikesCount">{info.likes ?? '–'}</span>
 
                         <div
-                            className="moreMenuWrapper"
+                            className={`moreMenuWrapper ${openMenuIdx === idx ? 'open' : ''}`}
                             onClick={e => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -374,7 +374,15 @@ export default function LibraryLikesPage() {
                         >
                             <FiMoreHorizontal className="actionIcon" />
                             {openMenuIdx === idx && (
-                                <ul className={`playlistOptions ${idx + 1 > likedPlaylists.length / 2 ? 'above' : 'below'}`}>
+                                <ul
+                                    className={
+                                        `playlistOptions ${
+                                            idx >= Math.ceil(likedPlaylists.length / 2)
+                                                ? 'above' 
+                                                : 'below'
+                                        }`
+                                    }
+                                >
                                     <li
                                         onClick={e => {
                                             e.preventDefault();
@@ -385,6 +393,19 @@ export default function LibraryLikesPage() {
                                     >
                                         {likedPlaylistStatus[key] ? 'Remove Like' : 'Like'}
                                     </li>
+
+                                    <li
+                                        onClick={e => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setOpenMenuIdx(null);
+                                            // aqui você colocaria a lógica de adicionar à fila
+                                            console.log('Queue playlist', pl);
+                                        }}
+                                    >
+                                        Queue
+                                    </li>
+
                                     <li
                                         onClick={async e => {
                                             e.preventDefault();
@@ -524,7 +545,50 @@ export default function LibraryLikesPage() {
                     <span className="smallDuration">{songDurations[m.id] || '--:--'}</span>
                     <span className="smallListens">{songListens[m.id] ?? '–'}</span>
 
-                    <FiMoreHorizontal className="actionIcon" onClick={() => console.log('Options')} />
+                    <div
+                        className={`moreMenuWrapper ${openMenuIdx === idx ? 'open' : ''}`}
+                        onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setOpenMenuIdx(openMenuIdx === idx ? null : idx);
+                        }}
+                    >
+                        <FiMoreHorizontal className="actionIcon" />
+                        {openMenuIdx === idx && (
+                            <ul
+                                className={
+                                `playlistOptions ${
+                                    idx >= Math.ceil(likedSongs.length / 2)
+                                        ? 'above'
+                                        : 'below'
+                                }`
+                            }
+                            >
+                                <li
+                                    onClick={e => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        // lógica de Follow (ex.: seguir artista)
+                                        console.log('Follow artist', m.artist_username);
+                                        setOpenMenuIdx(null);
+                                    }}
+                                >
+                                    Follow
+                                </li>
+                                <li
+                                    onClick={e => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        // lógica de Queue (adicionar à fila)
+                                        console.log('Queue song', m);
+                                        setOpenMenuIdx(null);
+                                    }}
+                                >
+                                    Queue
+                                </li>
+                            </ul>
+                        )}
+                    </div>
                 </NavLink>
             ))}
         </div>

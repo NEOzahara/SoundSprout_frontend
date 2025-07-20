@@ -10,28 +10,35 @@ export default function SignupPage() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState(null);
     const navigate = useNavigate();
+    const [success, setSuccess] = useState(null);
+
 
     const handleSignup = async (e) => {
-        e.preventDefault()
-        setError(null)
+        e.preventDefault();
+        setError(null);
+        setSuccess(null);
 
         try {
-            await api.post('/auth/register', {
+            const { data } = await api.post('/auth/register', {
                 email,
                 username,
                 password
-            })
+            });
 
-            // Redirect para o login
-            navigate('/login')
+            setSuccess(data.message || 'Registration successful!');
+
+            // depois de 3s, redireciona
+            setTimeout(() => navigate('/login'), 3000);
         } catch (err) {
             if (err.response?.data?.errors) {
-                // Mostra todas as mensagens de validação
-                const msgs = err.response.data.errors.map(e => e.msg).join(' ')
-                setError(msgs)
+                const msgs = err.response.data.errors.map(e => e.msg).join(' ');
+                setError(msgs);
+            } else if (err.response?.data?.error) {
+                // caso você retorne { error: "..." } no controller
+                setError(err.response.data.error);
             } else {
-                console.error('Erro no signup:', err)
-                setError('Erro ao registar. Tenta novamente.')
+                console.error('Erro no signup:', err);
+                setError('Erro ao registar. Tenta novamente.');
             }
         }
     }
@@ -81,6 +88,7 @@ export default function SignupPage() {
                         </label>
 
                         {error && <div className="errorMessage">{error}</div>}
+                        {success && <div className="successMessage">{success}</div>}
 
                         <button type="submit" className="loginButton">Sign Up</button>
                     </form>

@@ -15,7 +15,7 @@ export default function HomePage() {
     const ITEMS_PER_SECTION = 20;
 
     // controla quantos itens mostrar antes e depois de "see all"
-    const INITIAL_VISIBLE = 6;
+    const INITIAL_VISIBLE = 8;
     const MAX_VISIBLE     = 20;
 
     // ─── Estados das secções ─────────────────────────────────────────

@@ -9,7 +9,7 @@ export default function ExplorePage() {
 
     const { setTrack } = useContext(PlayerContext);
 
-    const INITIAL_VISIBLE = 6;
+    const INITIAL_VISIBLE = 8;
     const MAX_VISIBLE= 20;
 
     const [showAllDiscover, setShowAllDiscover]  = useState(false);

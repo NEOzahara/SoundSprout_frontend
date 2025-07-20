@@ -23,7 +23,7 @@ export default function LibraryPlaylistsPage() {
         return `${m}:${s.toString().padStart(2,'0')}`;
     };
 
-    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '/');
     const [playlists, setPlaylists] = useState([]);
     const [durations, setDurations] = useState({});
 
@@ -322,13 +322,15 @@ export default function LibraryPlaylistsPage() {
                                         style={{
                                             backgroundImage: pl.foto
                                                 ? `url(${
-                                                pl.foto.startsWith('http')
-                                                    ? pl.foto
-                                                    : `${baseUrl}${pl.foto}`
-                                            })`
+                                                    pl.foto.startsWith('http')
+                                                        ? pl.foto
+                                                        : `${baseUrl}${pl.foto}`
+                                                })`
                                                 : undefined
                                         }}
                                     />
+
+
                                 </NavLink>
                                 {/* título clicável */}
                                 <div className="trackInfoSmall">

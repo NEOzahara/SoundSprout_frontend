@@ -101,6 +101,9 @@ export default function HomePage() {
             const handleClickTitle = e => {
                 e.preventDefault();
 
+                api.post('/musicas/visualizar', { musica_id: m.id })
+                    .catch(err => console.error('Erro ao registar visualização:', err));
+
                 const audio = new Audio();  // carrega ficheiro para metadata
 
                 audio.addEventListener('loadedmetadata', () => {

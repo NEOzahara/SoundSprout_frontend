@@ -218,6 +218,10 @@ export default function ProfilePage() {
 
     const handleClickTitle = track => e => {
         e.preventDefault();
+
+        api.post('/musicas/visualizar', { musica_id: track.id })
+            .catch(err => console.error('Erro ao registar visualização:', err));
+
         const audio = new Audio();
         audio.addEventListener('loadedmetadata', () => {
             setTrack({
@@ -315,7 +319,7 @@ export default function ProfilePage() {
                         {track.username}
                     </span>
                 </div>
-                <span className="smallListens">{track.plays}</span>
+                <span className="smallListensProfile">{track.plays}</span>
             </NavLink>
         ));
     }, [topTracks, baseUrl]);

@@ -68,6 +68,9 @@ export default function PlaylistPage() {
         e.preventDefault();
         e.stopPropagation();
 
+        api.post('/musicas/visualizar', { musica_id: track.id })
+            .catch(err => console.error('Erro ao registar visualização:', err));
+
         const audio = new Audio();
         audio.preload = 'metadata';
         audio.addEventListener('loadedmetadata', () => {

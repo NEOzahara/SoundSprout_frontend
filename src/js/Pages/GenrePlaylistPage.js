@@ -62,6 +62,10 @@ export default function GenrePlaylistPage() {
 
     const handleClickTitle = track => e => {
         e.preventDefault();
+
+        api.post('/musicas/visualizar', { musica_id: track.id })
+            .catch(err => console.error('Erro ao registar visualização:', err));
+
         const audio = new Audio();
         audio.addEventListener('loadedmetadata', () => {
             setTrack({

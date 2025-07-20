@@ -32,6 +32,10 @@ export default function ExplorePage() {
 
     const handleClickTitle = m => e => {
         e.preventDefault();
+
+        api.post('/musicas/visualizar', { musica_id: m.id })
+            .catch(err => console.error('Erro ao registar visualização:', err));
+
         const audio = new Audio();
         audio.addEventListener('loadedmetadata', () => {
             setTrack({

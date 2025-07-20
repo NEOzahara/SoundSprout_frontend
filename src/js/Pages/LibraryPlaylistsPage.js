@@ -23,7 +23,7 @@ export default function LibraryPlaylistsPage() {
         return `${m}:${s.toString().padStart(2,'0')}`;
     };
 
-    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '/');
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
     const [playlists, setPlaylists] = useState([]);
     const [durations, setDurations] = useState({});
 
@@ -150,11 +150,7 @@ export default function LibraryPlaylistsPage() {
         try {
             // decide qual endpoint usar
             if (newPlCover) {
-                await api.post(
-                    '/playlists/with-cover',
-                    form,
-                    { headers: { 'Content-Type': 'multipart/form-data' } }
-                );
+                await api.post('/playlists/with-cover', form);
             } else {
                 const priv = newPlVisibility === 'public' ? 'publico' : 'privado';
                 await api.post('/playlists', {

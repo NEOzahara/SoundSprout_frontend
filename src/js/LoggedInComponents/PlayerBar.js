@@ -19,7 +19,8 @@ import api from '../services/api';
 
 export default function PlayerBar() {
 
-    const { track } = useContext(PlayerContext);
+    const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+    const { track, setTrack } = useContext(PlayerContext);
     const id = track.id;
     const [liked, setLiked] = useState(false);
     const formatTime = time => {
@@ -28,6 +29,9 @@ export default function PlayerBar() {
         return `${minutes}:${seconds}`;
     };
 
+    const [isShuffling, setIsShuffling] = useState(false);
+    const [isRepeating, setIsRepeating] = useState(false);
+    const [shuffledPlaylist, setShuffledPlaylist] = useState([]);
 
     const [playlist, setPlaylist] = useState([]);
     const [trackIndex, setTrackIndex] = useState(0);
@@ -46,8 +50,19 @@ export default function PlayerBar() {
     const [showVolume, setShowVolume] = useState(false);
     const [volume, setVolume] = useState(1); // 0–1
 
+    const [initialLoadDone, setInitialLoadDone] = useState(false);
+
     // ref para detetar clicks fora do popup
     const volumeRef = useRef(null);
+
+    const shuffleArray = (array) => {
+        const copy = [...array];
+        for (let i = copy.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [copy[i], copy[j]] = [copy[j], copy[i]];
+        }
+        return copy;
+    };
 
     // sempre que o popup estiver aberto, adiciona listener para clicks fora
     useEffect(() => {
@@ -61,20 +76,19 @@ export default function PlayerBar() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [showVolume]);
 
-    //Comentado temporariamente
-    // Carregar playlist do utilizador 'joao'
-    /* useEffect(() => {
-        api.get(`/musicas/utilizador/joao`)
+    useEffect(() => {
+        api.get(`/musicas/recommended`)
             .then(({ data }) => {
                 const list = Array.isArray(data) ? data : data ? [data] : [];
+                console.log(list)
                 setPlaylist(list);
+                setShuffledPlaylist(shuffleArray(list));
             })
             .catch(err => console.error('Erro ao carregar playlist:', err));
-    }, []);*/
+    }, []);
 
 
-    const currentTrack = playlist[trackIndex] || {};
-
+    const currentTrack = (isShuffling ? shuffledPlaylist : playlist)[trackIndex] || {};
 
     // Sempre que a faixa muda, verifica overflow
     // detecta overflow logo após o layout
@@ -121,24 +135,53 @@ export default function PlayerBar() {
     }
 
     useEffect(() => {
+        if (audioRef.current) audioRef.current.volume = volume;
+    }, [volume]);
+
+    useEffect(() => {
+        const list = isShuffling ? shuffledPlaylist : playlist;
+        const selectedTrack = list[trackIndex];
+        if (!selectedTrack) return;
+        setTrack({
+            id: selectedTrack.id,
+            title: selectedTrack.titulo,
+            artist: selectedTrack.username,
+            coverUrl: selectedTrack.foto ? `${baseUrl}/${selectedTrack.foto.replace(/^\/+/, '')}` : null        });
+    }, [trackIndex, isShuffling, playlist]);
+
+    useEffect(() => {
         if (!track.id) return;
         const audio = audioRef.current;
         if (audio) {
             const url = `${process.env.REACT_APP_API_BASE_URL}/musicas/stream/${track.id}`;
             audio.src = url;
             audio.load();
-            audio.play().then(() => {
-                setIsPlaying(true);
-            }).catch(err => console.error("Erro ao reproduzir áudio:", err));
+
+            // Se não for o primeiro load, então toca a música
+            if (initialLoadDone) {
+                audio.play().then(() => {
+                    setIsPlaying(true);
+                }).catch(err => console.error("Erro ao reproduzir áudio:", err));
+            } else {
+                setInitialLoadDone(true); // da próxima já toca
+            }
         }
     }, [track.id]);
+
 
     useEffect(() => {
         const audio = audioRef.current;
         if (!audio) return;
         const onLoaded = () => setDuration(audio.duration);
         const onTimeUpdate = () => setCurrentTime(audio.currentTime);
-        const onEnded = () => console.log('Música terminou (implementar handleNext)');
+        const onEnded = () => {
+            if (isRepeating) {
+                audio.currentTime = 0;
+                audio.play();
+            } else {
+                handleNext();
+            }
+        };
         audio.addEventListener('loadedmetadata', onLoaded);
         audio.addEventListener('timeupdate', onTimeUpdate);
         audio.addEventListener('ended', onEnded);
@@ -147,7 +190,7 @@ export default function PlayerBar() {
             audio.removeEventListener('timeupdate', onTimeUpdate);
             audio.removeEventListener('ended', onEnded);
         };
-    }, [track.id]);
+    }, [track.id, isRepeating]);
 
 
     const togglePlay = () => {
@@ -158,14 +201,16 @@ export default function PlayerBar() {
     };
 
     const handlePrev = () => {
-        if (!playlist.length) return;
-        setTrackIndex(prev => (prev - 1 + playlist.length) % playlist.length);
+        const list = isShuffling ? shuffledPlaylist : playlist;
+        if (!list.length) return;
+        setTrackIndex(prev => (prev - 1 + list.length) % list.length);
         setIsPlaying(true);
     };
 
     const handleNext = () => {
-        if (!playlist.length) return;
-        setTrackIndex(prev => (prev + 1) % playlist.length);
+        const list = isShuffling ? shuffledPlaylist : playlist;
+        if (!list.length) return;
+        setTrackIndex(prev => (prev + 1) % list.length);
         setIsPlaying(true);
     };
 
@@ -284,12 +329,14 @@ export default function PlayerBar() {
                     }
                 </button>
                 <FiSkipForward className="controlIcon" onClick={handleNext}/>
-                <FiShuffle className="controlIcon" onClick={() => console.log('Shuffle clicado!')}/>
-                <FiRepeat className="controlIcon" onClick={() => {
-                    const audio = audioRef.current;
-                    if (audio) audio.loop = !audio.loop;
-                    console.log('Loop toggled');
-                }}/>
+                <FiShuffle
+                    className={`controlIcon ${isShuffling ? 'active' : ''}`}
+                    onClick={() => setIsShuffling(prev => !prev)}
+                />
+                <FiRepeat
+                    className={`controlIcon ${isRepeating ? 'active' : ''}`}
+                    onClick={() => setIsRepeating(prev => !prev)}
+                />
 
                 <span className="currentTime">{formatTime(currentTime)}</span>
                 <div className="progressContainer" onClick={e => {
@@ -298,7 +345,7 @@ export default function PlayerBar() {
                     if (audioRef.current) audioRef.current.currentTime = pct * duration;
                 }}>
                     <div className="progressTrack"/>
-                    <div className="progressFill" style={{width: `${(currentTime / duration) * 100}%`}}/>
+                    <div className="progressFill"   style={{ width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }}/>
                 </div>
                 <span className="totalTime">{formatTime(duration)}</span>
                 <div className="volumeContainer" ref={volumeRef}>

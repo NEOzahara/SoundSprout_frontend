@@ -54,6 +54,15 @@ export default function PlayerBar() {
 
     const [initialFetchDone, setInitialFetchDone] = useState(false);
 
+    const [createPlaylistOpen, setCreatePlaylistOpen] = useState(false);
+    const [newPlName, setNewPlName] = useState('');
+    const [newPlCover, setNewPlCover] = useState(null);
+    const [newPlVisibility, setNewPlVisibility] = useState(null);
+    const [newPlError, setNewPlError] = useState('');
+    const [newPlSuccess, setNewPlSuccess] = useState(false);
+    const plCoverRef = useRef(null);
+    const [plDragOver, setPlDragOver] = useState(false);
+
     // ref para detetar clicks fora do popup
     const volumeRef = useRef(null);
 
@@ -404,6 +413,49 @@ export default function PlayerBar() {
             .catch(console.error);
     }
 
+    const closeCreateModal = () => {
+        setCreatePlaylistOpen(false);
+        setNewPlName('');
+        setNewPlCover(null);
+        setNewPlVisibility(null);
+        setNewPlError('');
+        setNewPlSuccess(false);
+        setPlDragOver(false);
+    };
+
+    const handleConfirmCreate = async () => {
+        setNewPlError(''); setNewPlSuccess(false);
+        const stored = localStorage.getItem('user');
+        if (!stored) { setNewPlError('Usuário não autenticado'); return; }
+        const { username, premium } = JSON.parse(stored);
+        if (!premium) { setNewPlError('É necessário ser Premium para criar playlists'); return; }
+
+        const form = new FormData();
+        form.append('nome', newPlName);
+        form.append('privacidade', newPlVisibility === 'public' ? 'publico' : 'privado');
+        form.append('onlyPremium', 'false');
+        form.append('dataCriacao', new Date().toISOString());
+        if (newPlCover) form.append('foto', newPlCover);
+
+        try {
+            if (newPlCover) await api.post('/playlists/with-cover', form);
+            else await api.post('/playlists', {
+                nome: newPlName,
+                privacidade: newPlVisibility === 'public' ? 'publico' : 'privado',
+                onlyPremium: false, foto: null,
+                dataCriacao: new Date().toISOString()
+            });
+            setNewPlSuccess(true);
+            // refresca listas, se quiseres
+            setTimeout(closeCreateModal, 2000);
+        } catch (err) {
+            if (err.response?.status === 400) setNewPlError('Já existe uma playlist com esse nome');
+            else setNewPlError('Erro ao criar playlist');
+        }
+    };
+
+
+
     const location = useLocation();
     const commentsActive =
         location.pathname === `/player/${id}` &&
@@ -535,8 +587,12 @@ export default function PlayerBar() {
                             value={filterText}
                             onChange={e => setFilterText(e.target.value)}
                         />
-                        <div className="newPlaylistRow" onClick={() => console.log('Criar nova playlist')}>
-                            <FiPlus className="subIcon" /><span className="subText">New Playlist</span>
+                        <div className="newPlaylistRow" onClick={() =>{
+                            setShowAddToPlaylist(false);
+                            setCreatePlaylistOpen(true);
+                        }}>
+                            <FiPlus className="subIcon" />
+                            <span className="subText">New Playlist</span>
                         </div>
                         <hr className="modalDividerSmall"/>
 
@@ -553,7 +609,11 @@ export default function PlayerBar() {
                                             >
                                                 <div
                                                     className="playlistThumbSquare"
-                                                    style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                                    style={{
+                                                        backgroundImage: pl.foto
+                                                            ? `url(${baseUrl}/${pl.foto.replace(/^\/+/, '')})`
+                                                            : `url('/placeholder.png')`
+                                                    }}
                                                 />
                                                 <div className="playlistText">
                                                     <div className="playlistTitle">{pl.nome}</div>
@@ -579,7 +639,11 @@ export default function PlayerBar() {
                                         >
                                             <div
                                                 className="playlistThumbSquare"
-                                                style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                                style={{
+                                                      backgroundImage: pl.foto
+                                                        ? `url(${baseUrl}/${pl.foto.replace(/^\/+/, '')})`
+                                                        : `url('/placeholder.png')`
+                                                }}
                                             />
                                             <div className="playlistText">
                                                 <div className="playlistTitle">{pl.nome}</div>
@@ -596,6 +660,78 @@ export default function PlayerBar() {
                             <button onClick={() => setShowAddToPlaylist(false)}>Cancel</button>
                             <button onClick={handleConfirmAdd} disabled={!hasChanged}>Confirm</button>
                         </div>
+                    </div>
+                </div>,
+                document.body
+            )}
+
+            {createPlaylistOpen && createPortal(
+                <div className="modalOverlay" onClick={closeCreateModal}>
+                    <div className="modalContent" onClick={e => e.stopPropagation()}>
+                        <h2>Create New Playlist</h2>
+                        {newPlError   && <div className="modalMessage error">{newPlError}</div>}
+                        {newPlSuccess && <div className="modalMessage success">Playlist criada com sucesso</div>}
+                        <form onSubmit={e => { e.preventDefault(); handleConfirmCreate(); }}>
+                            <label>
+                                Name
+                                <input
+                                    type="text"
+                                    value={newPlName}
+                                    onChange={e => setNewPlName(e.target.value)}
+                                    required
+                                />
+                            </label>
+                            <label>Cover Image (optional)</label>
+                            <div
+                                className={`fileDropArea${plDragOver ? ' drag-over' : ''}`}
+                                onDragOver={e => { e.preventDefault(); setPlDragOver(true); }}
+                                onDragLeave={() => setPlDragOver(false)}
+                                onDrop={e => {
+                                    e.preventDefault();
+                                    setPlDragOver(false);
+                                    const f = e.dataTransfer.files[0];
+                                    if (f) setNewPlCover(f);
+                                }}
+                                onClick={() => plCoverRef.current.click()}
+                            >
+                                <span className="fileName">
+                                    {newPlCover ? newPlCover.name : 'No file chosen'}
+                                </span>
+                                <button
+                                    type="button"
+                                    className="chooseFileButton"
+                                    onClick={() => plCoverRef.current.click()}
+                                >
+                                    Choose File
+                                </button>
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    ref={plCoverRef}
+                                    style={{ display: 'none' }}
+                                    onChange={e => setNewPlCover(e.target.files[0]||null)}
+                                />
+
+                            </div>
+                            <label>
+                                Visibility
+                                <select
+                                    value={newPlVisibility||''}
+                                    onChange={e => setNewPlVisibility(e.target.value||null)}
+                                    required
+                                >
+                                    <option value="" disabled>Choose…</option>
+                                    <option value="public">Public</option>
+                                    <option value="private">Private</option>
+                                </select>
+                            </label>
+                            <div className="modalButtons">
+                                <button type="button" onClick={closeCreateModal}>Cancel</button>
+                                <button type="submit" disabled={!newPlName||!newPlVisibility}>
+                                    Confirm
+                                </button>
+                            </div>
+                        </form>
                     </div>
                 </div>,
                 document.body

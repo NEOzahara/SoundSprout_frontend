@@ -433,7 +433,9 @@ export default function LibraryPlaylistsPage() {
                                     type="button"
                                     className="chooseFileButton"
                                     onClick={() => plCoverRef.current.click()}
-                                >Choose File</button>
+                                >
+                                    Choose File
+                                </button>
                                 <input
                                     type="file"
                                     accept="image/*"

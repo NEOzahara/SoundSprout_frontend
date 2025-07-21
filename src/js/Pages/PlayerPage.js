@@ -31,6 +31,15 @@ export default function PlayerPage () {
     const [liked, setLiked] = useState(false);
     const [similarLiked, setSimilarLiked] = useState({});
 
+    const [createPlaylistOpen, setCreatePlaylistOpen] = useState(false);
+    const [newPlName, setNewPlName] = useState('');
+    const [newPlCover, setNewPlCover] = useState(null);
+    const [newPlVisibility, setNewPlVisibility] = useState(null);
+    const [newPlError, setNewPlError] = useState('');
+    const [newPlSuccess, setNewPlSuccess] = useState(false);
+    const plCoverRef = useRef(null);
+    const [plDragOver, setPlDragOver] = useState(false);
+
     async function toggleLike() {
         try {
             if (liked) {
@@ -307,6 +316,40 @@ export default function PlayerPage () {
         });
     };
 
+    const handleConfirmCreate = async () => {
+        setNewPlError('');
+        setNewPlSuccess(false);
+        const stored = localStorage.getItem('user');
+        if (!stored) { setNewPlError('Usuário não autenticado'); return; }
+        const { username, premium } = JSON.parse(stored);
+        if (!premium) { setNewPlError('É necessário ser Premium para criar playlists'); return; }
+
+        const form = new FormData();
+        form.append('nome', newPlName);
+        form.append('privacidade', newPlVisibility === 'public' ? 'publico' : 'privado');
+        form.append('onlyPremium', 'false');
+        form.append('dataCriacao', new Date().toISOString());
+        if (newPlCover) form.append('foto', newPlCover);
+
+        try {
+            if (newPlCover) {
+                await api.post('/playlists/with-cover', form);
+            } else {
+                await api.post('/playlists', {
+                    nome: newPlName,
+                    privacidade: newPlVisibility === 'public' ? 'publico' : 'privado',
+                    onlyPremium: false,
+                    foto: null,
+                    dataCriacao: new Date().toISOString()
+                });
+            }
+            setNewPlSuccess(true);
+            setTimeout(() => setCreatePlaylistOpen(false), 2000);
+        } catch (err) {
+            if (err.response?.status === 400) setNewPlError('Já existe uma playlist com esse nome');
+            else setNewPlError('Erro ao criar playlist. Tente novamente.');
+        }
+    };
 
 
     // fecha popup ao clicar fora
@@ -479,7 +522,13 @@ export default function PlayerPage () {
                     value={filterText}
                     onChange={e => setFilterText(e.target.value)}
                 />
-                <div className="newPlaylistRow" onClick={() => console.log('Criar nova playlist')}>
+                <div
+                    className="newPlaylistRow"
+                    onClick={() => {
+                        setShowAddToPlaylist(false);
+                        setCreatePlaylistOpen(true);
+                   }}
+                >
                     <FiPlus className="subIcon" /><span className="subText">New Playlist</span>
                 </div>
                 <hr className="modalDividerSmall"/>
@@ -497,7 +546,11 @@ export default function PlayerPage () {
                                     >
                                         <div
                                             className="playlistThumbSquare"
-                                            style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                            style={{
+                                                backgroundImage: pl.foto
+                                                    ? `url(${baseUrl}/${pl.foto.replace(/^\/+/, '')})`
+                                                    : `url('/placeholder.png')`
+                                            }}
                                         />
                                         <div className="playlistText">
                                             <div className="playlistTitle">{pl.nome}</div>
@@ -524,7 +577,11 @@ export default function PlayerPage () {
                                 >
                                     <div
                                         className="playlistThumbSquare"
-                                        style={{ backgroundImage: `url(${pl.imageUrl||'/placeholder.png'})` }}
+                                        style={{
+                                            backgroundImage: pl.foto
+                                                ? `url(${baseUrl}/${pl.foto.replace(/^\/+/, '')})`
+                                                : `url('/placeholder.png')`
+                                        }}
                                     />
                                     <div className="playlistText">
                                         <div className="playlistTitle">{pl.nome}</div>
@@ -603,6 +660,77 @@ export default function PlayerPage () {
                         Confirm
                     </button>
                 </div>
+            </div>
+        </div>
+    );
+
+    const CreatePlaylistPopup = (
+        <div className="modalOverlay" onClick={() => setCreatePlaylistOpen(false)} role="dialog">
+            <div className="modalContent" onClick={e => e.stopPropagation()}>
+                <h2>Create New Playlist</h2>
+
+                {newPlError   && <div className="modalMessage error">{newPlError}</div>}
+                {newPlSuccess && <div className="modalMessage success">Playlist criada com sucesso</div>}
+
+                <form onSubmit={e => { e.preventDefault(); handleConfirmCreate(); }}>
+                    <label>
+                        Name
+                        <input
+                            type="text"
+                            value={newPlName}
+                            onChange={e => setNewPlName(e.target.value)}
+                            required
+                        />
+                    </label>
+
+                    <label>Cover Image (optional)</label>
+                    <div
+                        className={`fileDropArea${plDragOver ? ' drag-over' : ''}`}
+                        onDragOver={e => { e.preventDefault(); setPlDragOver(true); }}
+                        onDragLeave={() => setPlDragOver(false)}
+                        onDrop={e => {
+                            e.preventDefault();
+                            setPlDragOver(false);
+                            const f = e.dataTransfer.files[0];
+                            if (f) setNewPlCover(f);
+                        }}
+                        onClick={() => plCoverRef.current.click()}
+                    >
+          <span className="fileName">
+            {newPlCover ? newPlCover.name : 'No file chosen'}
+          </span>
+                        <button type="button" className="chooseFileButton" onClick={() => plCoverRef.current.click()}>
+                            Choose File
+                        </button>
+                        <input
+                            type="file"
+                            accept="image/*"
+                            ref={plCoverRef}
+                            style={{ display:'none' }}
+                            onChange={e => setNewPlCover(e.target.files[0]||null)}
+                        />
+                    </div>
+
+                    <label>
+                        Visibility
+                        <select
+                            value={newPlVisibility||''}
+                            onChange={e => setNewPlVisibility(e.target.value||null)}
+                            required
+                        >
+                            <option value="" disabled>Choose…</option>
+                            <option value="public">Public</option>
+                            <option value="private">Private</option>
+                        </select>
+                    </label>
+
+                    <div className="modalButtons">
+                        <button type="button" onClick={() => setCreatePlaylistOpen(false)}>Cancel</button>
+                        <button type="submit" disabled={!newPlName||!newPlVisibility}>
+                            Confirm
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     );
@@ -908,6 +1036,8 @@ export default function PlayerPage () {
 
             {/* Donate via portal (já estava assim) */}
             {showDonatePopup && createPortal(DonatePopup, document.body)}
+
+            {createPlaylistOpen && createPortal(CreatePlaylistPopup, document.body)}
         </div>
     );
 }

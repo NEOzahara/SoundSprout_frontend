@@ -33,6 +33,14 @@ export default function SettingsPage() {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
+    const popupTimeoutRef = useRef(null);
+
+    useEffect(() => {
+        return () => {
+            // limpa timeout ao desmontar
+            clearTimeout(popupTimeoutRef.current);
+        };
+    }, []);
 
     // ─── Carregar settings do backend ──────────────────────────────
     useEffect(() => {
@@ -137,7 +145,11 @@ export default function SettingsPage() {
             setSuccessMsg('Password alterada com sucesso!');
             setNewPassword('');
             setConfirmPassword('');
-            setShowPasswordPopup(false);
+            popupTimeoutRef.current = setTimeout(() => {
+                setShowPasswordPopup(false);
+                setSuccessMsg('');
+                setErrorMsg('');
+            }, 1500);
         } catch (err) {
             const msg = err.response?.data?.error || 'Erro ao alterar password';
             setErrorMsg(msg);
@@ -159,6 +171,7 @@ export default function SettingsPage() {
         <div
             className="donatePopupOverlay"
             onClick={() => {
+                clearTimeout(popupTimeoutRef.current);
                 setShowPasswordPopup(false);
                 setErrorMsg('');
                 setSuccessMsg('');
@@ -182,6 +195,7 @@ export default function SettingsPage() {
                         className="donateInput"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
+                        disabled={!!successMsg}
                     />
 
                     {newPassword && !hasNumber && (
@@ -198,6 +212,7 @@ export default function SettingsPage() {
                         className="donateInput"
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
+                        disabled={!!successMsg}
                     />
                 </div>
 
@@ -206,12 +221,14 @@ export default function SettingsPage() {
                         className="donateCancelBtn"
                         type="button"
                         onClick={() => {
+                            clearTimeout(popupTimeoutRef.current);
                             setShowPasswordPopup(false);
                             setNewPassword('');
                             setConfirmPassword('');
                             setErrorMsg('');
                             setSuccessMsg('');
                         }}
+                        disabled={!!successMsg}
                     >
                         Cancel
                     </button>
@@ -220,6 +237,7 @@ export default function SettingsPage() {
                         type="button"
                         onClick={handleConfirmPassword}
                         disabled={
+                            !!successMsg ||
                             !newPassword ||
                             newPassword !== confirmPassword ||
                             !hasNumber

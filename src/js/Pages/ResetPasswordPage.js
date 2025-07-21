@@ -1,6 +1,7 @@
 // src/js/pages/ResetPasswordPage.js
 import React, { useState } from 'react';
 import { ReactComponent as Logo } from '../../images/logo.svg';
+import LogoPng from '../../images/Logo_background_removed.png'
 import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../services/api';
 import '../../css/Pages/Login.css';
@@ -39,7 +40,8 @@ export default function ResetPasswordPage() {
         <div className="background loginBackground">
             <div className="loginCentral">
                 <div className="loginPanel">
-                    <Logo className="loginLogo" />
+                    {/*<Logo className="loginLogo" />*/}
+                    <img src={LogoPng} alt="Site Logo" className="loginLogo" />
                     <h1 className="loginTitle">Nova Password</h1>
 
                     <p className="resetPasswordText">

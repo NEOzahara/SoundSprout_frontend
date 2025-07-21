@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import { ReactComponent as Logo } from '../../images/logo.svg';
 import LogoPng from '../../images/Logo_background_removed.png'
 import { useNavigate } from 'react-router-dom';
@@ -9,7 +9,19 @@ export default function LoginPage() {
     const [identifier, setIdentifier] = useState(''); // email ou username
     const [password, setPassword] = useState('');
     const [error, setError] = useState(null);
+
+    const [success, setSuccess] = useState(false);
+
+    const timeoutRef = useRef(null);
+
     const navigate = useNavigate();
+
+    useEffect(() => {
+        return () => {
+            // limpa timeout se o componente desmontar antes de redirecionar
+            clearTimeout(timeoutRef.current);
+        };
+    }, []);
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -22,8 +34,15 @@ export default function LoginPage() {
             });
             localStorage.setItem('accessToken', data.accessToken);
             localStorage.setItem('user', JSON.stringify(data.user));
+
+            setSuccess(true);
+
+
+
             // redireciona para a página principal ou dashboard
-            navigate('/');
+            timeoutRef.current = setTimeout(() => {
+                navigate('/');
+            }, 1500);
         } catch (err) {
             console.error('Erro no login:', err);
             setError('Credenciais inválidas.');
@@ -48,6 +67,7 @@ export default function LoginPage() {
                                 value={identifier}
                                 onChange={e => setIdentifier(e.target.value)}
                                 required
+                                disabled={success}
                             />
                         </label>
 
@@ -60,12 +80,21 @@ export default function LoginPage() {
                                 value={password}
                                 onChange={e => setPassword(e.target.value)}
                                 required
+                                disabled={success}
                             />
                         </label>
 
                         {error && <div className="errorMessage">{error}</div>}
 
-                        <button type="submit" className="loginButton">Log In</button>
+                        {!success ? (
+                            <button type="submit" className="loginButton">
+                                Log In
+                            </button>
+                        ) : (
+                            <div className="successMessage">
+                                Login efetuado com sucesso!
+                            </div>
+                        )}
                     </form>
 
                     {/*

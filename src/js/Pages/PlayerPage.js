@@ -351,6 +351,18 @@ export default function PlayerPage () {
             .catch(console.error);
         }, [showAddToPlaylist, id]);
 
+    const [openMenuIdx, setOpenMenuIdx] = useState(null);
+    useEffect(() => {
+        if (openMenuIdx === null) return;
+        function handleClickOutside(e) {
+            if (!e.target.closest('.moreMenuWrapper')) {
+                setOpenMenuIdx(null);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [openMenuIdx]);
+
     // “Saved” e “Remaining”, memorizados
     const saved  = useMemo(() => savedPlaylists, [savedPlaylists]);
     const remaining = useMemo(() => remainingPlaylists, [remainingPlaylists]);
@@ -747,7 +759,44 @@ export default function PlayerPage () {
                                         </NavLink>
                                         <span className="smallDuration">{item.duration}</span>
                                         <span className="smallListens">{item.listens}</span>
-                                        <FiMoreHorizontal className="actionIcon" onClick={()=>{}}/>
+                                        <div
+                                            className={`moreMenuWrapper ${openMenuIdx === i ? 'open' : ''}`}
+                                            onClick={e => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setOpenMenuIdx(openMenuIdx === i ? null : i);
+                                            }}
+                                        >
+                                            <FiMoreHorizontal className="actionIcon" />
+                                            {openMenuIdx === i && (
+                                                <ul
+                                                    className={`playlistOptions ${
+                                                        i >= Math.ceil(similarTracks.length / 2)
+                                                            ? 'above'
+                                                            : 'below'
+                                                    }`}
+                                                >
+                                                    <li
+                                                        onClick={e => {
+                                                            e.preventDefault(); e.stopPropagation();
+                                                            console.log('Follow artist', item.artist);
+                                                            setOpenMenuIdx(null);
+                                                        }}
+                                                    >
+                                                        Follow
+                                                    </li>
+                                                    <li
+                                                        onClick={e => {
+                                                            e.preventDefault(); e.stopPropagation();
+                                                            console.log('Queue song', item);
+                                                            setOpenMenuIdx(null);
+                                                        }}
+                                                    >
+                                                        Queue
+                                                    </li>
+                                                </ul>
+                                            )}
+                                        </div>
                                     </div>
                                 ))}
                             </div>

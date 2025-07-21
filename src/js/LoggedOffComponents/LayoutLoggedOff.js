@@ -1,6 +1,7 @@
 import React from 'react'
 import { Outlet, useLocation } from 'react-router-dom';
 import { ReactComponent as Logo } from '../../images/logo.svg'
+import LogoPng from '../../images/Logo_background_removed.png'
 import TopIconsLoggedOff from '../LoggedOffComponents/TopIconsLoggedOff'
 import MenuLoggedOff from '../LoggedOffComponents/MenuLoggedOff'
 import RightScrollLoggedOff from '../LoggedOffComponents/RightScrollLoggedOff'
@@ -26,7 +27,8 @@ export default function LayoutLoggedOff() {
 
     return (
         <div className="background">
-            <Logo className="logo" />
+            <img src={LogoPng} alt="Site Logo" className="logo" />
+            {/*<Logo className="logo" />*/}
 
             {/* icones topo */}
             <TopIconsLoggedOff />

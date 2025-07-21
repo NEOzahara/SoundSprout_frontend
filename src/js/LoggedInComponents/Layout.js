@@ -1,6 +1,7 @@
 import React from 'react'
 import { Outlet, useLocation } from 'react-router-dom';
-import { ReactComponent as Logo } from '../../images/logo.svg'
+//import { ReactComponent as Logo } from '../../images/logo.svg'
+import LogoPng from '../../images/Logo_background_removed.png'
 import TopIcons from './TopIcons'
 import Menu from './Menu'
 import RightScroll from './RightScroll'
@@ -26,7 +27,8 @@ export default function Layout() {
 
     return (
         <div className="background">
-            <Logo className="logo" />
+            {/*<Logo className="logo" />*/}
+            <img src={LogoPng} alt="Site Logo" className="logo" />
 
             {/* icones topo */}
             <TopIcons />

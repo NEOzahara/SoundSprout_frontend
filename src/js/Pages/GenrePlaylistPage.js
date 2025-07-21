@@ -81,6 +81,42 @@ export default function GenrePlaylistPage() {
         audio.load();
     };
 
+    const [openMenuIdx, setOpenMenuIdx] = useState(null);
+    // estado para likes
+    const [likedTracks, setLikedTracks] = useState({});
+
+    // fecha dropdown ao clicar fora
+    useEffect(() => {
+        if (openMenuIdx === null) return;
+        function handleClickOutside(e) {
+            if (!e.target.closest('.moreMenuWrapper')) {
+                setOpenMenuIdx(null);
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [openMenuIdx]);
+
+    // carrega estado de like de cada faixa
+    useEffect(() => {
+        tracks.forEach(t => {
+            api.get(`/musicas/${t.id}/is-liked`)
+                .then(({ data }) => setLikedTracks(prev => ({ ...prev, [t.id]: data.liked })))
+                .catch(() => {});
+        });
+    }, [tracks]);
+
+    // toggle like igual ao LibraryLikesPage
+    async function toggleTrackLike(trackId) {
+        const currently = likedTracks[trackId];
+        try {
+            if (currently) await api.delete(`/musicas/like/${trackId}`);
+            else           await api.post(`/musicas/like`, { id: trackId });
+            setLikedTracks(prev => ({ ...prev, [trackId]: !currently }));
+            window.dispatchEvent(new Event('likeChanged'));
+        } catch {}
+    }
+
     // 3) ordenação + pesquisa (igual PlaylistPage)
     const displayedTracks = useMemo(() => {
         let arr = recentAsc ? [...tracks] : [...tracks].reverse();
@@ -240,7 +276,7 @@ export default function GenrePlaylistPage() {
                                     backgroundImage: track.foto
                                         ? `url(${baseUrl}/${track.foto})`
                                         : undefined
-                                }}
+                            }}
                             />
                             <div className="trackInfoSmall">
                                 <a
@@ -257,7 +293,71 @@ export default function GenrePlaylistPage() {
                                     {track.username}
                                 </NavLink>
                             </div>
-                            <span className="smallDuration">{durations[track.id] || '--:--'}</span>
+                            {/* ⬇ FiHeart ⬇ */}
+                            <FiHeart
+                                className={`actionIcon${likedTracks[track.id] ? ' liked' : ''}`}
+                                onClick={e => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    toggleTrackLike(track.id);
+                                }}
+                            />
+
+                            {/* ⬇ FiMessageCircle ⬇ */}
+                            <NavLink
+                                to={`/player/${track.id}?comments=true`}
+                                className="actionIcon"
+                            >
+                                <FiMessageCircle />
+                            </NavLink>
+
+                            {/* ⬇ duração & listens ⬇ */}
+                            <span className="smallDuration">
+                                {durations[track.id] || '--:--'}
+                            </span>
+                            <span className="smallListens">
+                                {track.visualizacoes ?? '–'}
+                            </span>
+
+                            {/* ⬇ dropdown FiMoreHorizontal ⬇ */}
+                            <div
+                                className={`moreMenuWrapper ${openMenuIdx === idx ? 'open' : ''}`}
+                                onClick={e => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setOpenMenuIdx(openMenuIdx === idx ? null : idx);
+                                }}
+                            >
+                                <FiMoreHorizontal className="actionIcon" />
+                                {openMenuIdx === idx && (
+                                    <ul
+                                        className={`playlistOptions ${
+                                            idx >= Math.ceil(displayedTracks.length / 2) 
+                                                ? 'above'
+                                                : 'below'
+                                        }`}
+                                    >
+                                        <li
+                                            onClick={e => {
+                                                e.preventDefault(); e.stopPropagation();
+                                                console.log('Follow artist', track.username);
+                                                setOpenMenuIdx(null);
+                                            }}
+                                        >
+                                            Follow
+                                        </li>
+                                        <li
+                                            onClick={e => {
+                                                e.preventDefault(); e.stopPropagation();
+                                                console.log('Queue song', track);
+                                                setOpenMenuIdx(null);
+                                            }}
+                                        >
+                                            Queue
+                                        </li>
+                                    </ul>
+                                )}
+                            </div>
                         </NavLink>
                     ))}
                 </div>

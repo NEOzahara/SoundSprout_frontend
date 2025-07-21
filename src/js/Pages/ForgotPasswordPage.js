@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import LogoPng from '../../images/Logo_background_removed.png'
 import { ReactComponent as Logo } from '../../images/logo.svg';
 import api from '../services/api';
 import '../../css/Pages/Login.css';
@@ -26,7 +27,8 @@ export default function ForgotPasswordPage() {
         <div className="background loginBackground">
             <div className="loginCentral">
                 <div className="loginPanel">
-                    <Logo className="loginLogo" />
+                    <img src={LogoPng} alt="Site Logo" className="loginLogo" />
+                    {/*<Logo className="loginLogo" />*/}
                     <h1 className="loginTitle">Redefinir Password</h1>
 
                     <p className="resetPasswordText">

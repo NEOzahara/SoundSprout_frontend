@@ -1,4 +1,5 @@
 import logo from '../images/logo.svg';
+import LogoPng from '../images/Logo_background_removed.png'
 import '../App.css';
 import React from 'react';
 

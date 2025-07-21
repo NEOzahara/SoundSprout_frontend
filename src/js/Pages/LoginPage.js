@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ReactComponent as Logo } from '../../images/logo.svg';
+import LogoPng from '../../images/Logo_background_removed.png'
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import '../../css/Pages/Login.css';
@@ -33,7 +34,8 @@ export default function LoginPage() {
         <div className="background loginBackground">
             <div className="loginCentral">
                 <div className="loginPanel">
-                    <Logo className="loginLogo" />
+                    <img src={LogoPng} alt="Site Logo" className="loginLogo" />
+                    {/*<Logo className="loginLogo" />*/}
                     <h1 className="loginTitle">Login to SoundSprout</h1>
 
                     <form onSubmit={handleLogin} className="loginForm">

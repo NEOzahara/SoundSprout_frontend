@@ -98,9 +98,8 @@ export default function Menu() {
             });
             console.log('Música publicada:', data);
             setSuccess(true);
-            closeAll();
-            // avisa LibraryMusicsPage e refaz submenu
             window.dispatchEvent(new Event('musicsUpdated'));
+            setTimeout(closeAll, 2000);
         } catch (err) {
             console.error('Erro ao publicar música:', err.response?.data || err.message);
             setError(err.response?.data?.error || 'Erro ao publicar música');
@@ -485,7 +484,13 @@ export default function Menu() {
                                     e.preventDefault();
                                     setAudioDragOver(false);
                                     const f = e.dataTransfer.files[0];
-                                    if (f) setNewAudioFile(f);
+                                    if (!f) return;
+                                    if (!f.name.toLowerCase().endsWith('.mp3')) {
+                                        setError('Só .mp3 são permitidos como ficheiro de áudio.');
+                                        return;
+                                    }
+                                    setError(null);
+                                    setNewAudioFile(f);
                                 }}
                                 onClick={() => audioRef.current.click()}
                             >
@@ -500,10 +505,19 @@ export default function Menu() {
                                 <input
                                     type="file"
                                     name="audio"
-                                    accept="audio/*"
+                                    accept=".mp3,audio/mp3"
                                     ref={audioRef}
                                     style={{display:'none'}}
-                                    onChange={e => setNewAudioFile(e.target.files[0]||null)}
+                                    onChange={e => {
+                                        const f = e.target.files[0];
+                                        if (!f) return setNewAudioFile(null);
+                                        if (!f.name.toLowerCase().endsWith('.mp3')) {
+                                            setError('Só .mp3 são permitidos como ficheiro de áudio.');
+                                            return;
+                                        }
+                                        setError(null);
+                                        setNewAudioFile(f);
+                                    }}
                                     required
                                 />
                             </div>

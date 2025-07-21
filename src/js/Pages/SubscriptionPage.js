@@ -7,7 +7,10 @@ import api from '../services/api';
 
 export default function SubscriptionPage() {
 
-    const [planName, setPlanName] = useState('Premium');
+    const stored = JSON.parse(localStorage.getItem('user') || 'null');
+    const [isPremium, setIsPremium] = useState(!!stored?.premium);
+    const [planName, setPlanName] = useState(isPremium ? 'Premium' : 'Free');
+
     const [showHistory, setShowHistory] = useState(false);
     const [donationsGiven, setDonationsGiven] = useState([]);
     const [donationsReceived, setDonationsReceived] = useState([]);
@@ -25,6 +28,21 @@ export default function SubscriptionPage() {
         };
         fetchDonations();
     }, []);
+
+    const togglePlan = async newPremium => {
+        try {
+            const { data } = await api.put('/utilizadores/premium', { premium: newPremium });
+            // atualiza estado e localStorage
+            setIsPremium(data.user.premium);
+            setPlanName(data.user.premium ? 'Premium' : 'Free');
+            localStorage.setItem('user', JSON.stringify({
+                ...stored,
+                premium: data.user.premium
+            }));
+        } catch (err) {
+            console.error('Falha a atualizar plano:', err);
+        }
+    };
 
     // 1) monta o popup como constante
     const HistoryPopup = (
@@ -97,31 +115,26 @@ export default function SubscriptionPage() {
 
                 <div className="settingsBox">
                     <div className="settingsHeader">
-                            <span className="settingsTitle">
-                                Subscription
-                            </span>
+                        <span className="settingsTitle">Subscription</span>
                     </div>
 
-                    <div className="settingsRow">
-                            <span className="settingsText">
-                                Manage your subscription
-                            </span>
-                        <FiChevronRight
-                            className="arrowIcon"
-                            strokeWidth={3}
-                            onClick={() => console.log('Go to Store!')}
-                        />
+                    <div
+                        className="settingsRow"
+                        onClick={() => !isPremium && togglePlan(true)}
+                    >
+                        <span className="settingsText">Manage your subscription</span>
+                        {!isPremium && (
+                            <FiChevronRight className="arrowIcon" strokeWidth={3}/>
+                        )}
                     </div>
 
-                    <div className="settingsRow">
-                            <span className="settingsText">
-                                Cancel your subscription
-                            </span>
-                        <FiChevronRight
-                            className="arrowIcon"
-                            strokeWidth={3}
-                            onClick={() => console.log('Go to Store!')}
-                        />
+                    <div className="settingsRow"
+                         onClick={() => isPremium && togglePlan(false)}
+                    >
+                        <span className="settingsText">Cancel your subscription</span>
+                        {isPremium && (
+                            <FiChevronRight className="arrowIcon" strokeWidth={3}/>
+                        )}
                     </div>
                 </div>
 

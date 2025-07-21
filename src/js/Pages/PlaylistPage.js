@@ -366,7 +366,7 @@ export default function PlaylistPage() {
                             >
                                 {meta.owner}
                             </NavLink>
-                            <span className="metaRest">– {meta.listens} listens – {meta.songs} songs – {totalDuration} total time</span>
+                            <span className="metaRest">– {meta.likes} likes – {meta.songs} songs – {totalDuration} total time</span>
                         </div>
                     </div>
                 </div>

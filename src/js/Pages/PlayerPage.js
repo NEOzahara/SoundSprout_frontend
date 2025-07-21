@@ -123,7 +123,8 @@ export default function PlayerPage () {
                 const withReplies = await Promise.all(
                     main.map(async cm => {
                         const { data: reps } = await api.get(`/comentarios/replies/${cm.idcomentario}`);
-                        return { ...cm, replies: reps };
+                        const { data: user } = await api.get(`/utilizadores/${cm.autor_username}`);
+                        return { ...cm, replies: reps, autor_foto: user.foto  };
                     })
                 );
                 setComments(withReplies);
@@ -150,7 +151,8 @@ export default function PlayerPage () {
             const withReplies = await Promise.all(
                 main.map(async cm => {
                     const { data: reps } = await api.get(`/comentarios/replies/${cm.idcomentario}`);
-                    return { ...cm, replies: reps };
+                    const { data: user } = await api.get(`/utilizadores/${cm.autor_username}`);
+                    return { ...cm, replies: reps, autor_foto: user.foto     };
                 })
             );
             setComments(withReplies);
@@ -834,6 +836,12 @@ export default function PlayerPage () {
                                 <div key={cm.idcomentario} className="commentItem">
                                     <div
                                         className="commentAvatar"
+                                        style={{
+                                            backgroundImage: cm.autor_foto
+                                                ? `url(${baseUrl}/${cm.autor_foto.replace(/^\/+/, '')})`
+                                                : `url('/placeholder.png')`
+                                        }}
+
                                     />
                                     <div className="commentContent">
                                         <span className="commentUser">{cm.autor_username}:&nbsp; </span>

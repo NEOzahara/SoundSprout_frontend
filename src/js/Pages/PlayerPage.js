@@ -8,6 +8,12 @@ import {PlayerContext} from "../../context/PlayerContext";
 
 export default function PlayerPage () {
 
+    const {
+        playlist: currentQueue,
+        track: currentTrack,
+        setPlaylist
+    } = useContext(PlayerContext);
+
     // Adicione estes estados no início do componente
     const [comments, setComments] = useState([]);
     const [newComment, setNewComment] = useState('');
@@ -789,8 +795,26 @@ export default function PlayerPage () {
                                                     </li>
                                                     <li
                                                         onClick={e => {
-                                                            e.preventDefault(); e.stopPropagation();
-                                                            console.log('Queue song', item);
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            // inserção imediata na posição logo após a faixa atual
+                                                            const idx = currentQueue.findIndex(t => t.id === currentTrack.id);
+                                                            // montar item no mesmo formato da queue
+                                                            const queued = {
+                                                                id: item.id,
+                                                                titulo: item.title,
+                                                                username: item.artist,
+                                                                foto: item.cover,
+                                                                coverUrl: item.cover
+                                                                    ? `${baseUrl}/${item.cover.replace(/^\/+/, '')}`
+                                                                    : ''
+                                                            };
+                                                            const newQueue = [
+                                                                ...currentQueue.slice(0, idx + 1),
+                                                                queued,
+                                                                ...currentQueue.slice(idx + 1)
+                                                            ];
+                                                            setPlaylist(newQueue);
                                                             setOpenMenuIdx(null);
                                                         }}
                                                     >

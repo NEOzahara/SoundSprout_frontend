@@ -20,7 +20,7 @@ import api from '../services/api';
 export default function PlaylistPage() {
 
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
-    const { setTrack, setPlaylist } = useContext(PlayerContext);
+    //const { setTrack, setPlaylist } = useContext(PlayerContext);
     const [showDropdown, setShowDropdown] = useState(false);
     const moreRef = useRef(null);
     const navigate = useNavigate();
@@ -41,6 +41,18 @@ export default function PlaylistPage() {
     const [durations, setDurations] = useState({});
     const [totalDuration, setTotalDuration] = useState('');
     const [openTrackDropdown, setOpenTrackDropdown] = useState(null);
+
+    const {
+        playlist: currentQueue,
+        track: currentTrack,
+        setPlaylist,
+        setTrack,
+        insertedCount,
+        setInsertedCount
+    } = useContext(PlayerContext);
+
+    console.debug('[PlaylistPage] queue atual:', currentQueue);
+    console.debug('[PlaylistPage] track atual:', currentTrack);
 
     useEffect(() => {
         // 1) metadata da playlist
@@ -66,6 +78,28 @@ export default function PlaylistPage() {
     const handleClickTitle = track => e => {
         e.preventDefault();
         e.stopPropagation();
+
+        if (insertedCount > 0) {
+            // toda a playlist que foi injetada
+            const injectedList = tracks.map(m => ({
+                id: m.id,
+                titulo: m.titulo,
+                username: m.username,
+                foto: m.foto,
+                coverUrl: m.foto ? `${baseUrl}/${m.foto.replace(/^\/+/, '')}` : ''
+            }));
+            // encontra posição do clicked dentro dessa injeção
+            const idxInj = injectedList.findIndex(m => m.id === track.id);
+            if (idxInj >= 0) {
+                // injeta a partir do clicked até ao fim
+                const newInjected = injectedList.slice(idxInj);
+                // recommended ficam após o insertedCount original
+                const recommended = currentQueue.slice(insertedCount);
+                const newQueue = [...newInjected, ...recommended];
+                setPlaylist(newQueue);
+                setInsertedCount(newInjected.length);
+            }
+        }
 
         api.post('/musicas/visualizar', { musica_id: track.id })
             .catch(err => console.error('Erro ao registar visualização:', err));
@@ -354,19 +388,33 @@ export default function PlaylistPage() {
                             onClick={() => {
                                 if (tracks.length === 0) return;
 
-                                const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
-                                const formattedTracks = tracks.map(track => ({
-                                    id: track.id,
-                                    titulo: track.titulo,
-                                    username: track.username,
-                                    foto: track.foto,
-                                    coverUrl: track.foto ? `${baseUrl}/${track.foto.replace(/^\/+/, '')}` : '',
+                                const injected = tracks.map(m => ({
+                                    id: m.id,
+                                    titulo: m.titulo,
+                                    username: m.username,
+                                    foto: m.foto,
+                                    coverUrl: m.foto
+                                        ? `${baseUrl}/${m.foto.replace(/^\/+/, '')}`
+                                        : '',
                                 }));
 
-                                // ✅ Envia para o contexto
-                                setPlaylist(formattedTracks);
+                                const idx = currentQueue.findIndex(t => t.id === currentTrack.id);
+                                const remainingRecommended = idx >= 0
+                                    ? currentQueue.slice(idx + 1)
+                                    : currentQueue;
+                                const recommendedOnly = currentQueue.slice(insertedCount);
 
-                                const first = formattedTracks[0];
+                                console.debug('[PlaylistPage] injected playlist:', injected);
+                                console.debug('[PlaylistPage] remainingRecommended queue:', remainingRecommended);
+
+                                // ✅ Envia para o contexto
+                                const newQueue = [...injected, ...recommendedOnly];
+                                console.debug('[PlaylistPage] newQueue resultante:', newQueue);
+                                setPlaylist(newQueue);
+                                setInsertedCount(injected.length);
+                                console.debug('[PlaylistPage] insertedCount:', injected.length);
+
+                                const first = injected[0];
                                 const audio = new Audio();
                                 audio.preload = 'metadata';
                                 audio.addEventListener('loadedmetadata', () => {

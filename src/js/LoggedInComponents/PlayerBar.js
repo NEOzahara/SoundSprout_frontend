@@ -33,7 +33,7 @@ export default function PlayerBar() {
     const [isRepeating, setIsRepeating] = useState(false);
     const [shuffledPlaylist, setShuffledPlaylist] = useState([]);
 
-    const { playlist, setPlaylist } = useContext(PlayerContext);
+    const { playlist, setPlaylist, insertedCount } = useContext(PlayerContext);
     const [trackIndex, setTrackIndex] = useState(0);
 
     const [isPlaying, setIsPlaying] = useState(false);
@@ -51,6 +51,8 @@ export default function PlayerBar() {
     const [volume, setVolume] = useState(1); // 0–1
 
     const [initialLoadDone, setInitialLoadDone] = useState(false);
+
+    const [initialFetchDone, setInitialFetchDone] = useState(false);
 
     // ref para detetar clicks fora do popup
     const volumeRef = useRef(null);
@@ -77,26 +79,99 @@ export default function PlayerBar() {
     }, [showVolume]);
 
     useEffect(() => {
-        // sempre que o contexto playlist mudar, embaralha e reinicia índice
-        setShuffledPlaylist(shuffleArray(playlist));
+        if (initialFetchDone) return;
+        (async () => {
+            try {
+                // 1) buscar settings do utilizador
+                const { data: settings } = await api.get('/utilizadores/settings');
+                console.log('[PlayerBar] settings:', settings);
+                const autoplay = settings.autoplay;
+                // 2) tentar buscar a última música tocada
+                const { data: last } = await api.get('/musicas/last-listened');
+                console.log('[PlayerBar] last-listened:', last);
+                if (last && last.id) {
+                    // usuário já ouviu algo
+                    if (autoplay) {
+                        // com autoplay ON, fazemos append das recommended
+                        const { data: rec } = await api.get('/musicas/recommended');
+                        const recList = Array.isArray(rec) ? rec : rec ? [rec] : [];
+                        console.log('[PlayerBar] recommended:', recList);
+                        setPlaylist([last, ...recList]);
+                    } else {
+                        // autoplay OFF, só tocamos a última
+                        setPlaylist([last]);
+                    }
+                } else if (autoplay) {
+                    // sem histórico e autoplay ON: tocamos só as recommended
+                    const { data: rec } = await api.get('/musicas/recommended');
+                    const recList = Array.isArray(rec) ? rec : rec ? [rec] : [];
+                    console.log('[PlayerBar] recommended (no history):', recList);
+                    setPlaylist(recList);
+                } else {
+                    // sem histórico e autoplay OFF: não enfileiramos nada
+                    setPlaylist([]);
+                }
+            } catch (err) {
+                console.error('Erro ao inicializar PlayerBar:', err);
+            } finally {
+                setInitialFetchDone(true);
+            }
+        })();
+    }, [initialFetchDone, setPlaylist]);
 
-        if (playlist.length === 0) {
-            // se ainda não houver nenhuma playlist definida, carrega as “recommended”
-            api.get(`/musicas/recommended`)
-                .then(({ data }) => {
-                    const list = Array.isArray(data) ? data : data ? [data] : [];
-                    setPlaylist(list);
-                    setShuffledPlaylist(shuffleArray(list));
-                })
-                .catch(err => console.error('Erro ao carregar recommended:', err));
+    useEffect(() => {
+        if (!initialFetchDone) return;
+        console.debug('[PlayerBar] playlist completa:', playlist);
+        console.debug('[PlayerBar] insertedCount:', insertedCount);
+
+        // separar a playlist "injetada" vs o resto
+        const injected = playlist.slice(0, insertedCount);
+        const rest = playlist.slice(insertedCount);
+        console.debug('[PlayerBar] injected segment:', injected);
+        console.debug('[PlayerBar] rest segment:', rest);
+
+        // embaralhar cada segmento
+        const shuffledInjected = shuffleArray(injected);
+        const shuffledRest = shuffleArray(rest);
+
+        // se não houver injected, e sem autoplay, desativa shuffle
+        if (shuffledInjected.length === 0 && shuffledRest.length === 0) {
+            console.debug('[PlayerBar] sem músicas pendentes — shuffle desativado');
+            setShuffledPlaylist([]);
+            setTrackIndex(0);
+            return;
         }
-    }, [playlist]);
+
+        // concatena: injected primeiro, depois resto
+        const combined = [...shuffledInjected, ...shuffledRest];
+        console.debug('[PlayerBar] shuffledPlaylist final:', combined);
+        setShuffledPlaylist(combined);
+        setTrackIndex(0);
+    }, [playlist, insertedCount, initialFetchDone]);
 
     useEffect(() => {
         setTrackIndex(0);
     }, [playlist]);
 
-
+    const viewedRef = useRef(new Set());
+    useEffect(() => {
+        if (!track.id) return;
+        if (viewedRef.current.has(track.id)) {
+            // se já registei para esta música, então ignoro
+            return;
+        }
+        // registo a primeira view
+        (async () => {
+            try {
+                console.log('[PlayerBar] registarView para música:', track.id);
+                await api.post('/musicas/visualizar', { musica_id: track.id });
+                console.log('[PlayerBar] ✅ visualização registada');
+                viewedRef.current.add(track.id);
+            } catch (err) {
+                console.error('[PlayerBar] ⚠️ erro ao registar view:', err);
+            }
+        })();
+    }, [track.id]);
 
 
     const currentTrack = (isShuffling ? shuffledPlaylist : playlist)[trackIndex] || {};
@@ -221,11 +296,11 @@ export default function PlayerBar() {
 
     const handleNext = () => {
         const list = isShuffling ? shuffledPlaylist : playlist;
-        console.log('[PlayerBar] ⏭ Next - playlist usada:', list);
+        console.log('[PlayerBar] ⏭ handleNext — playlist actual é:', list, 'trackIndex:', trackIndex);
         if (!list.length) return;
         setTrackIndex(prev => {
             const nextIndex = (prev + 1) % list.length;
-            console.log('[PlayerBar] ⏭ TrackIndex anterior:', prev, '-> Próximo:', nextIndex);
+            console.log('[PlayerBar] ⏭ nextIndex:', nextIndex);
             return nextIndex;
         });
         setIsPlaying(true);

@@ -44,7 +44,6 @@ export default function SignupPage() {
         }
     }
 
-
     return (
         <div className="background loginBackground">
             <div className="loginCentral">

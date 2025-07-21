@@ -33,7 +33,7 @@ export default function PlayerBar() {
     const [isRepeating, setIsRepeating] = useState(false);
     const [shuffledPlaylist, setShuffledPlaylist] = useState([]);
 
-    const [playlist, setPlaylist] = useState([]);
+    const { playlist, setPlaylist } = useContext(PlayerContext);
     const [trackIndex, setTrackIndex] = useState(0);
 
     const [isPlaying, setIsPlaying] = useState(false);
@@ -77,15 +77,26 @@ export default function PlayerBar() {
     }, [showVolume]);
 
     useEffect(() => {
-        api.get(`/musicas/recommended`)
-            .then(({ data }) => {
-                const list = Array.isArray(data) ? data : data ? [data] : [];
-                console.log(list)
-                setPlaylist(list);
-                setShuffledPlaylist(shuffleArray(list));
-            })
-            .catch(err => console.error('Erro ao carregar playlist:', err));
-    }, []);
+        // sempre que o contexto playlist mudar, embaralha e reinicia índice
+        setShuffledPlaylist(shuffleArray(playlist));
+
+        if (playlist.length === 0) {
+            // se ainda não houver nenhuma playlist definida, carrega as “recommended”
+            api.get(`/musicas/recommended`)
+                .then(({ data }) => {
+                    const list = Array.isArray(data) ? data : data ? [data] : [];
+                    setPlaylist(list);
+                    setShuffledPlaylist(shuffleArray(list));
+                })
+                .catch(err => console.error('Erro ao carregar recommended:', err));
+        }
+    }, [playlist]);
+
+    useEffect(() => {
+        setTrackIndex(0);
+    }, [playlist]);
+
+
 
 
     const currentTrack = (isShuffling ? shuffledPlaylist : playlist)[trackIndex] || {};
@@ -141,6 +152,7 @@ export default function PlayerBar() {
     useEffect(() => {
         const list = isShuffling ? shuffledPlaylist : playlist;
         const selectedTrack = list[trackIndex];
+        console.log('[PlayerBar] 🎯 Track selecionada:', selectedTrack);
         if (!selectedTrack) return;
         setTrack({
             id: selectedTrack.id,
@@ -209,10 +221,16 @@ export default function PlayerBar() {
 
     const handleNext = () => {
         const list = isShuffling ? shuffledPlaylist : playlist;
+        console.log('[PlayerBar] ⏭ Next - playlist usada:', list);
         if (!list.length) return;
-        setTrackIndex(prev => (prev + 1) % list.length);
+        setTrackIndex(prev => {
+            const nextIndex = (prev + 1) % list.length;
+            console.log('[PlayerBar] ⏭ TrackIndex anterior:', prev, '-> Próximo:', nextIndex);
+            return nextIndex;
+        });
         setIsPlaying(true);
     };
+
 
     useEffect(() => {
         if (audioRef.current) audioRef.current.volume = volume;

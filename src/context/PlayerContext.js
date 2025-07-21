@@ -9,7 +9,10 @@ export const PlayerContext = createContext({
         coverUrl: '',
         duration: 0
     },
-    setTrack: () => {}
+    setTrack: () => {},
+    playlist: [],
+    setPlaylist: () => {},
+
 });
 
 export function PlayerProvider({ children }) {
@@ -21,8 +24,11 @@ export function PlayerProvider({ children }) {
         duration: 0
     });
 
+    const [playlist, setPlaylist] = useState([]);
+
+
     return (
-        <PlayerContext.Provider value={{ track, setTrack }}>
+        <PlayerContext.Provider value={{ track, setTrack, playlist, setPlaylist }}>
             {children}
         </PlayerContext.Provider>
     );

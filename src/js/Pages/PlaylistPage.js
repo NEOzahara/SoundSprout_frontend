@@ -20,8 +20,7 @@ import api from '../services/api';
 export default function PlaylistPage() {
 
     const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
-    const { setTrack } = useContext(PlayerContext);
-
+    const { setTrack, setPlaylist } = useContext(PlayerContext);
     const [showDropdown, setShowDropdown] = useState(false);
     const moreRef = useRef(null);
     const navigate = useNavigate();
@@ -352,7 +351,38 @@ export default function PlaylistPage() {
                         <div className="playlistIconGlow" />
                         <button
                             className="playlistPageIconButton noHover"
-                            onClick={() => setIsPlaying(p => !p)}
+                            onClick={() => {
+                                if (tracks.length === 0) return;
+
+                                const baseUrl = process.env.REACT_APP_API_BASE_URL.replace(/\/api$/, '');
+                                const formattedTracks = tracks.map(track => ({
+                                    id: track.id,
+                                    titulo: track.titulo,
+                                    username: track.username,
+                                    foto: track.foto,
+                                    coverUrl: track.foto ? `${baseUrl}/${track.foto.replace(/^\/+/, '')}` : '',
+                                }));
+
+                                // ✅ Envia para o contexto
+                                setPlaylist(formattedTracks);
+
+                                const first = formattedTracks[0];
+                                const audio = new Audio();
+                                audio.preload = 'metadata';
+                                audio.addEventListener('loadedmetadata', () => {
+                                    setTrack({
+                                        id: first.id,
+                                        title: first.titulo,
+                                        artist: first.username,
+                                        coverUrl: first.coverUrl,
+                                        duration: audio.duration
+                                    });
+                                });
+
+                                audio.src = `${baseUrl}/api/musicas/stream/${first.id}`;
+                                audio.load();
+                                setIsPlaying(true);
+                            }}
                         >
                             {isPlaying ? (
                                 <svg

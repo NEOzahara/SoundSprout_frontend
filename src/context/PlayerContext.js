@@ -10,10 +10,9 @@ export const PlayerContext = createContext({
         duration: 0
     },
     setTrack: () => {},
-    queue: [],
-    setQueue: () => {},
-    index: 0,
-    setIndex: () => {}
+    playlist: [],
+    setPlaylist: () => {},
+
 });
 
 export function PlayerProvider({ children }) {
@@ -24,11 +23,12 @@ export function PlayerProvider({ children }) {
         coverUrl: '',
         duration: 0
     });
-    const [queue, setQueue] = useState([]);
-    const [index, setIndex] = useState(0);
+
+    const [playlist, setPlaylist] = useState([]);
+
 
     return (
-        <PlayerContext.Provider value={{ track, setTrack }}>
+        <PlayerContext.Provider value={{ track, setTrack, playlist, setPlaylist }}>
             {children}
         </PlayerContext.Provider>
     );

@@ -15,7 +15,7 @@ export default function LayoutLoggedOff() {
     const { pathname } = useLocation();
     const titleMap = {
         '/homeLoggedOff':     'Home',
-        '/explore':    'Explore',
+        '/exploreLoggedOff':    'Explore',
         //'/settings':    'Settings',
         // ...
     };
